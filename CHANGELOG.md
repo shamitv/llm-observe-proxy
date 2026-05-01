@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses semantic versioning.
 
+## [0.1.1] - 2026-05-01
+
+### Added
+
+- Token usage columns in the admin request grid for input, output, and total token counts.
+
+### Changed
+
+- Lowered the minimum supported Python version from 3.13 to 3.10.
+
+### Documentation
+
+- Added a direct PyPI package reference in the README.
+- Added install and run instructions for `pip`, `uv tool install`, and `uvx`.
+- Refreshed the request browser and settings screenshots to match the current admin UI.
+
 ## [0.1.0] - 2026-05-01
 
 ### Added
