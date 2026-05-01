@@ -1,0 +1,81 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="page-heading">
+  <div>
+    <p class="eyebrow">OpenAI-compatible traffic</p>
+    <h1>Request Browser</h1>
+  </div>
+  <div class="stats">
+    <span><strong>{{ stats.total }}</strong>Total</span>
+    <span><strong>{{ stats.streams }}</strong>Streams</span>
+    <span><strong>{{ stats.images }}</strong>Images</span>
+    <span><strong>{{ stats.tools }}</strong>Tools</span>
+  </div>
+</section>
+
+<form class="toolbar" method="get" action="/admin">
+  <label>
+    Endpoint
+    <input name="endpoint" value="{{ filters.endpoint }}" list="endpoints" placeholder="/v1/chat/completions">
+  </label>
+  <label>
+    Model
+    <select name="model">
+      <option value="">Any model</option>
+      {% for item in models %}
+      <option value="{{ item }}" {% if filters.model == item %}selected{% endif %}>{{ item }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <label>
+    Status
+    <input name="status" value="{{ filters.status }}" inputmode="numeric" placeholder="200">
+  </label>
+  <label class="check"><input type="checkbox" name="stream" value="1" {% if filters.stream %}checked{% endif %}> Streaming</label>
+  <label class="check"><input type="checkbox" name="image" value="1" {% if filters.image %}checked{% endif %}> Images</label>
+  <label class="check"><input type="checkbox" name="tool" value="1" {% if filters.tool %}checked{% endif %}> Tools</label>
+  <button class="button primary" type="submit">Filter</button>
+  <a class="button ghost" href="/admin">Reset</a>
+  <datalist id="endpoints">
+    {% for item in endpoints %}
+    <option value="{{ item }}"></option>
+    {% endfor %}
+  </datalist>
+</form>
+
+<section class="table-shell">
+  <table>
+    <thead>
+      <tr>
+        <th>Time</th>
+        <th>Endpoint</th>
+        <th>Model</th>
+        <th>Status</th>
+        <th>Duration</th>
+        <th>Signals</th>
+        <th>Preview</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for record in records %}
+      <tr>
+        <td><a href="/admin/requests/{{ record.id }}">#{{ record.id }}</a><span class="muted">{{ record.created_at }}</span></td>
+        <td><code>{{ record.method }} {{ record.endpoint }}</code></td>
+        <td>{{ record.model }}</td>
+        <td><span class="pill status-{{ record.status | default('pending', true) }}">{{ record.status | default('pending', true) }}</span></td>
+        <td>{{ record.duration_ms | default('-', true) }} ms</td>
+        <td class="signals">
+          {% if record.is_stream %}<span>Stream</span>{% endif %}
+          {% if record.has_images %}<span>Image</span>{% endif %}
+          {% if record.has_tool_calls %}<span>Tool</span>{% endif %}
+          {% if record.error %}<span>Error</span>{% endif %}
+        </td>
+        <td>{{ record.preview | preview | safe }}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="7" class="empty">No captured requests yet.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}

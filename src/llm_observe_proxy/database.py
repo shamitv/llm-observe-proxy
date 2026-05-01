@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import UTC, datetime
+from pathlib import Path
+from sqlite3 import Connection as SQLiteConnection
 
 from sqlalchemy import (
     Boolean,
@@ -12,6 +15,7 @@ from sqlalchemy import (
     String,
     Text,
     create_engine,
+    event,
 )
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import (
@@ -99,7 +103,18 @@ SessionFactory = sessionmaker[Session]
 
 def create_db_engine(database_url: str) -> Engine:
     connect_args = {"check_same_thread": False} if database_url.startswith("sqlite") else {}
-    return create_engine(database_url, connect_args=connect_args)
+    engine = create_engine(database_url, connect_args=connect_args)
+    if database_url.startswith("sqlite"):
+        _ensure_sqlite_parent(engine)
+
+        @event.listens_for(engine, "connect")
+        def _set_sqlite_pragma(dbapi_connection, _connection_record) -> None:
+            if isinstance(dbapi_connection, SQLiteConnection):
+                cursor = dbapi_connection.cursor()
+                cursor.execute("PRAGMA foreign_keys=ON")
+                cursor.close()
+
+    return engine
 
 
 def create_session_factory(engine: Engine) -> SessionFactory:
@@ -110,6 +125,7 @@ def init_db(engine: Engine) -> None:
     Base.metadata.create_all(engine)
 
 
+@contextmanager
 def session_scope(session_factory: SessionFactory) -> Iterator[Session]:
     session = session_factory()
     try:
@@ -139,4 +155,11 @@ def set_setting(session: Session, key: str, value: str) -> AppSetting:
 
 def get_upstream_url(session: Session, settings: Settings) -> str:
     return get_setting(session, "upstream_url", settings.upstream_url) or settings.upstream_url
+
+
+def _ensure_sqlite_parent(engine: Engine) -> None:
+    database = engine.url.database
+    if not database or database == ":memory:":
+        return
+    Path(database).expanduser().parent.mkdir(parents=True, exist_ok=True)
 

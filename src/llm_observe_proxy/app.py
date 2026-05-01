@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 import httpx
 from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
 
+from llm_observe_proxy.admin import router as admin_router
 from llm_observe_proxy.config import Settings, get_settings
 from llm_observe_proxy.database import create_db_engine, create_session_factory, init_db
 from llm_observe_proxy.proxy import router as proxy_router
@@ -39,5 +42,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return {"status": "ok"}
 
     app.include_router(proxy_router)
+    app.include_router(admin_router)
+    app.mount(
+        "/admin/static",
+        StaticFiles(directory=Path(__file__).parent / "static"),
+        name="admin_static",
+    )
 
     return app
