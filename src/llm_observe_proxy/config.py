@@ -3,7 +3,6 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 
-
 DEFAULT_UPSTREAM_URL = "http://localhost:8080/v1"
 DEFAULT_DATABASE_URL = "sqlite:///./llm_observe_proxy.sqlite3"
 
