@@ -8,6 +8,8 @@ and changing runtime settings.
 It is useful when you want LiteLLM-style observability without introducing a full gateway
 or external database.
 
+Published package: https://pypi.org/project/llm-observe-proxy/
+
 ## Features
 
 - OpenAI-compatible passthrough route: `ANY /v1/{path:path}`.
@@ -23,11 +25,24 @@ or external database.
 
 ## Install
 
-After the package is published:
+From PyPI with `pip`:
 
 ```powershell
 python -m pip install llm-observe-proxy
 llm-observe-proxy
+```
+
+From PyPI with `uv`:
+
+```powershell
+uv tool install llm-observe-proxy
+llm-observe-proxy
+```
+
+Run it once without installing:
+
+```powershell
+uvx llm-observe-proxy
 ```
 
 For local development from this repository:
