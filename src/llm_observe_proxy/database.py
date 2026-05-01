@@ -27,7 +27,7 @@ from sqlalchemy.orm import (
     sessionmaker,
 )
 
-from llm_observe_proxy.config import Settings
+from llm_observe_proxy.config import EXPOSED_INCOMING_HOST, Settings
 
 
 def _now() -> datetime:
@@ -155,6 +155,37 @@ def set_setting(session: Session, key: str, value: str) -> AppSetting:
 
 def get_upstream_url(session: Session, settings: Settings) -> str:
     return get_setting(session, "upstream_url", settings.upstream_url) or settings.upstream_url
+
+
+def get_incoming_port(session: Session, settings: Settings) -> int:
+    value = get_setting(session, "incoming_port")
+    if value is None:
+        return settings.incoming_port
+    try:
+        port = int(value)
+    except ValueError:
+        return settings.incoming_port
+    if 1 <= port <= 65535:
+        return port
+    return settings.incoming_port
+
+
+def get_expose_all_ips(session: Session, settings: Settings) -> bool:
+    value = get_setting(session, "expose_all_ips")
+    if value is None:
+        return settings.expose_all_ips
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def get_incoming_host(session: Session, settings: Settings) -> str:
+    if get_expose_all_ips(session, settings):
+        return EXPOSED_INCOMING_HOST
+    return settings.incoming_host
+
+
+def set_incoming_server(session: Session, port: int, expose_all_ips: bool) -> None:
+    set_setting(session, "incoming_port", str(port))
+    set_setting(session, "expose_all_ips", "true" if expose_all_ips else "false")
 
 
 def _ensure_sqlite_parent(engine: Engine) -> None:

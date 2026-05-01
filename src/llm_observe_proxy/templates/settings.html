@@ -16,6 +16,22 @@
 {% endif %}
 
 <section class="settings-grid">
+  <form class="panel form-panel" method="post" action="/admin/settings/incoming">
+    <header>
+      <h2>Incoming Server</h2>
+      <span>{{ incoming_host }}:{{ incoming_port }}</span>
+    </header>
+    <label>
+      Incoming port
+      <input name="incoming_port" value="{{ incoming_port }}" min="1" max="65535" type="number" required>
+    </label>
+    <label class="check">
+      <input type="checkbox" name="expose_all_ips" value="yes" {% if expose_all_ips %}checked{% endif %}>
+      Expose on all IPs (0.0.0.0)
+    </label>
+    <button class="button primary" type="submit">Save Incoming</button>
+  </form>
+
   <form class="panel form-panel" method="post" action="/admin/settings/upstream">
     <header>
       <h2>Upstream URL</h2>

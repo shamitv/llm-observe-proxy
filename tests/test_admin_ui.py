@@ -51,6 +51,34 @@ def test_settings_updates_upstream_url(proxy_client: TestClient, proxy_app: Fast
         assert record.upstream_url == "http://localhost:8080/v1/chat/completions"
 
 
+def test_settings_updates_incoming_server(proxy_client: TestClient) -> None:
+    settings = proxy_client.get("/admin/settings")
+    assert settings.status_code == 200
+    assert "Incoming Server" in settings.text
+    assert "localhost:8080" in settings.text
+
+    response = proxy_client.post(
+        "/admin/settings/incoming",
+        data={"incoming_port": "9090", "expose_all_ips": "yes"},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    updated = proxy_client.get("/admin/settings")
+    assert "0.0.0.0:9090" in updated.text
+    assert 'name="expose_all_ips" value="yes" checked' in updated.text
+
+
+def test_settings_rejects_invalid_incoming_port(proxy_client: TestClient) -> None:
+    response = proxy_client.post(
+        "/admin/settings/incoming",
+        data={"incoming_port": "70000"},
+    )
+
+    assert response.status_code == 400
+    assert "Incoming port must be between 1 and 65535." in response.text
+
+
 def test_settings_rejects_invalid_upstream_url(proxy_client: TestClient) -> None:
     response = proxy_client.post(
         "/admin/settings/upstream",
