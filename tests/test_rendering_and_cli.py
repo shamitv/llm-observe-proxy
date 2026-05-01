@@ -5,7 +5,21 @@ import subprocess
 import sys
 
 from llm_observe_proxy import create_app
-from llm_observe_proxy.config import DEFAULT_UPSTREAM_URL
+from llm_observe_proxy.cli import resolve_bind
+from llm_observe_proxy.config import (
+    DEFAULT_INCOMING_HOST,
+    DEFAULT_INCOMING_PORT,
+    DEFAULT_UPSTREAM_URL,
+    EXPOSED_INCOMING_HOST,
+    Settings,
+)
+from llm_observe_proxy.database import (
+    create_db_engine,
+    create_session_factory,
+    init_db,
+    session_scope,
+    set_incoming_server,
+)
 from llm_observe_proxy.rendering import render_payload
 
 
@@ -61,5 +75,23 @@ def test_module_cli_help_smoke() -> None:
     )
 
     assert "Run the LLM Observe Proxy server" in completed.stdout
+    assert "--expose-all-ips" in completed.stdout
     assert "--upstream-url" in completed.stdout
-    assert DEFAULT_UPSTREAM_URL == "http://localhost:8080/v1"
+    assert DEFAULT_INCOMING_HOST == "localhost"
+    assert DEFAULT_INCOMING_PORT == 8080
+    assert DEFAULT_UPSTREAM_URL == "http://localhost:8000/v1"
+
+
+def test_cli_resolve_bind_uses_saved_incoming_settings(tmp_path) -> None:
+    db_path = tmp_path / "proxy.sqlite3"
+    settings = Settings(database_url=f"sqlite:///{db_path.as_posix()}")
+    engine = create_db_engine(settings.database_url)
+    init_db(engine)
+    session_factory = create_session_factory(engine)
+    with session_scope(session_factory) as session:
+        set_incoming_server(session, 9090, True)
+    engine.dispose()
+
+    assert resolve_bind(None, None, False, settings) == (EXPOSED_INCOMING_HOST, 9090)
+    assert resolve_bind("localhost", 7777, False, settings) == ("localhost", 7777)
+    assert resolve_bind(None, None, True, settings) == (EXPOSED_INCOMING_HOST, 9090)

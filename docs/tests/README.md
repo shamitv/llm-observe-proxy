@@ -32,7 +32,8 @@ the test session fails early with a clear message.
 | Area | Scenario | Test |
 | --- | --- | --- |
 | Package/app | App factory exposes `/healthz`. | `test_app_factory_exposes_health_route` |
-| CLI | `python -m llm_observe_proxy --help` works and exposes upstream options. | `test_module_cli_help_smoke` |
+| CLI | `python -m llm_observe_proxy --help` works and exposes incoming bind and upstream options. | `test_module_cli_help_smoke` |
+| CLI bind settings | CLI startup resolves saved incoming host/port settings when explicit bind args are omitted. | `test_cli_resolve_bind_uses_saved_incoming_settings` |
 | Non-streaming chat | `/v1/chat/completions` forwards to upstream and stores endpoint, model, status, request body, response body, and timing metadata. | `test_non_streaming_chat_completion_records_and_forwards_headers` |
 | Header forwarding | Authorization and client request id headers are forwarded upstream. | `test_non_streaming_chat_completion_records_and_forwards_headers` |
 | Responses reasoning | `/v1/responses` records a payload containing `reasoning` data and shows it in the UI JSON view. | `test_responses_reasoning_payload_is_recorded_and_visible_in_ui` |
@@ -44,6 +45,8 @@ the test session fails early with a clear message.
 | Admin browser | Request browser lists captured requests and supports a model filter. | `test_request_browser_filters_and_markdown_renderer` |
 | Markdown rendering | Markdown responses render as HTML in detail view. | `test_request_browser_filters_and_markdown_renderer` |
 | Upstream settings | Admin UI accepts a valid `/v1` upstream URL and later proxy calls use it. | `test_settings_updates_upstream_url` |
+| Incoming settings | Admin UI shows `localhost:8080` by default and stores custom incoming port plus the `0.0.0.0` expose option. | `test_settings_updates_incoming_server` |
+| Incoming validation | Admin UI rejects incoming ports outside `1..65535`. | `test_settings_rejects_invalid_incoming_port` |
 | Upstream validation | Admin UI rejects invalid upstream URLs that do not point to `/v1`. | `test_settings_rejects_invalid_upstream_url` |
 | Trim old records | Admin trim deletes rows older than `N` days. | `test_trim_deletes_records_older_than_requested_days` |
 | Image cascade delete | Trimming an old request also deletes its stored image assets. | `test_trim_deletes_records_older_than_requested_days` |

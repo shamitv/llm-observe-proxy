@@ -10,10 +10,11 @@ upstream URL.
 ```powershell
 C:\Python\Python313\python.exe -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -e .[dev]
-.\.venv\Scripts\llm-observe-proxy.exe --host 127.0.0.1 --port 8000
+.\.venv\Scripts\llm-observe-proxy.exe
 ```
 
-By default, proxy requests are forwarded to `http://localhost:8080/v1`.
+By default, the proxy listens on `http://localhost:8080` and forwards requests to
+`http://localhost:8000/v1`.
 
 ## Routes
 
@@ -21,6 +22,7 @@ By default, proxy requests are forwarded to `http://localhost:8080/v1`.
 - `GET /admin`: request browser.
 - `GET /admin/requests/{id}`: request/response detail view.
 - `GET /admin/settings`: upstream settings and retention tools.
+- `POST /admin/settings/incoming`: update incoming host/port settings for next startup.
 - `POST /admin/settings/upstream`: update upstream URL.
 - `POST /admin/trim`: delete records older than `N` days.
 - `GET /healthz`: health check.

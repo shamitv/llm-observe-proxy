@@ -13,8 +13,12 @@ from starlette.templating import Jinja2Templates
 from llm_observe_proxy.database import (
     RequestRecord,
     SessionFactory,
+    get_expose_all_ips,
+    get_incoming_host,
+    get_incoming_port,
     get_upstream_url,
     session_scope,
+    set_incoming_server,
     set_setting,
 )
 from llm_observe_proxy.rendering import escape_preview, render_payload
@@ -164,6 +168,9 @@ async def settings(request: Request, days: int = Query(30, ge=1, le=3650)) -> HT
     cutoff = datetime.now(UTC) - timedelta(days=days)
     with session_scope(session_factory) as session:
         upstream_url = get_upstream_url(session, request.app.state.settings)
+        incoming_port = get_incoming_port(session, request.app.state.settings)
+        expose_all_ips = get_expose_all_ips(session, request.app.state.settings)
+        incoming_host = get_incoming_host(session, request.app.state.settings)
         total = session.scalar(select(func.count()).select_from(RequestRecord)) or 0
         trim_count = session.scalar(
             select(func.count()).where(RequestRecord.created_at < cutoff)
@@ -174,6 +181,9 @@ async def settings(request: Request, days: int = Query(30, ge=1, le=3650)) -> HT
         "settings.html",
         {
             "upstream_url": upstream_url,
+            "incoming_host": incoming_host,
+            "incoming_port": incoming_port,
+            "expose_all_ips": expose_all_ips,
             "days": days,
             "total": total,
             "trim_count": trim_count,
@@ -181,6 +191,21 @@ async def settings(request: Request, days: int = Query(30, ge=1, le=3650)) -> HT
             "page_title": "Settings",
         },
     )
+
+
+@router.post("/settings/incoming", response_class=HTMLResponse)
+async def update_incoming(
+    request: Request,
+    incoming_port: int = Form(...),
+    expose_all_ips: str | None = Form(None),
+) -> HTMLResponse:
+    if not 1 <= incoming_port <= 65535:
+        return await _settings_with_error(request, "Incoming port must be between 1 and 65535.")
+
+    session_factory: SessionFactory = request.app.state.session_factory
+    with session_scope(session_factory) as session:
+        set_incoming_server(session, incoming_port, expose_all_ips == "yes")
+    return RedirectResponse("/admin/settings", status_code=303)
 
 
 @router.post("/settings/upstream", response_class=HTMLResponse)
@@ -233,12 +258,18 @@ async def _settings_with_error(request: Request, error: str) -> HTMLResponse:
     session_factory: SessionFactory = request.app.state.session_factory
     with session_scope(session_factory) as session:
         upstream_url = get_upstream_url(session, request.app.state.settings)
+        incoming_port = get_incoming_port(session, request.app.state.settings)
+        expose_all_ips = get_expose_all_ips(session, request.app.state.settings)
+        incoming_host = get_incoming_host(session, request.app.state.settings)
         total = session.scalar(select(func.count()).select_from(RequestRecord)) or 0
     return templates.TemplateResponse(
         request,
         "settings.html",
         {
             "upstream_url": upstream_url,
+            "incoming_host": incoming_host,
+            "incoming_port": incoming_port,
+            "expose_all_ips": expose_all_ips,
             "days": 30,
             "total": total,
             "trim_count": 0,
