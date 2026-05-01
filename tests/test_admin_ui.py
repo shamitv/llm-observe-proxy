@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy import select
@@ -103,6 +105,60 @@ def test_settings_rejects_invalid_upstream_url(proxy_client: TestClient) -> None
 
     assert response.status_code == 400
     assert "must point to a /v1 base URL" in response.text
+
+
+@pytest.mark.parametrize(
+    ("test_kind", "expected_content"),
+    [
+        ("simple", "check simple"),
+        ("image", "check image"),
+        ("tools", "check tools"),
+    ],
+)
+def test_settings_test_upstream_sends_sample_payloads(
+    proxy_client: TestClient,
+    fake_upstream: Any,
+    test_kind: str,
+    expected_content: str,
+) -> None:
+    response = proxy_client.post(
+        "/admin/settings/test-upstream",
+        data={"test_kind": test_kind, "model": "gpt-test", "prompt": expected_content},
+    )
+
+    assert response.status_code == 200
+    assert "Test Upstream" in response.text
+    assert "Plain chat response" in response.text or "call_weather" in response.text
+
+    request = fake_upstream.last_request
+    assert request["method"] == "POST"
+    assert request["path"] == "/v1/chat/completions"
+    assert request["body"]["model"] == "gpt-test"
+
+    user_content = request["body"]["messages"][0]["content"]
+    if test_kind == "image":
+        assert user_content[0] == {"type": "text", "text": expected_content}
+        assert user_content[1]["type"] == "image_url"
+        assert user_content[1]["image_url"]["url"].startswith("data:image/png;base64,")
+    else:
+        assert user_content == expected_content
+
+    if test_kind == "tools":
+        tool = request["body"]["tools"][0]
+        assert tool["type"] == "function"
+        assert tool["function"]["name"] == "get_weather"
+    else:
+        assert "tools" not in request["body"]
+
+
+def test_settings_test_upstream_rejects_invalid_kind(proxy_client: TestClient) -> None:
+    response = proxy_client.post(
+        "/admin/settings/test-upstream",
+        data={"test_kind": "bad", "model": "gpt-test", "prompt": "hello"},
+    )
+
+    assert response.status_code == 400
+    assert "Choose a valid upstream test" in response.text
 
 
 def test_trim_deletes_records_older_than_requested_days(

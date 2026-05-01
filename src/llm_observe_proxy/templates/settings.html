@@ -48,6 +48,43 @@
     <button class="button primary" type="submit">Save Upstream</button>
   </form>
 
+  <form class="panel form-panel" method="post" action="/admin/settings/test-upstream">
+    <header>
+      <h2>Test Upstream</h2>
+      <span>Send sample chat requests</span>
+    </header>
+    <label>
+      Model
+      <input name="model" value="{{ test_model | default('gpt-test', true) }}" required>
+    </label>
+    <label>
+      Prompt
+      <textarea name="prompt" rows="4" required>{{ test_prompt | default('Reply with a short upstream connectivity check.', true) }}</textarea>
+    </label>
+    <div class="button-row">
+      <button class="button primary" type="submit" name="test_kind" value="simple">Simple Message</button>
+      <button class="button ghost" type="submit" name="test_kind" value="image">Image Message</button>
+      <button class="button ghost" type="submit" name="test_kind" value="tools">Function Call</button>
+    </div>
+    {% if test_result %}
+    <div class="test-result">
+      <div class="detail-meta">
+        <span class="{{ 'status-200' if test_result.ok else 'status-500' }}">
+          {{ test_result.status_code | default('error', true) }}
+        </span>
+        <span>{{ test_result.kind }}</span>
+        <span>{{ test_result.duration_ms }} ms</span>
+      </div>
+      <code>{{ test_result.url }}</code>
+      {% if test_result.error %}
+      <p class="error-text">{{ test_result.error }}</p>
+      {% else %}
+      <pre class="code compact-code">{{ test_result.body }}</pre>
+      {% endif %}
+    </div>
+    {% endif %}
+  </form>
+
   <form class="panel form-panel" method="post" action="/admin/trim" data-confirm-trim>
     <header>
       <h2>Trim History</h2>

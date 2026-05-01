@@ -194,7 +194,8 @@ label {
 }
 
 input,
-select {
+select,
+textarea {
   width: 100%;
   min-height: 38px;
   border: 1px solid var(--line);
@@ -203,6 +204,10 @@ select {
   background: white;
   color: var(--ink);
   font: inherit;
+}
+
+textarea {
+  resize: vertical;
 }
 
 .check {
@@ -225,6 +230,12 @@ select {
   justify-content: center;
   cursor: pointer;
   font: inherit;
+}
+
+.button-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 .primary {
@@ -395,6 +406,22 @@ figcaption {
   color: var(--danger);
   padding: 12px 14px;
   font-weight: 700;
+}
+
+.error-text {
+  color: var(--danger);
+  font-weight: 700;
+}
+
+.test-result {
+  display: grid;
+  gap: 10px;
+  border-top: 1px solid var(--line);
+  padding-top: 14px;
+}
+
+.compact-code {
+  max-height: 260px;
 }
 
 .empty,
