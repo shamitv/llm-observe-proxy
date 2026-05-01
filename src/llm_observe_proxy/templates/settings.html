@@ -15,18 +15,22 @@
 <div class="alert">{{ error }}</div>
 {% endif %}
 
+{% set current_incoming_host = incoming_host | default('localhost', true) %}
+{% set current_incoming_port = incoming_port | default(8080, true) %}
+{% set current_expose_all_ips = expose_all_ips | default(false, true) %}
+
 <section class="settings-grid">
   <form class="panel form-panel" method="post" action="/admin/settings/incoming">
     <header>
       <h2>Incoming Server</h2>
-      <span>{{ incoming_host }}:{{ incoming_port }}</span>
+      <span>{{ current_incoming_host }}:{{ current_incoming_port }}</span>
     </header>
     <label>
       Incoming port
-      <input name="incoming_port" value="{{ incoming_port }}" min="1" max="65535" type="number" required>
+      <input name="incoming_port" value="{{ current_incoming_port }}" min="1" max="65535" type="number" required>
     </label>
     <label class="check">
-      <input type="checkbox" name="expose_all_ips" value="yes" {% if expose_all_ips %}checked{% endif %}>
+      <input type="checkbox" name="expose_all_ips" value="yes" {% if current_expose_all_ips %}checked{% endif %}>
       Expose on all IPs (0.0.0.0)
     </label>
     <button class="button primary" type="submit">Save Incoming</button>
