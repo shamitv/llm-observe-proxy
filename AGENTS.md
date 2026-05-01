@@ -57,8 +57,13 @@ Release checks:
 ```powershell
 .\.venv\Scripts\ruff.exe check src tests scripts
 .\.venv\Scripts\python.exe -m compileall -q src tests scripts
-.\.venv\Scripts\python.exe -m build
-.\.venv\Scripts\twine.exe check dist/*
+.\.venv\Scripts\python.exe scripts\publish_pypi.py --dry-run
+```
+
+Publish to PyPI after setting `PYPI_TOKEN` in `.env` or the process environment:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\publish_pypi.py
 ```
 
 Run the proxy:
@@ -91,6 +96,7 @@ Useful overrides:
 - `docs/publishing.md`: PyPI release checklist and name-check notes.
 - `scripts/seed_demo_db.py`: create a demo SQLite DB for screenshots.
 - `scripts/capture_screenshots.py`: capture admin UI screenshots from the demo DB.
+- `scripts/publish_pypi.py`: build, check, and publish distributions with dotenv-loaded tokens.
 
 ## Behavioral Rules
 
