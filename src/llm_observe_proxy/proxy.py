@@ -2,17 +2,19 @@ from __future__ import annotations
 
 import json
 import time
+from collections.abc import AsyncIterator
 from contextlib import contextmanager
 from typing import Any
 from urllib.parse import urljoin
 
 import httpx
 from fastapi import APIRouter, Request
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 from llm_observe_proxy.capture import (
     compact_json,
     decode_json_bytes,
+    decode_sse_json_events,
     extract_images,
     extract_model,
     has_tool_payload,
@@ -89,6 +91,18 @@ async def proxy_openai(path: str, request: Request) -> Response:
 
     started = time.perf_counter()
     client: httpx.AsyncClient = request.app.state.http_client
+    if _is_stream_request(request_payload, request.headers):
+        return await _proxy_streaming(
+            client=client,
+            method=request.method,
+            upstream_url=upstream_url,
+            request_body=request_body,
+            request_headers=request.headers,
+            session_factory=session_factory,
+            record_id=record_id,
+            started=started,
+        )
+
     try:
         upstream_response = await client.request(
             request.method,
@@ -132,6 +146,91 @@ async def proxy_openai(path: str, request: Request) -> Response:
                 record.duration_ms = duration_ms
                 record.error = str(exc)
         return JSONResponse(error_body, status_code=502)
+
+
+async def _proxy_streaming(
+    *,
+    client: httpx.AsyncClient,
+    method: str,
+    upstream_url: str,
+    request_body: bytes,
+    request_headers: Any,
+    session_factory: SessionFactory,
+    record_id: int,
+    started: float,
+) -> Response:
+    try:
+        upstream_request = client.build_request(
+            method,
+            upstream_url,
+            content=request_body,
+            headers=_forward_headers(request_headers),
+        )
+        upstream_response = await client.send(upstream_request, stream=True)
+    except httpx.HTTPError as exc:
+        return _capture_upstream_error(session_factory, record_id, started, exc)
+
+    async def stream_and_capture() -> AsyncIterator[bytes]:
+        chunks: list[bytes] = []
+        error: str | None = None
+        try:
+            async for chunk in upstream_response.aiter_raw():
+                chunks.append(chunk)
+                yield chunk
+        except httpx.StreamConsumed:
+            chunk = upstream_response.content
+            if chunk:
+                chunks.append(chunk)
+                yield chunk
+        except httpx.HTTPError as exc:
+            error = str(exc)
+            raise
+        finally:
+            response_body = b"".join(chunks)
+            duration_ms = int((time.perf_counter() - started) * 1000)
+            stream_events = decode_sse_json_events(response_body)
+            with _session(session_factory) as session:
+                record = session.get(RequestRecord, record_id)
+                if record is not None:
+                    record.completed_at = _now_from_record(record)
+                    record.response_status = upstream_response.status_code
+                    record.response_headers_json = compact_json(
+                        _headers_to_dict(upstream_response.headers)
+                    )
+                    record.response_body = response_body
+                    record.response_content_type = upstream_response.headers.get("content-type")
+                    record.duration_ms = duration_ms
+                    record.error = error
+                    record.has_tool_calls = record.has_tool_calls or has_tool_payload(stream_events)
+            await upstream_response.aclose()
+
+    return StreamingResponse(
+        stream_and_capture(),
+        status_code=upstream_response.status_code,
+        headers=_response_headers(upstream_response.headers),
+    )
+
+
+def _capture_upstream_error(
+    session_factory: SessionFactory,
+    record_id: int,
+    started: float,
+    exc: httpx.HTTPError,
+) -> JSONResponse:
+    error_body = {"error": {"message": str(exc), "type": "upstream_error"}}
+    encoded_error = json.dumps(error_body).encode("utf-8")
+    duration_ms = int((time.perf_counter() - started) * 1000)
+    with _session(session_factory) as session:
+        record = session.get(RequestRecord, record_id)
+        if record is not None:
+            record.completed_at = _now_from_record(record)
+            record.response_status = 502
+            record.response_headers_json = compact_json({"content-type": "application/json"})
+            record.response_body = encoded_error
+            record.response_content_type = "application/json"
+            record.duration_ms = duration_ms
+            record.error = str(exc)
+    return JSONResponse(error_body, status_code=502)
 
 
 def _build_upstream_url(upstream_base: str, path: str, query_string: str = "") -> str:
