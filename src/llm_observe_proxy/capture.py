@@ -27,6 +27,40 @@ def decode_json_bytes(body: bytes | None) -> Any | None:
         return None
 
 
+def decode_sse_json_events(body: bytes | None) -> list[Any]:
+    if not body:
+        return []
+    try:
+        text = body.decode("utf-8")
+    except UnicodeDecodeError:
+        return []
+
+    events: list[Any] = []
+    data_lines: list[str] = []
+    for line in text.splitlines():
+        if line.startswith("data:"):
+            data_lines.append(line.removeprefix("data:").strip())
+            continue
+        if line.strip():
+            continue
+        _append_sse_event(events, data_lines)
+        data_lines = []
+    _append_sse_event(events, data_lines)
+    return events
+
+
+def _append_sse_event(events: list[Any], data_lines: list[str]) -> None:
+    if not data_lines:
+        return
+    data = "\n".join(data_lines)
+    if not data or data == "[DONE]":
+        return
+    try:
+        events.append(json.loads(data))
+    except json.JSONDecodeError:
+        events.append({"data": data})
+
+
 def compact_json(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
 
