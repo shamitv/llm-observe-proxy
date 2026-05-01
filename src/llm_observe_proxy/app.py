@@ -32,7 +32,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app = FastAPI(
         title="LLM Observe Proxy",
         summary="OpenAI-compatible LLM proxy with SQLite observability.",
-        version="0.1.0",
+        version="0.1.1",
         lifespan=lifespan,
     )
     app.state.settings = resolved_settings
