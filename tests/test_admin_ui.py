@@ -27,6 +27,10 @@ def test_request_browser_filters_and_markdown_renderer(proxy_client: TestClient)
     assert "Request Browser" in page.text
     assert "gpt-test" in page.text
     assert "/v1/chat/completions" in page.text
+    assert "Tokens" in page.text
+    assert "<strong>6</strong><small>Input</small>" in page.text
+    assert "<strong>3</strong><small>Output</small>" in page.text
+    assert "<strong>9</strong><small>Total</small>" in page.text
 
     detail = proxy_client.get("/admin/requests/1?mode=markdown")
     assert detail.status_code == 200
