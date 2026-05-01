@@ -6,6 +6,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
+from llm_observe_proxy.admin import templates
 from llm_observe_proxy.database import ImageAsset, RequestRecord
 
 
@@ -67,6 +68,21 @@ def test_settings_updates_incoming_server(proxy_client: TestClient) -> None:
     updated = proxy_client.get("/admin/settings")
     assert "0.0.0.0:9090" in updated.text
     assert 'name="expose_all_ips" value="yes" checked' in updated.text
+
+
+def test_settings_template_defaults_incoming_port_when_context_is_missing() -> None:
+    rendered = templates.env.get_template("settings.html").render(
+        page_title="Settings",
+        total=0,
+        trim_count=0,
+        days=30,
+        upstream_url="http://localhost:8000/v1",
+        error=None,
+        url_for=lambda _name, path: f"/admin/static{path}",
+    )
+
+    assert "localhost:8080" in rendered
+    assert 'name="incoming_port" value="8080"' in rendered
 
 
 def test_settings_rejects_invalid_incoming_port(proxy_client: TestClient) -> None:
