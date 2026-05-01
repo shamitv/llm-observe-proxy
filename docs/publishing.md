@@ -26,17 +26,23 @@ underscore form were both checked.
 Dependency floors were refreshed on 2026-05-01 with `pip index versions`.
 
 ```powershell
-Remove-Item -Recurse -Force dist -ErrorAction SilentlyContinue
-.\.venv\Scripts\python.exe -m build
-.\.venv\Scripts\twine.exe check dist/*
+.\.venv\Scripts\python.exe scripts\publish_pypi.py --dry-run
 ```
 
 ## Upload
 
+The publish helper loads `.env` before reading credentials. Keep `.env` out of git and
+store the PyPI API token there:
+
+```dotenv
+PYPI_TOKEN=pypi-...
+TEST_PYPI_TOKEN=pypi-...
+```
+
 Use TestPyPI first:
 
 ```powershell
-.\.venv\Scripts\twine.exe upload --repository testpypi dist/*
+.\.venv\Scripts\python.exe scripts\publish_pypi.py --repository testpypi
 ```
 
 Then install from TestPyPI in a clean environment and smoke-test:
@@ -49,7 +55,15 @@ llm-observe-proxy --help
 Publish to PyPI:
 
 ```powershell
-.\.venv\Scripts\twine.exe upload dist/*
+.\.venv\Scripts\python.exe scripts\publish_pypi.py
+```
+
+Useful options:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\publish_pypi.py --skip-existing
+.\.venv\Scripts\python.exe scripts\publish_pypi.py --token-env PYPI_TOKEN
+.\.venv\Scripts\python.exe scripts\publish_pypi.py --repository-url https://upload.pypi.org/legacy/
 ```
 
 ## Pre-Publish Checklist
@@ -58,7 +72,6 @@ Publish to PyPI:
 - `.\.venv\Scripts\ruff.exe check src tests` passes.
 - `.\.venv\Scripts\python.exe -m compileall -q src tests` passes.
 - `.\.venv\Scripts\pytest.exe -q` passes.
-- `.\.venv\Scripts\python.exe -m build` succeeds.
-- `.\.venv\Scripts\twine.exe check dist/*` succeeds.
+- `.\.venv\Scripts\python.exe scripts\publish_pypi.py --dry-run` succeeds.
 - PyPI package name still returns 404 immediately before upload.
 - Version in `pyproject.toml` has not already been uploaded.
