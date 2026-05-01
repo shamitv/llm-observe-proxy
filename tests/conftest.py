@@ -168,6 +168,7 @@ def _responses_payload(payload: Any) -> dict[str, Any]:
             }
         ],
         "output_text": "Reasoned answer",
+        "usage": {"input_tokens": 8, "output_tokens": 4, "total_tokens": 12},
     }
 
 
@@ -208,6 +209,7 @@ def _chat_payload(payload: Any) -> dict[str, Any]:
         "choices": [
             {"message": {"role": "assistant", "content": content}, "finish_reason": "stop"}
         ],
+        "usage": {"prompt_tokens": 6, "completion_tokens": 3, "total_tokens": 9},
     }
 
 

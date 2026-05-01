@@ -18,6 +18,13 @@ class ExtractedImage:
     data_base64: str | None = None
 
 
+@dataclass(frozen=True)
+class ExtractedTokenUsage:
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    total_tokens: int | None = None
+
+
 def decode_json_bytes(body: bytes | None) -> Any | None:
     if not body:
         return None
@@ -73,6 +80,24 @@ def extract_model(payload: Any | None) -> str | None:
     if isinstance(payload, dict) and isinstance(payload.get("model"), str):
         return payload["model"]
     return None
+
+
+def extract_token_usage(payload: Any | None) -> ExtractedTokenUsage:
+    usage = _find_usage(payload)
+    if usage is None:
+        return ExtractedTokenUsage()
+
+    input_tokens = _first_int(usage, "input_tokens", "prompt_tokens")
+    output_tokens = _first_int(usage, "output_tokens", "completion_tokens")
+    total_tokens = _first_int(usage, "total_tokens")
+    if total_tokens is None and input_tokens is not None and output_tokens is not None:
+        total_tokens = input_tokens + output_tokens
+
+    return ExtractedTokenUsage(
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        total_tokens=total_tokens,
+    )
 
 
 def extract_images(payload: Any | None) -> list[ExtractedImage]:
@@ -151,11 +176,63 @@ def has_tool_payload(payload: Any | None) -> bool:
 def _dict_has_tool_signal(value: dict[str, Any]) -> bool:
     if value.get("tool_calls") or value.get("function_call") or value.get("tool_call_id"):
         return True
-    if value.get("type") in {"function_call", "function_call_output", "tool_call"}:
+    value_type = value.get("type")
+    if (
+        isinstance(value_type, str)
+        and value_type in {"function_call", "function_call_output", "tool_call"}
+    ):
         return True
     if "tools" in value and isinstance(value["tools"], list) and value["tools"]:
         return True
     return False
+
+
+def _find_usage(value: Any) -> dict[str, Any] | None:
+    if isinstance(value, dict):
+        if _looks_like_usage(value):
+            return value
+        usage = value.get("usage")
+        if isinstance(usage, dict) and _looks_like_usage(usage):
+            return usage
+        for child in value.values():
+            found = _find_usage(child)
+            if found is not None:
+                return found
+    elif isinstance(value, list):
+        for child in value:
+            found = _find_usage(child)
+            if found is not None:
+                return found
+    return None
+
+
+def _looks_like_usage(value: dict[str, Any]) -> bool:
+    return any(
+        _int_or_none(value.get(key)) is not None
+        for key in (
+            "input_tokens",
+            "prompt_tokens",
+            "output_tokens",
+            "completion_tokens",
+            "total_tokens",
+        )
+    )
+
+
+def _first_int(value: dict[str, Any], *keys: str) -> int | None:
+    for key in keys:
+        candidate = _int_or_none(value.get(key))
+        if candidate is not None:
+            return candidate
+    return None
+
+
+def _int_or_none(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    return None
 
 
 def _looks_like_base64(value: str) -> bool:

@@ -5,6 +5,7 @@ import subprocess
 import sys
 
 from llm_observe_proxy import create_app
+from llm_observe_proxy.capture import extract_token_usage, has_tool_payload
 from llm_observe_proxy.cli import resolve_bind
 from llm_observe_proxy.config import (
     DEFAULT_INCOMING_HOST,
@@ -91,6 +92,41 @@ def test_renderer_ignores_non_string_type_fields_in_nested_json() -> None:
 
     assert rendered.mode == "json"
     assert '"lookup"' in rendered.text
+
+
+def test_extract_token_usage_supports_chat_responses_and_responses_api() -> None:
+    chat_usage = extract_token_usage(
+        {"usage": {"prompt_tokens": 6, "completion_tokens": 3, "total_tokens": 9}}
+    )
+    assert chat_usage.input_tokens == 6
+    assert chat_usage.output_tokens == 3
+    assert chat_usage.total_tokens == 9
+
+    responses_usage = extract_token_usage(
+        [{"response": {"usage": {"input_tokens": 8, "output_tokens": 4}}}]
+    )
+    assert responses_usage.input_tokens == 8
+    assert responses_usage.output_tokens == 4
+    assert responses_usage.total_tokens == 12
+
+
+def test_tool_detector_ignores_non_string_type_fields() -> None:
+    payload = {
+        "tools": [
+            {
+                "type": "function",
+                "function": {
+                    "name": "lookup",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"type": {"type": "string"}},
+                    },
+                },
+            }
+        ]
+    }
+
+    assert has_tool_payload(payload) is True
 
 
 def test_module_cli_help_smoke() -> None:

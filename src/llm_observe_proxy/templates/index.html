@@ -44,7 +44,17 @@
 </form>
 
 <section class="table-shell">
-  <table>
+  <table class="requests-table">
+    <colgroup>
+      <col class="col-time">
+      <col class="col-endpoint">
+      <col class="col-model">
+      <col class="col-status">
+      <col class="col-duration">
+      <col class="col-tokens">
+      <col class="col-signals">
+      <col class="col-preview">
+    </colgroup>
     <thead>
       <tr>
         <th>Time</th>
@@ -52,6 +62,7 @@
         <th>Model</th>
         <th>Status</th>
         <th>Duration</th>
+        <th>Tokens</th>
         <th>Signals</th>
         <th>Preview</th>
       </tr>
@@ -60,20 +71,27 @@
       {% for record in records %}
       <tr>
         <td><a href="/admin/requests/{{ record.id }}">#{{ record.id }}</a><span class="muted">{{ record.created_at }}</span></td>
-        <td><code>{{ record.method }} {{ record.endpoint }}</code></td>
-        <td>{{ record.model }}</td>
+        <td class="request-endpoint"><span class="method">{{ record.method }}</span><code>{{ record.endpoint }}</code></td>
+        <td class="request-model">{{ record.model }}</td>
         <td><span class="pill status-{{ record.status | default('pending', true) }}">{{ record.status | default('pending', true) }}</span></td>
-        <td>{{ record.duration_ms | default('-', true) }} ms</td>
+        <td class="numeric">{{ record.duration_ms | default('-', true) }} ms</td>
+        <td>
+          <div class="token-triplet">
+            <span><strong>{{ record.tokens.input | default('-', true) }}</strong><small>Input</small></span>
+            <span><strong>{{ record.tokens.output | default('-', true) }}</strong><small>Output</small></span>
+            <span><strong>{{ record.tokens.total | default('-', true) }}</strong><small>Total</small></span>
+          </div>
+        </td>
         <td class="signals">
           {% if record.is_stream %}<span>Stream</span>{% endif %}
           {% if record.has_images %}<span>Image</span>{% endif %}
           {% if record.has_tool_calls %}<span>Tool</span>{% endif %}
           {% if record.error %}<span>Error</span>{% endif %}
         </td>
-        <td>{{ record.preview | preview | safe }}</td>
+        <td class="request-preview"><span>{{ record.preview | preview | safe }}</span></td>
       </tr>
       {% else %}
-      <tr><td colspan="7" class="empty">No captured requests yet.</td></tr>
+      <tr><td colspan="8" class="empty">No captured requests yet.</td></tr>
       {% endfor %}
     </tbody>
   </table>

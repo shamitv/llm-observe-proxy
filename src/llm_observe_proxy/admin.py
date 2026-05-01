@@ -13,6 +13,7 @@ from jinja2 import pass_context
 from sqlalchemy import desc, func, select
 from starlette.templating import Jinja2Templates
 
+from llm_observe_proxy.capture import decode_json_bytes, decode_sse_json_events, extract_token_usage
 from llm_observe_proxy.database import (
     RequestRecord,
     SessionFactory,
@@ -426,6 +427,7 @@ def _record_list_item(record: RequestRecord) -> dict[str, object]:
         record.response_content_type,
         "text",
     )
+    token_usage = _record_token_usage(record)
     return {
         "id": record.id,
         "created_at": record.created_at,
@@ -437,9 +439,22 @@ def _record_list_item(record: RequestRecord) -> dict[str, object]:
         "is_stream": record.is_stream,
         "has_images": record.has_images,
         "has_tool_calls": record.has_tool_calls,
+        "tokens": {
+            "input": token_usage.input_tokens,
+            "output": token_usage.output_tokens,
+            "total": token_usage.total_tokens,
+        },
         "error": record.error,
         "preview": response_render.text,
     }
+
+
+def _record_token_usage(record: RequestRecord):
+    if record.is_stream:
+        payload = decode_sse_json_events(record.response_body)
+    else:
+        payload = decode_json_bytes(record.response_body)
+    return extract_token_usage(payload)
 
 
 def _record_detail(record: RequestRecord) -> dict[str, object]:

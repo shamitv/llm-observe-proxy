@@ -54,7 +54,6 @@ pre {
 .nav,
 .stats,
 .detail-meta,
-.signals,
 .mode-tabs {
   display: flex;
   align-items: center;
@@ -263,6 +262,39 @@ table {
   border-collapse: collapse;
 }
 
+.requests-table {
+  min-width: 1220px;
+  table-layout: fixed;
+}
+
+.requests-table .col-time {
+  width: 175px;
+}
+
+.requests-table .col-endpoint {
+  width: 170px;
+}
+
+.requests-table .col-model {
+  width: 150px;
+}
+
+.requests-table .col-status {
+  width: 80px;
+}
+
+.requests-table .col-duration {
+  width: 92px;
+}
+
+.requests-table .col-tokens {
+  width: 170px;
+}
+
+.requests-table .col-signals {
+  width: 140px;
+}
+
 th,
 td {
   padding: 13px 14px;
@@ -281,9 +313,79 @@ td:first-child {
   min-width: 190px;
 }
 
+.requests-table td:first-child {
+  min-width: 0;
+}
+
 td:first-child a {
   display: block;
   font-weight: 800;
+}
+
+.request-endpoint,
+.request-model,
+.request-preview {
+  overflow-wrap: anywhere;
+}
+
+.request-endpoint {
+  display: grid;
+  gap: 4px;
+}
+
+.request-endpoint code {
+  line-height: 1.35;
+  white-space: normal;
+}
+
+.method {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+}
+
+.request-model {
+  line-height: 1.35;
+}
+
+.numeric {
+  white-space: nowrap;
+}
+
+.token-triplet {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.token-triplet span {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.token-triplet strong {
+  font-size: 13px;
+}
+
+.token-triplet small {
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.1;
+  text-transform: uppercase;
+}
+
+.request-preview span {
+  display: -webkit-box;
+  overflow: hidden;
+  line-height: 1.45;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+
+.signals span {
+  margin: 0 4px 4px 0;
 }
 
 .status-200,
