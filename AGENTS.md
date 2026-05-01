@@ -52,6 +52,15 @@ Quality checks:
 .\.venv\Scripts\pytest.exe -q
 ```
 
+Release checks:
+
+```powershell
+.\.venv\Scripts\ruff.exe check src tests scripts
+.\.venv\Scripts\python.exe -m compileall -q src tests scripts
+.\.venv\Scripts\python.exe -m build
+.\.venv\Scripts\twine.exe check dist/*
+```
+
 Run the proxy:
 
 ```powershell
@@ -79,6 +88,9 @@ Useful overrides:
 - `src/llm_observe_proxy/static/`: admin UI CSS/JS.
 - `tests/`: pytest suite with a fake upstream on `localhost:8080/v1`.
 - `docs/tests/README.md`: detailed test coverage map.
+- `docs/publishing.md`: PyPI release checklist and name-check notes.
+- `scripts/seed_demo_db.py`: create a demo SQLite DB for screenshots.
+- `scripts/capture_screenshots.py`: capture admin UI screenshots from the demo DB.
 
 ## Behavioral Rules
 
