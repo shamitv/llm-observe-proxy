@@ -66,6 +66,33 @@ def test_renderer_modes_for_json_text_markdown_tool_and_sse() -> None:
     assert "data:" in sse_render.text
 
 
+def test_renderer_ignores_non_string_type_fields_in_nested_json() -> None:
+    request_body = {
+        "model": "gpt-test",
+        "messages": [{"role": "user", "content": "call a tool"}],
+        "tools": [
+            {
+                "type": "function",
+                "function": {
+                    "name": "lookup",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "type": {"type": "string"},
+                            "query": {"type": "string"},
+                        },
+                    },
+                },
+            }
+        ],
+    }
+
+    rendered = render_payload(json.dumps(request_body).encode(), "application/json", "json")
+
+    assert rendered.mode == "json"
+    assert '"lookup"' in rendered.text
+
+
 def test_module_cli_help_smoke() -> None:
     completed = subprocess.run(
         [sys.executable, "-m", "llm_observe_proxy", "--help"],

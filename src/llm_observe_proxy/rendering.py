@@ -88,7 +88,10 @@ def collect_tool_blocks(payload: Any | None) -> list[dict[str, Any]]:
             if function_call:
                 blocks.append({"kind": "chat.function_call", "payload": function_call})
             value_type = value.get("type")
-            if value_type in {"function_call", "function_call_output", "tool_call"}:
+            if (
+                isinstance(value_type, str)
+                and value_type in {"function_call", "function_call_output", "tool_call"}
+            ):
                 blocks.append({"kind": value_type, "payload": value})
             if value.get("tool_call_id") and value.get("role") == "tool":
                 blocks.append({"kind": "chat.tool_response", "payload": value})
