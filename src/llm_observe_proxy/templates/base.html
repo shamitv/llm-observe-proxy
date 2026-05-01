@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ page_title }} - LLM Observe Proxy</title>
+  <link rel="stylesheet" href="{{ url_for('admin_static', path='/styles.css') }}">
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/admin">
+      <span class="brand-mark">LO</span>
+      <span>
+        <strong>LLM Observe Proxy</strong>
+        <small>{{ upstream_url | default('local capture') }}</small>
+      </span>
+    </a>
+    <nav class="nav">
+      <a href="/admin">Requests</a>
+      <a href="/admin/settings">Settings</a>
+      <a href="/healthz">Health</a>
+    </nav>
+  </header>
+  <main class="page">
+    {% block content %}{% endblock %}
+  </main>
+  <script src="{{ url_for('admin_static', path='/app.js') }}"></script>
+</body>
+</html>

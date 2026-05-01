@@ -1,0 +1,86 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="page-heading">
+  <div>
+    <p class="eyebrow">{{ record.method }} {{ record.endpoint }}</p>
+    <h1>Request #{{ record.id }}</h1>
+  </div>
+  <div class="detail-meta">
+    <span>Status <strong>{{ record.response_status | default('pending', true) }}</strong></span>
+    <span>Duration <strong>{{ record.duration_ms | default('-', true) }} ms</strong></span>
+    <span>Model <strong>{{ record.model | default('unknown', true) }}</strong></span>
+  </div>
+</section>
+
+{% if record.error %}
+<div class="alert">{{ record.error }}</div>
+{% endif %}
+
+<section class="split">
+  <article class="panel">
+    <header>
+      <h2>Request</h2>
+      <span>{{ record.request_content_type | default('body', true) }}</span>
+    </header>
+    <pre class="code">{{ request_render.text }}</pre>
+  </article>
+
+  <article class="panel">
+    <header>
+      <h2>Response</h2>
+      <div class="mode-tabs">
+        {% for option in ["auto", "json", "text", "markdown", "tool", "sse"] %}
+        <a class="{{ option | active_mode }}" href="/admin/requests/{{ record.id }}?mode={{ option }}">{{ option }}</a>
+        {% endfor %}
+      </div>
+    </header>
+    {% if response_render.mode == "markdown" and response_render.html %}
+    <div class="markdown-body">{{ response_render.html | safe }}</div>
+    {% elif response_render.mode == "tool" and response_render.tool_blocks %}
+    <div class="tool-list">
+      {% for block in response_render.tool_blocks %}
+      <section class="tool-block">
+        <strong>{{ block.kind }}</strong>
+        <pre class="code">{{ block.payload | tojson(indent=2) }}</pre>
+      </section>
+      {% endfor %}
+    </div>
+    {% else %}
+    <pre class="code">{{ response_render.text }}</pre>
+    {% endif %}
+  </article>
+</section>
+
+{% if images %}
+<section class="panel">
+  <header>
+    <h2>Images Sent</h2>
+    <span>{{ images | length }} image{{ '' if images | length == 1 else 's' }}</span>
+  </header>
+  <div class="image-grid">
+    {% for image in images %}
+    <figure>
+      <img src="{{ image.source }}" alt="Request image {{ loop.index }}">
+      <figcaption>{{ image.mime_type | default(image.kind, true) }}</figcaption>
+    </figure>
+    {% endfor %}
+  </div>
+</section>
+{% endif %}
+
+<section class="split">
+  <article class="panel">
+    <header><h2>Request Headers</h2></header>
+    <pre class="code">{{ record.request_headers_json }}</pre>
+  </article>
+  <article class="panel">
+    <header><h2>Response Headers</h2></header>
+    <pre class="code">{{ record.response_headers_json | default('{}', true) }}</pre>
+  </article>
+</section>
+
+<section class="panel">
+  <header><h2>Upstream</h2></header>
+  <code>{{ record.upstream_url }}</code>
+</section>
+{% endblock %}

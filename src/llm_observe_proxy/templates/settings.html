@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="page-heading">
+  <div>
+    <p class="eyebrow">Admin</p>
+    <h1>Settings</h1>
+  </div>
+  <div class="stats">
+    <span><strong>{{ total }}</strong>Stored rows</span>
+    <span><strong>{{ trim_count }}</strong>Older than {{ days }} days</span>
+  </div>
+</section>
+
+{% if error %}
+<div class="alert">{{ error }}</div>
+{% endif %}
+
+<section class="settings-grid">
+  <form class="panel form-panel" method="post" action="/admin/settings/upstream">
+    <header>
+      <h2>Upstream URL</h2>
+      <span>Base /v1 endpoint</span>
+    </header>
+    <label>
+      URL
+      <input name="upstream_url" value="{{ upstream_url }}" placeholder="http://localhost:8080/v1" required>
+    </label>
+    <button class="button primary" type="submit">Save Upstream</button>
+  </form>
+
+  <form class="panel form-panel" method="post" action="/admin/trim" data-confirm-trim>
+    <header>
+      <h2>Trim History</h2>
+      <span>Delete older records</span>
+    </header>
+    <label>
+      Retain days
+      <input name="days" value="{{ days }}" min="1" max="3650" type="number" required>
+    </label>
+    <label class="check"><input type="checkbox" name="confirm" value="yes" required> Confirm deletion</label>
+    <p class="muted">Current preview: {{ trim_count }} row{{ '' if trim_count == 1 else 's' }} will be deleted.</p>
+    <button class="button danger" type="submit">Trim Records</button>
+    <a class="button ghost" href="/admin/settings?days={{ days }}">Refresh Count</a>
+  </form>
+</section>
+{% endblock %}

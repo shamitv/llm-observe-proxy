@@ -270,7 +270,8 @@ def _is_stream_request(payload: Any | None, headers: Any) -> bool:
 
 @contextmanager
 def _session(session_factory: SessionFactory):
-    yield from session_scope(session_factory)
+    with session_scope(session_factory) as session:
+        yield session
 
 
 def _now_from_record(record: RequestRecord):
