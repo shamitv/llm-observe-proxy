@@ -23,6 +23,7 @@ from llm_observe_proxy.database import (
     ImageAsset,
     RequestRecord,
     SessionFactory,
+    get_active_task_run,
     get_upstream_url,
     session_scope,
 )
@@ -61,7 +62,9 @@ async def proxy_openai(path: str, request: Request) -> Response:
         upstream_base = get_upstream_url(session, settings)
         upstream_url = _build_upstream_url(upstream_base, path, query_string)
         images = extract_images(request_payload)
+        active_run = get_active_task_run(session)
         record = RequestRecord(
+            task_run_id=active_run.id if active_run else None,
             method=request.method,
             path=f"/v1/{path}",
             query_string=query_string,
