@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select
 
 from llm_observe_proxy.admin import templates
-from llm_observe_proxy.database import ImageAsset, RequestRecord
+from llm_observe_proxy.database import ImageAsset, RequestRecord, TaskRun
 
 
 def test_request_browser_filters_and_markdown_renderer(proxy_client: TestClient) -> None:
@@ -56,6 +56,88 @@ def test_settings_updates_upstream_url(proxy_client: TestClient, proxy_app: Fast
     with proxy_app.state.session_factory() as session:
         record = session.scalars(select(RequestRecord)).one()
         assert record.upstream_url == "http://localhost:8080/v1/chat/completions"
+
+
+def test_runs_require_name_and_manage_active_state(
+    proxy_client: TestClient,
+    proxy_app: FastAPI,
+) -> None:
+    blank = proxy_client.post("/admin/runs/start", data={"name": "   "})
+    assert blank.status_code == 400
+    assert "Run name is required." in blank.text
+
+    response = proxy_client.post(
+        "/admin/runs/start",
+        data={"name": "Video benchmark"},
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+
+    runs_page = proxy_client.get("/admin/runs")
+    assert "Run in progress" in runs_page.text
+    assert "Video benchmark" in runs_page.text
+
+    response = proxy_client.post(
+        "/admin/runs/start",
+        data={"name": "Cloud comparison"},
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+
+    with proxy_app.state.session_factory() as session:
+        runs = session.scalars(select(TaskRun).order_by(TaskRun.id)).all()
+        assert [run.name for run in runs] == ["Video benchmark", "Cloud comparison"]
+        assert runs[0].ended_at is not None
+        assert runs[1].ended_at is None
+
+    response = proxy_client.post("/admin/runs/end", follow_redirects=False)
+    assert response.status_code == 303
+    with proxy_app.state.session_factory() as session:
+        active = session.scalars(select(TaskRun).where(TaskRun.ended_at.is_(None))).all()
+        assert active == []
+
+
+def test_run_filter_detail_and_badges_show_associated_requests(
+    proxy_client: TestClient,
+    proxy_app: FastAPI,
+) -> None:
+    proxy_client.post("/admin/runs/start", data={"name": "Local video task"})
+    proxy_client.post(
+        "/v1/chat/completions",
+        json={"model": "gpt-test", "messages": [{"role": "user", "content": "inside"}]},
+    )
+    proxy_client.post("/admin/runs/end")
+    proxy_client.post(
+        "/v1/chat/completions",
+        json={"model": "gpt-test", "messages": [{"role": "user", "content": "outside"}]},
+    )
+
+    with proxy_app.state.session_factory() as session:
+        task_run = session.scalars(select(TaskRun)).one()
+        records = session.scalars(select(RequestRecord).order_by(RequestRecord.id)).all()
+        assert records[0].task_run_id == task_run.id
+        assert records[1].task_run_id is None
+
+    browser = proxy_client.get(f"/admin?run={task_run.id}")
+    assert browser.status_code == 200
+    assert "Local video task" in browser.text
+    assert "#1" in browser.text
+    assert "#2" not in browser.text
+
+    detail = proxy_client.get(f"/admin/runs/{task_run.id}")
+    assert detail.status_code == 200
+    assert "LLM wall time" in detail.text
+    assert "Total tokens" in detail.text
+    assert ">9<" in detail.text
+    assert "Run traffic" in detail.text
+    assert "#1" in detail.text
+    assert "#2" not in detail.text
+
+    request_detail = proxy_client.get("/admin/requests/1")
+    assert (
+        "Run <strong><a href=\"/admin/runs/1\">Local video task</a></strong>"
+        in request_detail.text
+    )
 
 
 def test_settings_updates_incoming_server(proxy_client: TestClient) -> None:

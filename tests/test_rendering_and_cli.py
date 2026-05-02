@@ -4,6 +4,8 @@ import json
 import subprocess
 import sys
 
+from sqlalchemy import inspect, text
+
 from llm_observe_proxy import create_app
 from llm_observe_proxy.capture import extract_token_usage, has_tool_payload
 from llm_observe_proxy.cli import resolve_bind
@@ -158,3 +160,25 @@ def test_cli_resolve_bind_uses_saved_incoming_settings(tmp_path) -> None:
     assert resolve_bind(None, None, False, settings) == (EXPOSED_INCOMING_HOST, 9090)
     assert resolve_bind("localhost", 7777, False, settings) == ("localhost", 7777)
     assert resolve_bind(None, None, True, settings) == (EXPOSED_INCOMING_HOST, 9090)
+
+
+def test_init_db_upgrades_existing_sqlite_request_records_with_task_run_id(tmp_path) -> None:
+    db_path = tmp_path / "old.sqlite3"
+    settings = Settings(database_url=f"sqlite:///{db_path.as_posix()}")
+    engine = create_db_engine(settings.database_url)
+    with engine.begin() as connection:
+        connection.execute(text("CREATE TABLE request_records (id INTEGER PRIMARY KEY)"))
+        connection.execute(text("INSERT INTO request_records (id) VALUES (42)"))
+
+    init_db(engine)
+
+    inspector = inspect(engine)
+    columns = {column["name"] for column in inspector.get_columns("request_records")}
+    indexes = {index["name"] for index in inspector.get_indexes("request_records")}
+    with engine.connect() as connection:
+        ids = connection.execute(text("SELECT id FROM request_records")).scalars().all()
+    engine.dispose()
+
+    assert "task_run_id" in columns
+    assert "ix_request_records_task_run_id" in indexes
+    assert ids == [42]
