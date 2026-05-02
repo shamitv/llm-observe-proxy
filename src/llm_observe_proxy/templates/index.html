@@ -13,6 +13,27 @@
   </div>
 </section>
 
+<section class="run-control">
+  {% if active_run %}
+  <div>
+    <p class="eyebrow">Run in progress</p>
+    <h2><a href="/admin/runs/{{ active_run.id }}">{{ active_run.name }}</a></h2>
+    <p class="muted">{{ active_run.request_count }} request{{ '' if active_run.request_count == 1 else 's' }} · {{ active_run.open_duration_ms | default('-', true) }} ms open</p>
+  </div>
+  <form method="post" action="/admin/runs/end">
+    <button class="button danger" type="submit">End run</button>
+  </form>
+  {% else %}
+  <form class="run-start-form" method="post" action="/admin/runs/start">
+    <label>
+      Run name
+      <input name="name" placeholder="Video processing benchmark" required>
+    </label>
+    <button class="button primary" type="submit">Start run</button>
+  </form>
+  {% endif %}
+</section>
+
 <form class="toolbar" method="get" action="/admin">
   <label>
     Endpoint
@@ -24,6 +45,15 @@
       <option value="">Any model</option>
       {% for item in models %}
       <option value="{{ item }}" {% if filters.model == item %}selected{% endif %}>{{ item }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <label>
+    Run
+    <select name="run">
+      <option value="">Any run</option>
+      {% for item in run_options %}
+      <option value="{{ item.id }}" {% if filters.run == item.id %}selected{% endif %}>{{ item.name }}</option>
       {% endfor %}
     </select>
   </label>
@@ -43,57 +73,6 @@
   </datalist>
 </form>
 
-<section class="table-shell">
-  <table class="requests-table">
-    <colgroup>
-      <col class="col-time">
-      <col class="col-endpoint">
-      <col class="col-model">
-      <col class="col-status">
-      <col class="col-duration">
-      <col class="col-tokens">
-      <col class="col-signals">
-      <col class="col-preview">
-    </colgroup>
-    <thead>
-      <tr>
-        <th>Time</th>
-        <th>Endpoint</th>
-        <th>Model</th>
-        <th>Status</th>
-        <th>Duration</th>
-        <th>Tokens</th>
-        <th>Signals</th>
-        <th>Preview</th>
-      </tr>
-    </thead>
-    <tbody>
-      {% for record in records %}
-      <tr>
-        <td><a href="/admin/requests/{{ record.id }}">#{{ record.id }}</a><span class="muted">{{ record.created_at }}</span></td>
-        <td class="request-endpoint"><span class="method">{{ record.method }}</span><code>{{ record.endpoint }}</code></td>
-        <td class="request-model">{{ record.model }}</td>
-        <td><span class="pill status-{{ record.status | default('pending', true) }}">{{ record.status | default('pending', true) }}</span></td>
-        <td class="numeric">{{ record.duration_ms | default('-', true) }} ms</td>
-        <td>
-          <div class="token-triplet">
-            <span><strong>{{ record.tokens.input | default('-', true) }}</strong><small>Input</small></span>
-            <span><strong>{{ record.tokens.output | default('-', true) }}</strong><small>Output</small></span>
-            <span><strong>{{ record.tokens.total | default('-', true) }}</strong><small>Total</small></span>
-          </div>
-        </td>
-        <td class="signals">
-          {% if record.is_stream %}<span>Stream</span>{% endif %}
-          {% if record.has_images %}<span>Image</span>{% endif %}
-          {% if record.has_tool_calls %}<span>Tool</span>{% endif %}
-          {% if record.error %}<span>Error</span>{% endif %}
-        </td>
-        <td class="request-preview"><span>{{ record.preview | preview | safe }}</span></td>
-      </tr>
-      {% else %}
-      <tr><td colspan="8" class="empty">No captured requests yet.</td></tr>
-      {% endfor %}
-    </tbody>
-  </table>
-</section>
+{% set show_run = true %}
+{% include "_requests_table.html" %}
 {% endblock %}
