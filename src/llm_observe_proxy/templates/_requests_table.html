@@ -7,6 +7,7 @@
       {% if show_run %}<col class="col-run">{% endif %}
       <col class="col-status">
       <col class="col-duration">
+      <col class="col-tps">
       <col class="col-tokens">
       <col class="col-signals">
       <col class="col-preview">
@@ -19,6 +20,7 @@
         {% if show_run %}<th>Run</th>{% endif %}
         <th>Status</th>
         <th>Duration</th>
+        <th>TPS</th>
         <th>Tokens</th>
         <th>Signals</th>
         <th>Preview</th>
@@ -41,6 +43,7 @@
         {% endif %}
         <td><span class="pill status-{{ record.status | default('pending', true) }}">{{ record.status | default('pending', true) }}</span></td>
         <td class="numeric">{{ record.duration_ms | default('-', true) }} ms</td>
+        <td class="numeric">{{ record.tokens_per_second | default('-', true) }}</td>
         <td>
           <div class="token-triplet">
             <span><strong>{{ record.tokens.input | default('-', true) }}</strong><small>Input</small></span>
@@ -57,7 +60,7 @@
         <td class="request-preview"><span>{{ record.preview | preview | safe }}</span></td>
       </tr>
       {% else %}
-      <tr><td colspan="{{ 9 if show_run else 8 }}" class="empty">No captured requests yet.</td></tr>
+      <tr><td colspan="{{ 10 if show_run else 9 }}" class="empty">No captured requests yet.</td></tr>
       {% endfor %}
     </tbody>
   </table>

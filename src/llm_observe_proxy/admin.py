@@ -575,6 +575,7 @@ def _record_list_item(record: RequestRecord) -> dict[str, object]:
             "output": token_usage.output_tokens,
             "total": token_usage.total_tokens,
         },
+        "tokens_per_second": _tokens_per_second(token_usage.output_tokens, record.duration_ms),
         "error": record.error,
         "preview": response_render.text,
     }
