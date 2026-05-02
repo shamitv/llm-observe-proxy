@@ -71,6 +71,58 @@ The local proxy did not cause the failure. A direct replay of the exact captured
 request against the upstream llama.cpp-compatible endpoint reproduced the same
 empty OpenAI response shape 8 out of 8 times.
 
+### Problematic LLM Response Snippets
+
+The problematic responses were not malformed at the SSE layer. They were
+problematic because the model's intended tool call was streamed as
+`reasoning_content`, while the OpenAI-compatible fields that Copilot consumes
+remained empty.
+
+Sanitized chunks from a failing stream show the assistant starting with no
+visible content and then leaking a Qwen tagged tool call through reasoning:
+
+```json
+{"delta":{"role":"assistant","content":null},"finish_reason":null}
+{"delta":{"reasoning_content":"</think>"},"finish_reason":null}
+{"delta":{"reasoning_content":"\n"},"finish_reason":null}
+{"delta":{"reasoning_content":"\n<tool_call>"},"finish_reason":null}
+{"delta":{"reasoning_content":"\n<function"},"finish_reason":null}
+{"delta":{"reasoning_content":"="},"finish_reason":null}
+{"delta":{"reasoning_content":"run"},"finish_reason":null}
+{"delta":{"reasoning_content":"_in"},"finish_reason":null}
+{"delta":{"reasoning_content":"_terminal"},"finish_reason":null}
+{"delta":{"reasoning_content":">"},"finish_reason":null}
+```
+
+Reconstructed, the meaningful model text looked like a valid Qwen tagged tool
+call, but it was in the wrong response field:
+
+```text
+</think>
+
+<tool_call>
+<function=run_in_terminal>
+<parameter=command>
+...
+```
+
+The same stream then ended as a normal stopped assistant turn rather than as a
+tool-call turn:
+
+```json
+{"choices":[{"delta":{},"finish_reason":"stop"}]}
+data: [DONE]
+```
+
+The missing piece was any corresponding structured OpenAI tool-call delta:
+
+```json
+{"delta":{"tool_calls":[{"index":0,"function":{"name":"run_in_terminal","arguments":"..."}}]}}
+```
+
+Because that `delta.tool_calls` shape never appeared, Copilot received a
+successful but semantically empty assistant response.
+
 ## Root Cause
 
 The failure was in the interaction between Qwen reasoning output, tagged
