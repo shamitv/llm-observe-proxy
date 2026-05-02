@@ -42,8 +42,13 @@ the test session fails early with a clear message.
 | Multiple images | One request with two images is captured: a data URL image and a remote image URL. Both are stored as image assets and shown in the UI. | `test_images_are_extracted_from_data_urls_and_remote_urls` |
 | Non-streaming tool call | Chat Completions response with `tool_calls` sets `has_tool_calls` and renders as `chat.tool_call`. | `test_tool_calls_render_for_non_streaming_chat_response` |
 | Generic passthrough | Generic `/v1/*` routes forward and log query strings. | `test_generic_v1_passthrough_records_query_string` |
-| Admin browser | Request browser lists captured requests and supports a model filter. | `test_request_browser_filters_and_markdown_renderer` |
+| Admin browser | Request browser lists captured requests, token counts, and request TPS, and supports a model filter. | `test_request_browser_filters_and_markdown_renderer` |
 | Markdown rendering | Markdown responses render as HTML in detail view. | `test_request_browser_filters_and_markdown_renderer` |
+| Run lifecycle | Runs require names, show active state, end active runs, and auto-end the previous run when starting another. | `test_runs_require_name_and_manage_active_state` |
+| Run request grouping | Requests made during an active run receive `task_run_id`; requests outside a run do not. | `test_requests_are_associated_with_active_task_run` |
+| Run streaming grouping | A streaming request keeps the run assigned at request start even if the run ends before the stream finishes. | `test_streaming_request_keeps_task_run_after_run_ends` |
+| Run filtering and detail | Request browser filters by run, run detail shows associated requests and aggregate stats, and request detail links back to the run. | `test_run_filter_detail_and_badges_show_associated_requests` |
+| SQLite run upgrade | Existing SQLite databases get the nullable `task_run_id` column and index without data loss. | `test_init_db_upgrades_existing_sqlite_request_records_with_task_run_id` |
 | Upstream settings | Admin UI accepts a valid `/v1` upstream URL and later proxy calls use it. | `test_settings_updates_upstream_url` |
 | Incoming settings | Admin UI shows `localhost:8080` by default and stores custom incoming port plus the `0.0.0.0` expose option. | `test_settings_updates_incoming_server` |
 | Incoming validation | Admin UI rejects incoming ports outside `1..65535`. | `test_settings_rejects_invalid_incoming_port` |

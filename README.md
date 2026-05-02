@@ -3,7 +3,7 @@
 `llm-observe-proxy` is an OpenAI-compatible, record-only proxy for inspecting LLM
 traffic. It forwards requests to an upstream `/v1` API, stores requests and responses in
 SQLite, and provides a polished local admin UI for browsing, pretty-printing, trimming,
-and changing runtime settings.
+grouping task runs, and changing runtime settings.
 
 It is useful when you want LiteLLM-style observability without introducing a full gateway
 or external database.
@@ -15,7 +15,10 @@ Published package: https://pypi.org/project/llm-observe-proxy/
 - OpenAI-compatible passthrough route: `ANY /v1/{path:path}`.
 - SQLite capture for request/response headers, bodies, status, timing, model, endpoint,
   streaming state, tool-call signals, image assets, and errors.
-- Admin UI for searching and browsing captured traffic.
+- Admin UI for searching and browsing captured traffic, including per-request output TPS.
+- Runs for grouping all requests made during a task, benchmark, or repro workflow.
+- Run detail pages with request counts, LLM wall time, token totals, tokens/sec, model
+  and endpoint breakdowns, and signal/error counts.
 - Detail pages with response render modes for JSON, plain text, Markdown, tool calls,
   and raw SSE streams.
 - Request image gallery for data URL and remote image references.
@@ -111,6 +114,24 @@ llm-observe-proxy --upstream-url http://localhost:8000/v1
 You can also change the upstream URL and next-start incoming host/port settings from
 `/admin/settings`.
 
+## Runs
+
+Use **Runs** when you want to measure or review LLM usage for one bounded task, such as
+processing a video, comparing local and cloud models, or reproducing an agent issue.
+
+1. Open `/admin/runs` or use the run control on `/admin`.
+2. Enter a required run name and choose **Start run**.
+3. Run your application or benchmark through the proxy.
+4. Choose **End run** when the task is complete.
+
+Starting a new run automatically ends any existing active run. Requests made while a run
+is active are linked to that run; requests outside a run are still captured normally.
+
+The request browser can filter by run, and request rows link back to their run. The run
+detail page reports LLM wall time from the first request start to the last response
+completion, plus token totals and tokens/sec metrics. The request table's **TPS** column
+shows per-request output tokens per second when token usage and duration are available.
+
 ## Screenshots
 
 Screenshots are generated from a seeded demo database and stored in `docs/screenshots`.
@@ -140,6 +161,10 @@ Regenerate screenshots:
 - `ANY /v1/{path:path}`: OpenAI-compatible pass-through proxy.
 - `GET /admin`: request browser.
 - `GET /admin/requests/{id}`: request/response detail view.
+- `GET /admin/runs`: run browser and active run controls.
+- `GET /admin/runs/{id}`: run metrics and associated request list.
+- `POST /admin/runs/start`: start a named run, ending any active run first.
+- `POST /admin/runs/end`: end the active run.
 - `GET /admin/settings`: upstream settings and retention tools.
 - `POST /admin/settings/incoming`: update incoming host/port settings for next startup.
 - `POST /admin/settings/upstream`: update upstream URL.
