@@ -7,6 +7,8 @@ and this project uses semantic versioning.
 
 ## Unreleased
 
+## [0.2.0] - 2026-05-03
+
 ### Added
 
 - Task Runs in the admin UI for grouping requests made during a named task,
@@ -16,9 +18,21 @@ and this project uses semantic versioning.
 - Request browser filtering by run, plus run badges on request rows and detail pages.
 - Per-request TPS column in admin request tables, computed from output tokens and
   request duration when usage data is available.
+- Config-driven model routes for sending selected proxy-facing model names to different
+  upstream `/v1` endpoints.
+- `--models-file`, `LLM_OBSERVE_MODELS_FILE`, and `LLM_OBSERVE_MODELS_JSON` for loading
+  model route definitions.
+- Optional upstream model rewrites and route-scoped API key injection for configured
+  model routes.
+- Route metadata capture for routed requests, including matched route name, upstream
+  model, and final upstream URL.
 - Settings UI support for adding, updating, deleting, and immediately using
   SQLite-persisted model upstream routes.
-- SQLite compatibility upgrade for adding run associations to existing databases.
+- Read-only admin settings visibility for startup-configured model routes, plus route
+  badges and upstream-model details in request browser and detail views.
+- Screenshot-free PyPI README metadata, while keeping the GitHub README screenshots.
+- SQLite compatibility upgrades for adding run associations and route metadata to
+  existing databases.
 
 ## [0.1.1] - 2026-05-01
 
