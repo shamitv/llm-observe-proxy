@@ -42,6 +42,10 @@ git merge --no-ff feature/<short-name> -m "merge: <summary>"
 Keep `main` clean after merges. Do not overwrite unrelated user changes. If a file is
 already modified before your work, inspect the diff and preserve the user's intent.
 
+Commit early and commit often. Once a meaningful small change is complete and verified,
+commit that focused change before moving on to the next one. Keep each commit scoped to a
+single coherent unit of work and avoid bundling unrelated edits together.
+
 ## Common Commands
 
 Quality checks:
