@@ -29,8 +29,16 @@ def render_payload(
     requested_mode = mode if mode in {"auto", "json", "text", "markdown", "tool", "sse"} else "auto"
     json_payload = decode_json_bytes(body)
     text = _body_to_text(body)
-    sse_events = decode_sse_json_events(body) if _is_sse(content_type, text) else []
-    tool_blocks = collect_tool_blocks(json_payload if json_payload is not None else sse_events)
+    sse_events = (
+        decode_sse_json_events(body)
+        if requested_mode in {"auto", "tool", "sse"} and _is_sse(content_type, text)
+        else []
+    )
+    tool_blocks = (
+        collect_tool_blocks(json_payload if json_payload is not None else sse_events)
+        if requested_mode in {"auto", "tool"}
+        else []
+    )
 
     resolved_mode = requested_mode
     if requested_mode == "auto":

@@ -6,7 +6,13 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
-from llm_observe_proxy.database import ImageAsset, RequestRecord
+from llm_observe_proxy.database import (
+    ImageAsset,
+    RequestRecord,
+    end_active_task_run,
+    session_scope,
+    start_task_run,
+)
 
 
 def test_non_streaming_chat_completion_records_and_forwards_headers(
@@ -34,6 +40,62 @@ def test_non_streaming_chat_completion_records_and_forwards_headers(
         assert record.has_images is False
         assert record.has_tool_calls is False
         assert b"Plain chat response" in record.response_body
+
+
+def test_requests_are_associated_with_active_task_run(
+    proxy_client: TestClient,
+    proxy_app: FastAPI,
+) -> None:
+    with session_scope(proxy_app.state.session_factory) as session:
+        task_run = start_task_run(session, "Local benchmark")
+        task_run_id = task_run.id
+
+    proxy_client.post(
+        "/v1/chat/completions",
+        json={"model": "gpt-test", "messages": [{"role": "user", "content": "inside"}]},
+    )
+
+    with session_scope(proxy_app.state.session_factory) as session:
+        end_active_task_run(session)
+
+    proxy_client.post(
+        "/v1/chat/completions",
+        json={"model": "gpt-test", "messages": [{"role": "user", "content": "outside"}]},
+    )
+
+    with proxy_app.state.session_factory() as session:
+        records = session.scalars(select(RequestRecord).order_by(RequestRecord.id)).all()
+        assert records[0].task_run_id == task_run_id
+        assert records[1].task_run_id is None
+
+
+def test_streaming_request_keeps_task_run_after_run_ends(
+    proxy_client: TestClient,
+    proxy_app: FastAPI,
+) -> None:
+    with session_scope(proxy_app.state.session_factory) as session:
+        task_run = start_task_run(session, "Streaming benchmark")
+        task_run_id = task_run.id
+
+    with proxy_client.stream(
+        "POST",
+        "/v1/chat/completions",
+        json={
+            "model": "gpt-test",
+            "messages": [{"role": "user", "content": "stream"}],
+            "stream": True,
+        },
+    ) as response:
+        with session_scope(proxy_app.state.session_factory) as session:
+            end_active_task_run(session)
+        body = b"".join(response.iter_bytes())
+
+    assert response.status_code == 200
+    assert body.endswith(b"data: [DONE]\n\n")
+    with proxy_app.state.session_factory() as session:
+        record = session.scalars(select(RequestRecord)).one()
+        assert record.task_run_id == task_run_id
+        assert record.is_stream is True
 
 
 def test_responses_reasoning_payload_is_recorded_and_visible_in_ui(

@@ -16,6 +16,9 @@ from sqlalchemy import (
     Text,
     create_engine,
     event,
+    inspect,
+    select,
+    text,
 )
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import (
@@ -38,10 +41,33 @@ class Base(DeclarativeBase):
     pass
 
 
+class TaskRun(Base):
+    __tablename__ = "task_runs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(256))
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, index=True)
+    ended_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        index=True,
+    )
+    summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    metadata_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    requests: Mapped[list[RequestRecord]] = relationship(back_populates="task_run")
+
+
 class RequestRecord(Base):
     __tablename__ = "request_records"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    task_run_id: Mapped[int | None] = mapped_column(
+        ForeignKey("task_runs.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     method: Mapped[str] = mapped_column(String(16))
@@ -68,6 +94,7 @@ class RequestRecord(Base):
         cascade="all, delete-orphan",
         passive_deletes=True,
     )
+    task_run: Mapped[TaskRun | None] = relationship(back_populates="requests")
 
 
 class ImageAsset(Base):
@@ -123,6 +150,7 @@ def create_session_factory(engine: Engine) -> SessionFactory:
 
 def init_db(engine: Engine) -> None:
     Base.metadata.create_all(engine)
+    _ensure_sqlite_task_run_schema(engine)
 
 
 @contextmanager
@@ -188,9 +216,103 @@ def set_incoming_server(session: Session, port: int, expose_all_ips: bool) -> No
     set_setting(session, "expose_all_ips", "true" if expose_all_ips else "false")
 
 
+def get_active_task_run(session: Session) -> TaskRun | None:
+    return session.scalar(
+        select(TaskRun).where(TaskRun.ended_at.is_(None)).order_by(TaskRun.started_at.desc())
+    )
+
+
+def start_task_run(session: Session, name: str, notes: str | None = None) -> TaskRun:
+    resolved_name = name.strip()
+    if not resolved_name:
+        raise ValueError("Run name is required.")
+
+    now = _now()
+    active_runs = session.scalars(select(TaskRun).where(TaskRun.ended_at.is_(None))).all()
+    for active_run in active_runs:
+        active_run.ended_at = now
+
+    task_run = TaskRun(name=resolved_name, notes=notes.strip() if notes else None, started_at=now)
+    session.add(task_run)
+    session.flush()
+    return task_run
+
+
+def end_active_task_run(session: Session) -> TaskRun | None:
+    active_run = get_active_task_run(session)
+    if active_run is None:
+        return None
+    active_run.ended_at = _now()
+    session.flush()
+    return active_run
+
+
+def get_task_run_stats(session: Session, task_run_id: int) -> dict[str, object]:
+    records = session.scalars(
+        select(RequestRecord)
+        .where(RequestRecord.task_run_id == task_run_id)
+        .order_by(RequestRecord.created_at)
+    ).all()
+    completed_times = [record.completed_at for record in records if record.completed_at is not None]
+    first_request_at = records[0].created_at if records else None
+    last_completed_at = max(completed_times) if completed_times else None
+    total_request_duration_ms = sum(record.duration_ms or 0 for record in records)
+    return {
+        "request_count": len(records),
+        "first_request_at": first_request_at,
+        "last_completed_at": last_completed_at,
+        "llm_wall_time_ms": _duration_ms(first_request_at, last_completed_at),
+        "total_request_duration_ms": total_request_duration_ms,
+        "streams": sum(1 for record in records if record.is_stream),
+        "images": sum(1 for record in records if record.has_images),
+        "tools": sum(1 for record in records if record.has_tool_calls),
+        "errors": sum(1 for record in records if record.error),
+    }
+
+
+def list_task_runs_with_stats(session: Session, limit: int = 100) -> list[dict[str, object]]:
+    runs = session.scalars(
+        select(TaskRun).order_by(TaskRun.started_at.desc()).limit(limit)
+    ).all()
+    return [
+        {
+            "run": task_run,
+            "stats": get_task_run_stats(session, task_run.id),
+        }
+        for task_run in runs
+    ]
+
+
 def _ensure_sqlite_parent(engine: Engine) -> None:
     database = engine.url.database
     if not database or database == ":memory:":
         return
     Path(database).expanduser().parent.mkdir(parents=True, exist_ok=True)
 
+
+def _ensure_sqlite_task_run_schema(engine: Engine) -> None:
+    if engine.dialect.name != "sqlite":
+        return
+    inspector = inspect(engine)
+    if "request_records" not in inspector.get_table_names():
+        return
+    columns = {column["name"] for column in inspector.get_columns("request_records")}
+    with engine.begin() as connection:
+        if "task_run_id" not in columns:
+            connection.execute(text("ALTER TABLE request_records ADD COLUMN task_run_id INTEGER"))
+        connection.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS "
+                "ix_request_records_task_run_id ON request_records (task_run_id)"
+            )
+        )
+
+
+def _duration_ms(started_at: datetime | None, ended_at: datetime | None) -> int | None:
+    if started_at is None or ended_at is None:
+        return None
+    if started_at.tzinfo is None and ended_at.tzinfo is not None:
+        ended_at = ended_at.replace(tzinfo=None)
+    elif started_at.tzinfo is not None and ended_at.tzinfo is None:
+        started_at = started_at.replace(tzinfo=None)
+    return max(0, int((ended_at - started_at).total_seconds() * 1000))

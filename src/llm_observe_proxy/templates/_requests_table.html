@@ -1,0 +1,67 @@
+<section class="table-shell">
+  <table class="requests-table">
+    <colgroup>
+      <col class="col-time">
+      <col class="col-endpoint">
+      <col class="col-model">
+      {% if show_run %}<col class="col-run">{% endif %}
+      <col class="col-status">
+      <col class="col-duration">
+      <col class="col-tps">
+      <col class="col-tokens">
+      <col class="col-signals">
+      <col class="col-preview">
+    </colgroup>
+    <thead>
+      <tr>
+        <th>Time</th>
+        <th>Endpoint</th>
+        <th>Model</th>
+        {% if show_run %}<th>Run</th>{% endif %}
+        <th>Status</th>
+        <th>Duration</th>
+        <th>TPS</th>
+        <th>Tokens</th>
+        <th>Signals</th>
+        <th>Preview</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for record in records %}
+      <tr>
+        <td><a href="/admin/requests/{{ record.id }}">#{{ record.id }}</a><span class="muted">{{ record.created_at }}</span></td>
+        <td class="request-endpoint"><span class="method">{{ record.method }}</span><code>{{ record.endpoint }}</code></td>
+        <td class="request-model">{{ record.model }}</td>
+        {% if show_run %}
+        <td>
+          {% if record.task_run %}
+          <a class="run-badge" href="/admin/runs/{{ record.task_run.id }}">{{ record.task_run.name }}</a>
+          {% else %}
+          <span class="muted">-</span>
+          {% endif %}
+        </td>
+        {% endif %}
+        <td><span class="pill status-{{ record.status | default('pending', true) }}">{{ record.status | default('pending', true) }}</span></td>
+        <td class="numeric">{{ record.duration_ms | duration_ms }}</td>
+        <td class="numeric">{{ record.tokens_per_second | compact_rate }}</td>
+        <td>
+          <div class="token-triplet">
+            <span><strong>{{ record.tokens.input | compact_number }}</strong><small>Input</small></span>
+            <span><strong>{{ record.tokens.output | compact_number }}</strong><small>Output</small></span>
+            <span><strong>{{ record.tokens.total | compact_number }}</strong><small>Total</small></span>
+          </div>
+        </td>
+        <td class="signals">
+          {% if record.is_stream %}<span>Stream</span>{% endif %}
+          {% if record.has_images %}<span>Image</span>{% endif %}
+          {% if record.has_tool_calls %}<span>Tool</span>{% endif %}
+          {% if record.error %}<span>Error</span>{% endif %}
+        </td>
+        <td class="request-preview"><span>{{ record.preview | preview | safe }}</span></td>
+      </tr>
+      {% else %}
+      <tr><td colspan="{{ 10 if show_run else 9 }}" class="empty">No captured requests yet.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>

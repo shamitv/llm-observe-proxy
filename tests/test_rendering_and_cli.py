@@ -4,7 +4,11 @@ import json
 import subprocess
 import sys
 
+import pytest
+from sqlalchemy import inspect, text
+
 from llm_observe_proxy import create_app
+from llm_observe_proxy.admin import _stream_token_usage
 from llm_observe_proxy.capture import extract_token_usage, has_tool_payload
 from llm_observe_proxy.cli import resolve_bind
 from llm_observe_proxy.config import (
@@ -67,6 +71,22 @@ def test_renderer_modes_for_json_text_markdown_tool_and_sse() -> None:
     assert "data:" in sse_render.text
 
 
+def test_renderer_text_mode_does_not_parse_sse_events(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fail_decode(_body: bytes | None):
+        raise AssertionError("text mode should not parse SSE events")
+
+    monkeypatch.setattr("llm_observe_proxy.rendering.decode_sse_json_events", fail_decode)
+
+    rendered = render_payload(
+        b'data: {"choices":[{"delta":{"content":"hi"}}]}\n\ndata: [DONE]\n\n',
+        "text/event-stream",
+        "text",
+    )
+
+    assert rendered.mode == "text"
+    assert "data:" in rendered.text
+
+
 def test_renderer_ignores_non_string_type_fields_in_nested_json() -> None:
     request_body = {
         "model": "gpt-test",
@@ -108,6 +128,27 @@ def test_extract_token_usage_supports_chat_responses_and_responses_api() -> None
     assert responses_usage.input_tokens == 8
     assert responses_usage.output_tokens == 4
     assert responses_usage.total_tokens == 12
+
+
+def test_stream_token_usage_reads_final_sse_usage_event(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fail_decode(_body: bytes | None):
+        raise AssertionError("stream usage should use targeted final-event parsing")
+
+    monkeypatch.setattr("llm_observe_proxy.admin.decode_sse_json_events", fail_decode)
+    body = b"".join(
+        [
+            b'data: {"choices":[{"delta":{"content":"hello"}}]}\n\n',
+            b'data: {"choices":[],"usage":{"prompt_tokens":1000,'
+            b'"completion_tokens":25,"total_tokens":1025}}\n\n',
+            b"data: [DONE]\n\n",
+        ]
+    )
+
+    usage = _stream_token_usage(body)
+
+    assert usage.input_tokens == 1000
+    assert usage.output_tokens == 25
+    assert usage.total_tokens == 1025
 
 
 def test_tool_detector_ignores_non_string_type_fields() -> None:
@@ -158,3 +199,25 @@ def test_cli_resolve_bind_uses_saved_incoming_settings(tmp_path) -> None:
     assert resolve_bind(None, None, False, settings) == (EXPOSED_INCOMING_HOST, 9090)
     assert resolve_bind("localhost", 7777, False, settings) == ("localhost", 7777)
     assert resolve_bind(None, None, True, settings) == (EXPOSED_INCOMING_HOST, 9090)
+
+
+def test_init_db_upgrades_existing_sqlite_request_records_with_task_run_id(tmp_path) -> None:
+    db_path = tmp_path / "old.sqlite3"
+    settings = Settings(database_url=f"sqlite:///{db_path.as_posix()}")
+    engine = create_db_engine(settings.database_url)
+    with engine.begin() as connection:
+        connection.execute(text("CREATE TABLE request_records (id INTEGER PRIMARY KEY)"))
+        connection.execute(text("INSERT INTO request_records (id) VALUES (42)"))
+
+    init_db(engine)
+
+    inspector = inspect(engine)
+    columns = {column["name"] for column in inspector.get_columns("request_records")}
+    indexes = {index["name"] for index in inspector.get_indexes("request_records")}
+    with engine.connect() as connection:
+        ids = connection.execute(text("SELECT id FROM request_records")).scalars().all()
+    engine.dispose()
+
+    assert "task_run_id" in columns
+    assert "ix_request_records_task_run_id" in indexes
+    assert ids == [42]

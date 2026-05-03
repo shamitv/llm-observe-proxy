@@ -7,8 +7,11 @@
   </div>
   <div class="detail-meta">
     <span>Status <strong>{{ record.response_status | default('pending', true) }}</strong></span>
-    <span>Duration <strong>{{ record.duration_ms | default('-', true) }} ms</strong></span>
+    <span>Duration <strong>{{ record.duration_ms | duration_ms }}</strong></span>
     <span>Model <strong>{{ record.model | default('unknown', true) }}</strong></span>
+    {% if record.task_run %}
+    <span>Run <strong><a href="/admin/runs/{{ record.task_run.id }}">{{ record.task_run.name }}</a></strong></span>
+    {% endif %}
   </div>
 </section>
 

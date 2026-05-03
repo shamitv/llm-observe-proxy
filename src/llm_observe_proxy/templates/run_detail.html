@@ -1,0 +1,94 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="page-heading">
+  <div>
+    <p class="eyebrow">{{ 'Run in progress' if run.is_active else 'Completed run' }}</p>
+    <h1>Run: {{ run.name }}</h1>
+    {% if run.notes %}<p class="muted">{{ run.notes }}</p>{% endif %}
+  </div>
+  <div class="detail-meta">
+    <span>Started <strong>{{ run.started_at }}</strong></span>
+    <span>Ended <strong>{{ run.ended_at | default('active', true) }}</strong></span>
+  </div>
+</section>
+
+{% if run.is_active %}
+<section class="run-control">
+  <div>
+    <p class="eyebrow">Run in progress</p>
+    <h2>{{ run.name }}</h2>
+    <p class="muted">{{ stats.request_count | compact_number }} request{{ '' if stats.request_count == 1 else 's' }} · {{ run.open_duration_ms | duration_ms }} open</p>
+  </div>
+  <form method="post" action="/admin/runs/end">
+    <button class="button danger" type="submit">End run</button>
+  </form>
+</section>
+{% endif %}
+
+<section class="kpi-grid">
+  <div class="kpi"><span>Requests</span><strong>{{ stats.request_count | compact_number }}</strong></div>
+  <div class="kpi"><span>LLM wall time</span><strong>{{ stats.llm_wall_time_ms | duration_ms }}</strong></div>
+  <div class="kpi"><span>Run open</span><strong>{{ stats.run_open_duration_ms | duration_ms }}</strong></div>
+  <div class="kpi"><span>Request duration</span><strong>{{ stats.total_request_duration_ms | duration_ms }}</strong></div>
+  <div class="kpi"><span>Input tokens</span><strong>{{ stats.tokens.input | compact_number }}</strong></div>
+  <div class="kpi"><span>Output tokens</span><strong>{{ stats.tokens.output | compact_number }}</strong></div>
+  <div class="kpi"><span>Total tokens</span><strong>{{ stats.tokens.total | compact_number }}</strong></div>
+  <div class="kpi"><span>Output tok/s</span><strong>{{ stats.throughput.output_wall | compact_rate }}</strong></div>
+</section>
+
+<section class="split">
+  <article class="panel">
+    <header><h2>Models</h2></header>
+    <div class="breakdown-list">
+      {% for item in stats.models %}
+      <span><strong>{{ item.count | compact_number }}</strong>{{ item.label }}</span>
+      {% else %}
+      <p class="muted">No model usage yet.</p>
+      {% endfor %}
+    </div>
+  </article>
+  <article class="panel">
+    <header><h2>Endpoints</h2></header>
+    <div class="breakdown-list">
+      {% for item in stats.endpoints %}
+      <span><strong>{{ item.count | compact_number }}</strong>{{ item.label }}</span>
+      {% else %}
+      <p class="muted">No endpoint usage yet.</p>
+      {% endfor %}
+    </div>
+  </article>
+</section>
+
+<section class="split">
+  <article class="panel">
+    <header><h2>Status Codes</h2></header>
+    <div class="breakdown-list">
+      {% for item in stats.statuses %}
+      <span><strong>{{ item.count | compact_number }}</strong>{{ item.label }}</span>
+      {% else %}
+      <p class="muted">No status codes yet.</p>
+      {% endfor %}
+    </div>
+  </article>
+  <article class="panel">
+    <header><h2>Signals</h2></header>
+    <div class="breakdown-list">
+      <span><strong>{{ stats.signals.streams | compact_number }}</strong>Streams</span>
+      <span><strong>{{ stats.signals.images | compact_number }}</strong>Images</span>
+      <span><strong>{{ stats.signals.tools | compact_number }}</strong>Tools</span>
+      <span><strong>{{ stats.signals.errors | compact_number }}</strong>Errors</span>
+    </div>
+  </article>
+</section>
+
+<section class="page-heading compact-heading">
+  <div>
+    <p class="eyebrow">Requests</p>
+    <h2>Run traffic</h2>
+  </div>
+  <a class="button ghost" href="/admin?run={{ run.id }}">Open in browser</a>
+</section>
+
+{% set show_run = false %}
+{% include "_requests_table.html" %}
+{% endblock %}

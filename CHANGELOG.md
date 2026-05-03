@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses semantic versioning.
 
+## Unreleased
+
+### Added
+
+- Task Runs in the admin UI for grouping requests made during a named task,
+  benchmark, or repro workflow.
+- Run detail pages with LLM wall time, request count, token totals, tokens/sec,
+  model/endpoint/status breakdowns, and stream/image/tool/error counts.
+- Request browser filtering by run, plus run badges on request rows and detail pages.
+- Per-request TPS column in admin request tables, computed from output tokens and
+  request duration when usage data is available.
+- SQLite compatibility upgrade for adding run associations to existing databases.
+
 ## [0.1.1] - 2026-05-01
 
 ### Added

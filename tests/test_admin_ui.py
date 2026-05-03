@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -9,7 +10,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select
 
 from llm_observe_proxy.admin import templates
-from llm_observe_proxy.database import ImageAsset, RequestRecord
+from llm_observe_proxy.database import ImageAsset, RequestRecord, TaskRun
 
 
 def test_request_browser_filters_and_markdown_renderer(proxy_client: TestClient) -> None:
@@ -28,6 +29,7 @@ def test_request_browser_filters_and_markdown_renderer(proxy_client: TestClient)
     assert "gpt-test" in page.text
     assert "/v1/chat/completions" in page.text
     assert "Tokens" in page.text
+    assert "TPS" in page.text
     assert "<strong>6</strong><small>Input</small>" in page.text
     assert "<strong>3</strong><small>Output</small>" in page.text
     assert "<strong>9</strong><small>Total</small>" in page.text
@@ -56,6 +58,132 @@ def test_settings_updates_upstream_url(proxy_client: TestClient, proxy_app: Fast
     with proxy_app.state.session_factory() as session:
         record = session.scalars(select(RequestRecord)).one()
         assert record.upstream_url == "http://localhost:8080/v1/chat/completions"
+
+
+def test_runs_require_name_and_manage_active_state(
+    proxy_client: TestClient,
+    proxy_app: FastAPI,
+) -> None:
+    blank = proxy_client.post("/admin/runs/start", data={"name": "   "})
+    assert blank.status_code == 400
+    assert "Run name is required." in blank.text
+
+    response = proxy_client.post(
+        "/admin/runs/start",
+        data={"name": "Video benchmark"},
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+
+    runs_page = proxy_client.get("/admin/runs")
+    assert "Run in progress" in runs_page.text
+    assert "Video benchmark" in runs_page.text
+
+    response = proxy_client.post(
+        "/admin/runs/start",
+        data={"name": "Cloud comparison"},
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+
+    with proxy_app.state.session_factory() as session:
+        runs = session.scalars(select(TaskRun).order_by(TaskRun.id)).all()
+        assert [run.name for run in runs] == ["Video benchmark", "Cloud comparison"]
+        assert runs[0].ended_at is not None
+        assert runs[1].ended_at is None
+
+    response = proxy_client.post("/admin/runs/end", follow_redirects=False)
+    assert response.status_code == 303
+    with proxy_app.state.session_factory() as session:
+        active = session.scalars(select(TaskRun).where(TaskRun.ended_at.is_(None))).all()
+        assert active == []
+
+
+def test_run_filter_detail_and_badges_show_associated_requests(
+    proxy_client: TestClient,
+    proxy_app: FastAPI,
+) -> None:
+    proxy_client.post("/admin/runs/start", data={"name": "Local video task"})
+    proxy_client.post(
+        "/v1/chat/completions",
+        json={"model": "gpt-test", "messages": [{"role": "user", "content": "inside"}]},
+    )
+    proxy_client.post("/admin/runs/end")
+    proxy_client.post(
+        "/v1/chat/completions",
+        json={"model": "gpt-test", "messages": [{"role": "user", "content": "outside"}]},
+    )
+
+    with proxy_app.state.session_factory() as session:
+        task_run = session.scalars(select(TaskRun)).one()
+        records = session.scalars(select(RequestRecord).order_by(RequestRecord.id)).all()
+        assert records[0].task_run_id == task_run.id
+        assert records[1].task_run_id is None
+
+    browser = proxy_client.get(f"/admin?run={task_run.id}")
+    assert browser.status_code == 200
+    assert "Local video task" in browser.text
+    assert "#1" in browser.text
+    assert "#2" not in browser.text
+
+    detail = proxy_client.get(f"/admin/runs/{task_run.id}")
+    assert detail.status_code == 200
+    assert "LLM wall time" in detail.text
+    assert "Total tokens" in detail.text
+    assert ">9<" in detail.text
+    assert "Run traffic" in detail.text
+    assert "#1" in detail.text
+    assert "#2" not in detail.text
+
+    request_detail = proxy_client.get("/admin/requests/1")
+    assert (
+        "Run <strong><a href=\"/admin/runs/1\">Local video task</a></strong>"
+        in request_detail.text
+    )
+
+
+def test_admin_formats_large_numbers_and_durations(
+    proxy_client: TestClient,
+    proxy_app: FastAPI,
+) -> None:
+    proxy_client.post("/admin/runs/start", data={"name": "Large totals"})
+    proxy_client.post(
+        "/v1/chat/completions",
+        json={"model": "gpt-test", "messages": [{"role": "user", "content": "inside"}]},
+    )
+
+    started = datetime(2026, 5, 1, tzinfo=UTC)
+    with proxy_app.state.session_factory() as session:
+        task_run = session.scalars(select(TaskRun)).one()
+        record = session.scalars(select(RequestRecord)).one()
+        task_run.started_at = started
+        task_run.ended_at = started + timedelta(milliseconds=2_652_932)
+        record.created_at = started
+        record.completed_at = started + timedelta(milliseconds=2_579_395)
+        record.duration_ms = 1_605_175
+        record.response_body = json.dumps(
+            {
+                "usage": {
+                    "prompt_tokens": 5_060_618,
+                    "completion_tokens": 56_738,
+                    "total_tokens": 5_117_356,
+                }
+            }
+        ).encode()
+        session.commit()
+
+    detail = proxy_client.get("/admin/runs/1")
+    assert detail.status_code == 200
+    assert "42m 59s" in detail.text
+    assert "44m 13s" in detail.text
+    assert "26m 45s" in detail.text
+    assert ">5.06M<" in detail.text
+    assert ">56.7k<" in detail.text
+    assert ">5.12M<" in detail.text
+
+    browser = proxy_client.get("/admin")
+    assert "<strong>5.06M</strong><small>Input</small>" in browser.text
+    assert "26m 45s" in browser.text
 
 
 def test_settings_updates_incoming_server(proxy_client: TestClient) -> None:
