@@ -181,6 +181,7 @@ def test_module_cli_help_smoke() -> None:
     assert "Run the LLM Observe Proxy server" in completed.stdout
     assert "--expose-all-ips" in completed.stdout
     assert "--upstream-url" in completed.stdout
+    assert "--models-file" in completed.stdout
     assert DEFAULT_INCOMING_HOST == "localhost"
     assert DEFAULT_INCOMING_PORT == 8080
     assert DEFAULT_UPSTREAM_URL == "http://localhost:8000/v1"
