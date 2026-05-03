@@ -20,23 +20,27 @@ from llm_observe_proxy.capture import (
     decode_sse_json_events,
     extract_token_usage,
 )
-from llm_observe_proxy.config import normalize_upstream_url
+from llm_observe_proxy.config import ModelRoute, normalize_upstream_url
 from llm_observe_proxy.database import (
     RequestRecord,
     SessionFactory,
     TaskRun,
+    delete_ui_model_route,
     end_active_task_run,
     get_active_task_run,
+    get_effective_model_routes,
     get_expose_all_ips,
     get_incoming_host,
     get_incoming_port,
     get_task_run_stats,
+    get_ui_model_routes,
     get_upstream_url,
     list_task_runs_with_stats,
     session_scope,
     set_incoming_server,
     set_setting,
     start_task_run,
+    upsert_ui_model_route,
 )
 from llm_observe_proxy.rendering import escape_preview, render_payload
 from llm_observe_proxy.routing import (
@@ -444,6 +448,51 @@ async def update_upstream(request: Request, upstream_url: str = Form(...)) -> HT
     return RedirectResponse("/admin/settings", status_code=303)
 
 
+@router.post("/settings/model-routes", response_class=HTMLResponse)
+async def upsert_model_route(
+    request: Request,
+    model: str = Form(...),
+    upstream_url: str = Form(...),
+    upstream_model: str = Form(""),
+    api_key_env: str = Form(""),
+) -> HTMLResponse:
+    settings = request.app.state.settings
+    try:
+        route = ModelRoute(
+            model=model,
+            upstream_url=upstream_url,
+            upstream_model=upstream_model,
+            api_key_env=api_key_env,
+        )
+    except ValueError as exc:
+        return await _settings_with_error(request, str(exc))
+
+    session_factory: SessionFactory = request.app.state.session_factory
+    with session_scope(session_factory) as session:
+        try:
+            upsert_ui_model_route(session, settings, route)
+        except ValueError as exc:
+            return await _settings_with_error(request, str(exc))
+    return RedirectResponse("/admin/settings", status_code=303)
+
+
+@router.post("/settings/model-routes/delete", response_class=HTMLResponse)
+async def delete_model_route(request: Request, model: str = Form(...)) -> HTMLResponse:
+    resolved_model = model.strip()
+    settings = request.app.state.settings
+    if resolved_model in {route.model for route in settings.model_routes}:
+        return await _settings_with_error(
+            request,
+            "Startup configuration routes cannot be deleted from the UI.",
+        )
+
+    session_factory: SessionFactory = request.app.state.session_factory
+    with session_scope(session_factory) as session:
+        if not delete_ui_model_route(session, resolved_model):
+            return await _settings_with_error(request, "UI model route was not found.")
+    return RedirectResponse("/admin/settings", status_code=303)
+
+
 @router.post("/settings/test-upstream", response_class=HTMLResponse)
 async def test_upstream(
     request: Request,
@@ -459,16 +508,19 @@ async def test_upstream(
         return await _settings_with_error(request, str(exc))
 
     settings = request.app.state.settings
-    routing_decision = select_model_route(payload, settings)
     request_body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-    forward_body = build_forward_body(request_body, payload, routing_decision)
-    forward_headers = build_forward_headers(
-        {"content-type": "application/json"},
-        routing_decision,
-        set(),
-    )
-
     with session_scope(session_factory) as session:
+        routing_decision = select_model_route(
+            payload,
+            settings,
+            get_effective_model_routes(session, settings),
+        )
+        forward_body = build_forward_body(request_body, payload, routing_decision)
+        forward_headers = build_forward_headers(
+            {"content-type": "application/json"},
+            routing_decision,
+            set(),
+        )
         upstream_url = routing_decision.upstream_base_url or get_upstream_url(session, settings)
 
     chat_url = f"{upstream_url.rstrip('/')}/chat/completions"
@@ -626,14 +678,13 @@ def _settings_context(
     test_model: str = "gpt-test",
     test_prompt: str = TEST_PROMPT_DEFAULT,
 ) -> dict[str, Any]:
+    settings = request.app.state.settings
     return {
-        "upstream_url": get_upstream_url(session, request.app.state.settings),
-        "model_routes": [
-            model_route_display(route) for route in request.app.state.settings.model_routes
-        ],
-        "incoming_host": get_incoming_host(session, request.app.state.settings),
-        "incoming_port": get_incoming_port(session, request.app.state.settings),
-        "expose_all_ips": get_expose_all_ips(session, request.app.state.settings),
+        "upstream_url": get_upstream_url(session, settings),
+        "model_routes": _settings_model_route_rows(session, settings),
+        "incoming_host": get_incoming_host(session, settings),
+        "incoming_port": get_incoming_port(session, settings),
+        "expose_all_ips": get_expose_all_ips(session, settings),
         "days": days,
         "total": total,
         "trim_count": trim_count,
@@ -643,6 +694,21 @@ def _settings_context(
         "test_prompt": test_prompt,
         "page_title": "Settings",
     }
+
+
+def _settings_model_route_rows(session, settings) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    for route in settings.model_routes:
+        row = model_route_display(route)
+        row["source"] = "startup"
+        row["editable"] = False
+        rows.append(row)
+    for route in get_ui_model_routes(session):
+        row = model_route_display(route)
+        row["source"] = "ui"
+        row["editable"] = True
+        rows.append(row)
+    return rows
 
 
 async def _settings_with_error(request: Request, error: str) -> HTMLResponse:

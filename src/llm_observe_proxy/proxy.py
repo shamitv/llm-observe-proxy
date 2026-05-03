@@ -24,6 +24,7 @@ from llm_observe_proxy.database import (
     RequestRecord,
     SessionFactory,
     get_active_task_run,
+    get_effective_model_routes,
     get_upstream_url,
     session_scope,
 )
@@ -62,15 +63,19 @@ async def proxy_openai(path: str, request: Request) -> Response:
     request_payload = decode_json_bytes(request_body)
     request_headers = _headers_to_dict(request.headers)
     query_string = request.url.query
-    routing_decision = select_model_route(request_payload, settings)
-    forward_body = build_forward_body(request_body, request_payload, routing_decision)
-    forward_headers = build_forward_headers(
-        request.headers,
-        routing_decision,
-        HOP_BY_HOP_HEADERS,
-    )
 
     with _session(session_factory) as session:
+        routing_decision = select_model_route(
+            request_payload,
+            settings,
+            get_effective_model_routes(session, settings),
+        )
+        forward_body = build_forward_body(request_body, request_payload, routing_decision)
+        forward_headers = build_forward_headers(
+            request.headers,
+            routing_decision,
+            HOP_BY_HOP_HEADERS,
+        )
         upstream_base = routing_decision.upstream_base_url or get_upstream_url(session, settings)
         upstream_url = _build_upstream_url(upstream_base, path, query_string)
         images = extract_images(request_payload)

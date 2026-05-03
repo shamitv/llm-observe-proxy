@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime
@@ -30,7 +31,9 @@ from sqlalchemy.orm import (
     sessionmaker,
 )
 
-from llm_observe_proxy.config import EXPOSED_INCOMING_HOST, Settings
+from llm_observe_proxy.config import EXPOSED_INCOMING_HOST, ModelRoute, Settings, parse_model_routes
+
+MODEL_ROUTES_SETTING_KEY = "model_routes_json"
 
 
 def _now() -> datetime:
@@ -218,6 +221,50 @@ def set_incoming_server(session: Session, port: int, expose_all_ips: bool) -> No
     set_setting(session, "expose_all_ips", "true" if expose_all_ips else "false")
 
 
+def get_ui_model_routes(session: Session) -> tuple[ModelRoute, ...]:
+    value = get_setting(session, MODEL_ROUTES_SETTING_KEY)
+    if not value:
+        return ()
+    try:
+        routes = parse_model_routes(json.loads(value))
+    except (json.JSONDecodeError, ValueError):
+        return ()
+    return tuple(
+        ModelRoute(
+            model=route.model,
+            upstream_url=route.upstream_url,
+            upstream_model=route.upstream_model,
+            api_key_env=route.api_key_env,
+        )
+        for route in routes
+    )
+
+
+def get_effective_model_routes(session: Session, settings: Settings) -> tuple[ModelRoute, ...]:
+    return (*settings.model_routes, *get_ui_model_routes(session))
+
+
+def upsert_ui_model_route(session: Session, settings: Settings, route: ModelRoute) -> None:
+    if route.model in {configured.model for configured in settings.model_routes}:
+        raise ValueError("Model route already exists in startup configuration.")
+
+    routes = [
+        existing for existing in get_ui_model_routes(session) if existing.model != route.model
+    ]
+    routes.append(route)
+    _set_ui_model_routes(session, routes)
+
+
+def delete_ui_model_route(session: Session, model: str) -> bool:
+    resolved_model = model.strip()
+    routes = list(get_ui_model_routes(session))
+    remaining = [route for route in routes if route.model != resolved_model]
+    if len(remaining) == len(routes):
+        return False
+    _set_ui_model_routes(session, remaining)
+    return True
+
+
 def get_active_task_run(session: Session) -> TaskRun | None:
     return session.scalar(
         select(TaskRun).where(TaskRun.ended_at.is_(None)).order_by(TaskRun.started_at.desc())
@@ -328,6 +375,19 @@ def _ensure_sqlite_request_record_schema(engine: Engine) -> None:
                 "ix_request_records_model_route ON request_records (model_route)"
             )
         )
+
+
+def _set_ui_model_routes(session: Session, routes: list[ModelRoute]) -> None:
+    payload = [
+        {
+            "model": route.model,
+            "upstream_url": route.upstream_url,
+            **({"upstream_model": route.upstream_model} if route.upstream_model else {}),
+            **({"api_key_env": route.api_key_env} if route.api_key_env else {}),
+        }
+        for route in routes
+    ]
+    set_setting(session, MODEL_ROUTES_SETTING_KEY, json.dumps(payload, separators=(",", ":")))
 
 
 def _duration_ms(started_at: datetime | None, ended_at: datetime | None) -> int | None:
