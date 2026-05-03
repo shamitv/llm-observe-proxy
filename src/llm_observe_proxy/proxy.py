@@ -17,8 +17,11 @@ from llm_observe_proxy.capture import (
     decode_sse_json_events,
     extract_images,
     extract_model,
+    extract_stream_token_usage,
+    extract_token_usage,
     has_tool_payload,
 )
+from llm_observe_proxy.costing import apply_cost_estimate, estimate_cost
 from llm_observe_proxy.database import (
     ImageAsset,
     RequestRecord,
@@ -123,6 +126,11 @@ async def proxy_openai(path: str, request: Request) -> Response:
             session_factory=session_factory,
             record_id=record_id,
             started=started,
+            billing_fallback_model=(
+                routing_decision.upstream_model or extract_model(request_payload)
+            ),
+            provider_slug=routing_decision.provider_slug,
+            upstream_base_url=upstream_base,
         )
 
     try:
@@ -140,6 +148,22 @@ async def proxy_openai(path: str, request: Request) -> Response:
         with _session(session_factory) as session:
             record = session.get(RequestRecord, record_id)
             if record is not None:
+                token_usage = extract_token_usage(response_payload)
+                billing_model = (
+                    routing_decision.upstream_model
+                    or extract_model(response_payload)
+                    or record.model
+                )
+                apply_cost_estimate(
+                    record,
+                    estimate_cost(
+                        session,
+                        usage=token_usage,
+                        billing_model=billing_model,
+                        provider_slug=routing_decision.provider_slug,
+                        upstream_base_url=upstream_base,
+                    ),
+                )
                 record.completed_at = _now_from_record(record)
                 record.response_status = upstream_response.status_code
                 record.response_headers_json = compact_json(response_headers)
@@ -180,6 +204,9 @@ async def _proxy_streaming(
     session_factory: SessionFactory,
     record_id: int,
     started: float,
+    billing_fallback_model: str | None,
+    provider_slug: str | None,
+    upstream_base_url: str,
 ) -> Response:
     try:
         upstream_request = client.build_request(
@@ -214,6 +241,18 @@ async def _proxy_streaming(
             with _session(session_factory) as session:
                 record = session.get(RequestRecord, record_id)
                 if record is not None:
+                    token_usage = extract_stream_token_usage(response_body)
+                    billing_model = _extract_payload_model(stream_events) or billing_fallback_model
+                    apply_cost_estimate(
+                        record,
+                        estimate_cost(
+                            session,
+                            usage=token_usage,
+                            billing_model=billing_model,
+                            provider_slug=provider_slug,
+                            upstream_base_url=upstream_base_url,
+                        ),
+                    )
                     record.completed_at = _now_from_record(record)
                     record.response_status = upstream_response.status_code
                     record.response_headers_json = compact_json(
@@ -288,6 +327,23 @@ def _is_stream_request(payload: Any | None, headers: Any) -> bool:
         return True
     accept = headers.get("accept", "")
     return "text/event-stream" in accept.lower()
+
+
+def _extract_payload_model(payload: Any | None) -> str | None:
+    model = extract_model(payload)
+    if model:
+        return model
+    if isinstance(payload, dict):
+        for value in payload.values():
+            found = _extract_payload_model(value)
+            if found:
+                return found
+    elif isinstance(payload, list):
+        for value in payload:
+            found = _extract_payload_model(value)
+            if found:
+                return found
+    return None
 
 
 @contextmanager

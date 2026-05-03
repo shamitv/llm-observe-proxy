@@ -25,6 +25,7 @@ def test_model_routes_parse_from_json_env(monkeypatch: pytest.MonkeyPatch) -> No
                     "model": " local-qwen ",
                     "upstream_url": "http://localhost:8000/v1/",
                     "upstream_model": " qwen3-coder-30b ",
+                    "provider_slug": " openai ",
                 }
             ]
         ),
@@ -37,6 +38,7 @@ def test_model_routes_parse_from_json_env(monkeypatch: pytest.MonkeyPatch) -> No
     assert route.model == "local-qwen"
     assert route.upstream_url == "http://localhost:8000/v1"
     assert route.effective_upstream_model == "qwen3-coder-30b"
+    assert route.provider_slug == "openai"
 
 
 def test_model_routes_file_wins_over_json_env(

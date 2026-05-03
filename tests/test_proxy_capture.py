@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import json
+from decimal import Decimal
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -16,6 +17,8 @@ from llm_observe_proxy.database import (
     end_active_task_run,
     session_scope,
     start_task_run,
+    upsert_model_price,
+    upsert_model_provider,
 )
 
 GLOBAL_UPSTREAM_URL = "http://localhost:8080/v1"
@@ -49,6 +52,32 @@ def test_non_streaming_chat_completion_records_and_forwards_headers(
         assert b"Plain chat response" in record.response_body
 
 
+def test_non_streaming_chat_completion_snapshots_estimated_cost(
+    proxy_client: TestClient,
+    proxy_app: FastAPI,
+) -> None:
+    _configure_fake_pricing(proxy_app, model="gpt-test")
+
+    response = proxy_client.post(
+        "/v1/chat/completions",
+        json={"model": "gpt-test", "messages": [{"role": "user", "content": "hello"}]},
+    )
+
+    assert response.status_code == 200
+    with proxy_app.state.session_factory() as session:
+        record = session.scalars(select(RequestRecord)).one()
+        assert record.billing_provider_slug == "fake"
+        assert record.billing_model == "gpt-test"
+        assert record.billing_input_tokens == 6
+        assert record.billing_output_tokens == 3
+        assert record.billing_total_tokens == 9
+        assert record.billing_total_cost_usd == Decimal("0.00001200")
+        assert '"input_usd_per_million":"1.000000"' in record.pricing_snapshot_json
+
+    browser = proxy_client.get("/admin")
+    assert "$0.000012" in browser.text
+
+
 def test_configured_model_route_rewrites_injects_key_and_records_metadata(
     tmp_path: Path,
     fake_upstream,
@@ -60,10 +89,12 @@ def test_configured_model_route_rewrites_injects_key_and_records_metadata(
         upstream_url=ROUTE_UPSTREAM_URL,
         upstream_model="qwen3-coder-30b",
         api_key_env="ROUTE_KEY",
+        provider_slug="fake",
     )
     app = _create_routed_app(tmp_path, route)
 
     with TestClient(app) as client:
+        _configure_fake_pricing(app, model="qwen3-coder-30b")
         response = client.post(
             "/v1/chat/completions",
             json={"model": "local-qwen", "messages": [{"role": "user", "content": "hello"}]},
@@ -82,6 +113,9 @@ def test_configured_model_route_rewrites_injects_key_and_records_metadata(
         assert record.upstream_model == "qwen3-coder-30b"
         assert record.model_route == "local-qwen"
         assert record.upstream_url == f"{ROUTE_UPSTREAM_URL}/chat/completions"
+        assert record.billing_provider_slug == "fake"
+        assert record.billing_model == "qwen3-coder-30b"
+        assert record.billing_total_cost_usd == Decimal("0.00001200")
         assert json.loads(record.request_body)["model"] == "local-qwen"
         assert "client-key" in record.request_headers_json
         assert "route-secret" not in record.request_headers_json
@@ -249,6 +283,36 @@ def test_streaming_request_uses_configured_model_route_and_captures_metadata(
         assert record.model_route == "local-stream"
         assert json.loads(record.request_body)["model"] == "local-stream"
         assert record.response_body == body
+
+
+def test_streaming_request_snapshots_cost_when_usage_event_is_present(
+    proxy_client: TestClient,
+    proxy_app: FastAPI,
+) -> None:
+    _configure_fake_pricing(proxy_app, model="gpt-test")
+
+    with proxy_client.stream(
+        "POST",
+        "/v1/chat/completions",
+        json={
+            "model": "gpt-test",
+            "messages": [{"role": "user", "content": "stream"}],
+            "stream": True,
+            "stream_options": {"include_usage": True},
+        },
+    ) as response:
+        body = b"".join(response.iter_bytes())
+
+    assert response.status_code == 200
+    assert b'"usage"' in body
+    with proxy_app.state.session_factory() as session:
+        record = session.scalars(select(RequestRecord)).one()
+        assert record.is_stream is True
+        assert record.billing_provider_slug == "fake"
+        assert record.billing_model == "gpt-test"
+        assert record.billing_input_tokens == 6
+        assert record.billing_output_tokens == 3
+        assert record.billing_total_cost_usd == Decimal("0.00001200")
 
 
 def test_requests_are_associated_with_active_task_run(
@@ -474,3 +538,20 @@ def _create_routed_app(tmp_path: Path, *routes: ModelRoute) -> FastAPI:
             model_routes=routes,
         )
     )
+
+
+def _configure_fake_pricing(app: FastAPI, *, model: str) -> None:
+    with session_scope(app.state.session_factory) as session:
+        upsert_model_provider(
+            session,
+            slug="fake",
+            name="Fake Upstream",
+            upstream_url=GLOBAL_UPSTREAM_URL,
+        )
+        upsert_model_price(
+            session,
+            provider_slug="fake",
+            model=model,
+            input_usd_per_million="1",
+            output_usd_per_million="2",
+        )
