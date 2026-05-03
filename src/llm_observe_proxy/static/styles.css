@@ -521,6 +521,59 @@ td:first-child a {
   margin: 0;
 }
 
+.what-if-form {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.what-if-options {
+  display: flex;
+  flex: 1;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.what-if-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 38px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: white;
+  padding: 6px 10px;
+}
+
+.what-if-option input {
+  width: auto;
+  min-height: auto;
+}
+
+.what-if-option span {
+  display: grid;
+  gap: 2px;
+}
+
+.what-if-option small {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.what-if-table {
+  min-width: 1120px;
+}
+
+.what-if-table td:first-child {
+  min-width: 170px;
+}
+
+.what-if-table td:first-child span {
+  display: block;
+  margin-top: 3px;
+}
+
 .source-pill {
   display: inline-flex;
   align-items: center;
@@ -734,6 +787,7 @@ figcaption {
   .model-route-form,
   .provider-form,
   .price-form,
+  .what-if-form,
   .run-start-form,
   .split,
   .settings-grid {
