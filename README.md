@@ -194,6 +194,10 @@ on May 3, 2026. They are inserted only when missing, so UI edits are preserved. 
 estimates intentionally ignore cache, batch/flex/priority tiers, tool fees, image/audio
 pricing, regional premiums, and long-context premiums.
 
+Run detail pages also include what-if cost comparisons. By default they compare the run's
+captured token usage against GPT-5.5 and GPT-5.4 Mini when those prices are active, and
+you can choose any other active model price without changing captured request snapshots.
+
 ## Runs
 
 Use **Runs** when you want to measure or review LLM usage for one bounded task, such as
@@ -211,7 +215,8 @@ The request browser can filter by run, and request rows link back to their run. 
 detail page reports LLM wall time from the first request start to the last response
 completion, plus token totals, cost totals, and tokens/sec metrics. The request table's
 **TPS** column shows per-request output tokens per second when token usage and duration
-are available.
+are available. Run detail pages can also compare the same captured usage against active
+model prices with repeated `what_if` query parameters.
 
 ## Screenshots
 
@@ -243,7 +248,7 @@ Regenerate screenshots:
 - `GET /admin`: request browser.
 - `GET /admin/requests/{id}`: request/response detail view.
 - `GET /admin/runs`: run browser and active run controls.
-- `GET /admin/runs/{id}`: run metrics and associated request list.
+- `GET /admin/runs/{id}`: run metrics, what-if cost comparison, and associated request list.
 - `POST /admin/runs/start`: start a named run, ending any active run first.
 - `POST /admin/runs/end`: end the active run.
 - `GET /admin/settings`: upstream settings and retention tools.

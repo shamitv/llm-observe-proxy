@@ -37,6 +37,7 @@ the test session fails early with a clear message.
 | Model route config | JSON/env/file model route configuration is parsed, normalized, and validated, including optional provider slugs. | `test_model_routes_parse_from_json_env`, `test_model_routes_file_wins_over_json_env`, `test_model_routes_reject_invalid_configuration` |
 | Pricing seed data | SQLite initialization seeds editable provider/model pricing and does not overwrite existing edits. | `test_init_db_seeds_model_pricing_without_overwriting_edits` |
 | Cost estimator | Cost estimation handles split input/output rates, aliases, unknown models, and missing usage. | `test_cost_estimator_handles_rates_aliases_unknowns_and_missing_usage` |
+| Run what-if cost estimator | Run what-if estimates sum exact token usage, split input/output costs, and count requests with missing usage. | `test_run_cost_estimator_sums_usage_and_counts_missing_requests` |
 | Routing helpers | Exact model selection rewrites forwarded JSON bodies and applies route-aware authorization policy. | `test_routing_selects_exact_model_and_rewrites_body`, `test_route_api_key_resolution_and_header_policy` |
 | Non-streaming chat | `/v1/chat/completions` forwards to upstream and stores endpoint, model, status, request body, response body, and timing metadata. | `test_non_streaming_chat_completion_records_and_forwards_headers` |
 | Header forwarding | Authorization and client request id headers are forwarded upstream. | `test_non_streaming_chat_completion_records_and_forwards_headers` |
@@ -58,6 +59,7 @@ the test session fails early with a clear message.
 | Run request grouping | Requests made during an active run receive `task_run_id`; requests outside a run do not. | `test_requests_are_associated_with_active_task_run` |
 | Run streaming grouping | A streaming request keeps the run assigned at request start even if the run ends before the stream finishes. | `test_streaming_request_keeps_task_run_after_run_ends` |
 | Run filtering and detail | Request browser filters by run, run detail shows associated requests and aggregate token/cost stats, and request detail links back to the run. | `test_run_filter_detail_and_badges_show_associated_requests` |
+| Run what-if pricing UI | Run detail shows default GPT-5.5/GPT-5.4 Mini comparisons, accepts repeated `what_if` params, ignores unknown/inactive prices, and preserves captured snapshots. | `test_run_detail_shows_default_what_if_costs_without_mutating_snapshots`, `test_run_detail_accepts_repeated_what_if_params`, `test_run_detail_ignores_unknown_and_inactive_what_if_prices` |
 | SQLite run upgrade | Existing SQLite databases get the nullable `task_run_id` column and index without data loss. | `test_init_db_upgrades_existing_sqlite_request_records_with_route_metadata` |
 | SQLite route upgrade | Existing SQLite databases get nullable route metadata columns and indexes without data loss. | `test_init_db_upgrades_existing_sqlite_request_records_with_route_metadata` |
 | SQLite cost upgrade | Existing SQLite databases get nullable cost snapshot columns and indexes without data loss. | `test_init_db_upgrades_existing_sqlite_request_records_with_route_metadata` |
