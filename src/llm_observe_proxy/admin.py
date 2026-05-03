@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 from collections import Counter
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -10,7 +11,7 @@ from urllib.parse import urlparse
 import httpx
 from fastapi import APIRouter, Form, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
-from jinja2 import pass_context
+from jinja2 import Undefined, pass_context
 from sqlalchemy import desc, func, select
 from starlette.templating import Jinja2Templates
 
@@ -46,6 +47,105 @@ def is_active_mode(context, mode: str) -> str:
 
 
 templates.env.filters["active_mode"] = is_active_mode
+
+
+def format_compact_number(value: object) -> str:
+    number = _coerce_number(value)
+    if number is None:
+        return "-"
+
+    absolute = abs(number)
+    if absolute < 1000:
+        return _format_decimal(number, max_decimals=0)
+
+    for divisor, suffix in (
+        (1_000_000_000, "B"),
+        (1_000_000, "M"),
+        (1_000, "k"),
+    ):
+        if absolute >= divisor:
+            scaled = number / divisor
+            return f"{_format_decimal(scaled, max_decimals=_compact_decimals(scaled))}{suffix}"
+
+    return _format_decimal(number, max_decimals=0)
+
+
+def format_compact_rate(value: object) -> str:
+    number = _coerce_number(value)
+    if number is None:
+        return "-"
+    if abs(number) < 1000:
+        return f"{number:.2f}"
+    return format_compact_number(number)
+
+
+def format_duration_ms(value: object) -> str:
+    number = _coerce_number(value)
+    if number is None:
+        return "-"
+
+    total_ms = max(0, int(round(number)))
+    if total_ms < 1000:
+        return f"{total_ms} ms"
+
+    if total_ms < 60_000:
+        seconds = total_ms / 1000
+        return f"{_format_decimal(seconds, max_decimals=2)} s"
+
+    total_seconds = int(round(total_ms / 1000))
+    minutes, seconds = divmod(total_seconds, 60)
+    if minutes < 60:
+        return f"{minutes}m {seconds}s" if seconds else f"{minutes}m"
+
+    hours, minutes = divmod(minutes, 60)
+    if hours < 24:
+        return f"{hours}h {minutes}m" if minutes else f"{hours}h"
+
+    days, hours = divmod(hours, 24)
+    day_label = "day" if days == 1 else "days"
+    return f"{days} {day_label} {hours}h" if hours else f"{days} {day_label}"
+
+
+def _coerce_number(value: object) -> float | None:
+    if value is None or isinstance(value, Undefined) or isinstance(value, bool):
+        return None
+    if isinstance(value, int | float):
+        number = float(value)
+    elif isinstance(value, str):
+        stripped = value.strip()
+        if not stripped or stripped == "-":
+            return None
+        try:
+            number = float(stripped)
+        except ValueError:
+            return None
+    else:
+        return None
+
+    if not math.isfinite(number):
+        return None
+    return number
+
+
+def _format_decimal(value: float, *, max_decimals: int) -> str:
+    text = f"{value:.{max_decimals}f}"
+    if "." in text:
+        text = text.rstrip("0").rstrip(".")
+    return text
+
+
+def _compact_decimals(value: float) -> int:
+    absolute = abs(value)
+    if absolute < 10:
+        return 2
+    if absolute < 100:
+        return 1
+    return 0
+
+
+templates.env.filters["compact_number"] = format_compact_number
+templates.env.filters["compact_rate"] = format_compact_rate
+templates.env.filters["duration_ms"] = format_duration_ms
 
 router = APIRouter(prefix="/admin", include_in_schema=False)
 
