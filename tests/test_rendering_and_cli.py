@@ -19,7 +19,7 @@ from llm_observe_proxy.config import (
     EXPOSED_INCOMING_HOST,
     Settings,
 )
-from llm_observe_proxy.costing import estimate_cost
+from llm_observe_proxy.costing import estimate_cost, estimate_run_cost
 from llm_observe_proxy.database import (
     ModelPrice,
     ModelProvider,
@@ -288,6 +288,40 @@ def test_cost_estimator_handles_rates_aliases_unknowns_and_missing_usage(tmp_pat
     assert aliased.snapshot["matched_model"] == "alias-root"
     assert unknown.total_cost_usd is None
     assert missing_usage.total_cost_usd is None
+
+
+def test_run_cost_estimator_sums_usage_and_counts_missing_requests(tmp_path) -> None:
+    db_path = tmp_path / "run-estimator.sqlite3"
+    settings = Settings(database_url=f"sqlite:///{db_path.as_posix()}")
+    engine = create_db_engine(settings.database_url)
+    init_db(engine)
+    session_factory = create_session_factory(engine)
+
+    with session_scope(session_factory) as session:
+        price = session.scalars(
+            select(ModelPrice).where(
+                ModelPrice.provider_slug == "openai",
+                ModelPrice.model == "gpt-5.4-mini",
+            )
+        ).one()
+        estimate = estimate_run_cost(
+            [
+                ExtractedTokenUsage(input_tokens=1000, output_tokens=500, total_tokens=1500),
+                ExtractedTokenUsage(input_tokens=None, output_tokens=10, total_tokens=None),
+                ExtractedTokenUsage(input_tokens=200, output_tokens=100, total_tokens=None),
+            ],
+            price,
+        )
+    engine.dispose()
+
+    assert estimate.input_tokens == 1200
+    assert estimate.output_tokens == 600
+    assert estimate.total_tokens == 1800
+    assert estimate.input_cost_usd == Decimal("0.000900")
+    assert estimate.output_cost_usd == Decimal("0.002700")
+    assert estimate.total_cost_usd == Decimal("0.003600")
+    assert estimate.included_request_count == 2
+    assert estimate.missing_usage_request_count == 1
 
 
 def test_init_db_upgrades_existing_sqlite_request_records_with_route_metadata(tmp_path) -> None:

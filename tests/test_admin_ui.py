@@ -13,7 +13,14 @@ from sqlalchemy import select
 from llm_observe_proxy.admin import templates
 from llm_observe_proxy.app import create_app
 from llm_observe_proxy.config import ModelRoute, Settings
-from llm_observe_proxy.database import ImageAsset, ModelPrice, ModelProvider, RequestRecord, TaskRun
+from llm_observe_proxy.database import (
+    ImageAsset,
+    ModelPrice,
+    ModelProvider,
+    RequestRecord,
+    TaskRun,
+    upsert_model_price,
+)
 
 GLOBAL_UPSTREAM_URL = "http://localhost:8080/v1"
 ROUTE_UPSTREAM_URL = "http://127.0.0.1:8080/v1"
@@ -497,6 +504,113 @@ def test_run_filter_detail_and_badges_show_associated_requests(
         "Run <strong><a href=\"/admin/runs/1\">Local video task</a></strong>"
         in request_detail.text
     )
+
+
+def test_run_detail_shows_default_what_if_costs_without_mutating_snapshots(
+    proxy_client: TestClient,
+    proxy_app: FastAPI,
+) -> None:
+    proxy_client.post("/admin/runs/start", data={"name": "Default what-if"})
+    proxy_client.post(
+        "/v1/chat/completions",
+        json={"model": "gpt-test", "messages": [{"role": "user", "content": "inside"}]},
+    )
+    proxy_client.post("/admin/runs/end")
+
+    with proxy_app.state.session_factory() as session:
+        record = session.scalars(select(RequestRecord)).one()
+        original_cost = record.billing_total_cost_usd
+
+    detail = proxy_client.get("/admin/runs/1")
+
+    assert detail.status_code == 200
+    assert "What-if cost" in detail.text
+    assert "GPT-5.5" in detail.text
+    assert "GPT-5.4 Mini" in detail.text
+    assert 'value="openai:gpt-5.5" checked' in detail.text
+    assert 'value="openai:gpt-5.4-mini" checked' in detail.text
+    assert "$0.000120" in detail.text
+    assert "$0.000018" in detail.text
+    assert "Missing Usage" in detail.text
+
+    with proxy_app.state.session_factory() as session:
+        record = session.scalars(select(RequestRecord)).one()
+        assert record.billing_total_cost_usd == original_cost
+
+
+def test_run_detail_accepts_repeated_what_if_params(
+    proxy_client: TestClient,
+    proxy_app: FastAPI,
+) -> None:
+    proxy_client.post("/admin/runs/start", data={"name": "Custom what-if"})
+    proxy_client.post(
+        "/v1/chat/completions",
+        json={"model": "gpt-test", "messages": [{"role": "user", "content": "inside"}]},
+    )
+
+    with proxy_app.state.session_factory() as session:
+        upsert_model_price(
+            session,
+            provider_slug="openai",
+            model="custom-low",
+            display_name="Custom Low",
+            input_usd_per_million="1",
+            output_usd_per_million="2",
+        )
+        upsert_model_price(
+            session,
+            provider_slug="openai",
+            model="custom-high",
+            display_name="Custom High",
+            input_usd_per_million="10",
+            output_usd_per_million="20",
+        )
+        session.commit()
+
+    detail = proxy_client.get(
+        "/admin/runs/1?what_if=openai:custom-low&what_if=openai:custom-high"
+    )
+
+    assert detail.status_code == 200
+    assert "Custom Low" in detail.text
+    assert "Custom High" in detail.text
+    assert 'value="openai:custom-low" checked' in detail.text
+    assert 'value="openai:custom-high" checked' in detail.text
+    assert 'value="openai:gpt-5.5" checked' not in detail.text
+    assert "$0.000012" in detail.text
+    assert "$0.000120" in detail.text
+
+
+def test_run_detail_ignores_unknown_and_inactive_what_if_prices(
+    proxy_client: TestClient,
+    proxy_app: FastAPI,
+) -> None:
+    proxy_client.post("/admin/runs/start", data={"name": "Invalid what-if"})
+    proxy_client.post(
+        "/v1/chat/completions",
+        json={"model": "gpt-test", "messages": [{"role": "user", "content": "inside"}]},
+    )
+
+    with proxy_app.state.session_factory() as session:
+        inactive = upsert_model_price(
+            session,
+            provider_slug="openai",
+            model="inactive-price",
+            display_name="Inactive Price",
+            input_usd_per_million="1",
+            output_usd_per_million="1",
+            active=False,
+        )
+        inactive.active = False
+        session.commit()
+
+    detail = proxy_client.get(
+        "/admin/runs/1?what_if=openai:inactive-price&what_if=openai:missing-price"
+    )
+
+    assert detail.status_code == 200
+    assert "No active model prices matched the selected comparison." in detail.text
+    assert "Inactive Price" not in detail.text
 
 
 def test_admin_formats_large_numbers_and_durations(
