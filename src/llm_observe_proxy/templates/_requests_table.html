@@ -31,7 +31,12 @@
       <tr>
         <td><a href="/admin/requests/{{ record.id }}">#{{ record.id }}</a><span class="muted">{{ record.created_at }}</span></td>
         <td class="request-endpoint"><span class="method">{{ record.method }}</span><code>{{ record.endpoint }}</code></td>
-        <td class="request-model">{{ record.model }}</td>
+        <td class="request-model">
+          <span>{{ record.model }}</span>
+          {% if record.model_route %}
+          <span class="route-badge">{{ record.model_route }}</span>
+          {% endif %}
+        </td>
         {% if show_run %}
         <td>
           {% if record.task_run %}

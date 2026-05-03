@@ -379,7 +379,23 @@ td:first-child a {
 }
 
 .request-model {
+  display: grid;
+  gap: 6px;
   line-height: 1.35;
+}
+
+.route-badge,
+.key-state {
+  display: inline-flex;
+  width: fit-content;
+  align-items: center;
+  min-height: 24px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  padding: 3px 8px;
+  color: var(--brand-strong);
+  font-size: 12px;
+  font-weight: 800;
 }
 
 .numeric {
@@ -451,6 +467,33 @@ td:first-child a {
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: 18px;
   margin-bottom: 18px;
+}
+
+.model-routes-panel {
+  grid-column: 1 / -1;
+}
+
+.compact-table {
+  max-height: 320px;
+  overflow: auto;
+}
+
+.model-routes-table td,
+.model-routes-table th {
+  vertical-align: middle;
+}
+
+.model-routes-table code {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.key-state-missing {
+  color: var(--danger);
+}
+
+.key-state-not-configured {
+  color: var(--muted);
 }
 
 .kpi-grid {

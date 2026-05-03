@@ -9,6 +9,12 @@
     <span>Status <strong>{{ record.response_status | default('pending', true) }}</strong></span>
     <span>Duration <strong>{{ record.duration_ms | duration_ms }}</strong></span>
     <span>Model <strong>{{ record.model | default('unknown', true) }}</strong></span>
+    {% if record.upstream_model %}
+    <span>Upstream Model <strong>{{ record.upstream_model }}</strong></span>
+    {% endif %}
+    {% if record.model_route %}
+    <span>Route <strong>{{ record.model_route }}</strong></span>
+    {% endif %}
     {% if record.task_run %}
     <span>Run <strong><a href="/admin/runs/{{ record.task_run.id }}">{{ record.task_run.name }}</a></strong></span>
     {% endif %}
@@ -83,7 +89,10 @@
 </section>
 
 <section class="panel">
-  <header><h2>Upstream</h2></header>
+  <header>
+    <h2>Upstream</h2>
+    <span>{{ record.model_route | default('global fallback', true) }}</span>
+  </header>
   <code>{{ record.upstream_url }}</code>
 </section>
 {% endblock %}

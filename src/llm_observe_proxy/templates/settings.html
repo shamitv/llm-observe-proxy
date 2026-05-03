@@ -18,6 +18,7 @@
 {% set current_incoming_host = incoming_host | default('localhost', true) %}
 {% set current_incoming_port = incoming_port | default(8080, true) %}
 {% set current_expose_all_ips = expose_all_ips | default(false, true) %}
+{% set configured_model_routes = model_routes | default([], true) %}
 
 <section class="settings-grid">
   <form class="panel form-panel" method="post" action="/admin/settings/incoming">
@@ -48,6 +49,48 @@
     <button class="button primary" type="submit">Save Upstream</button>
   </form>
 
+  <article class="panel model-routes-panel">
+    <header>
+      <h2>Model Routes</h2>
+      <span>{{ configured_model_routes | length }} configured</span>
+    </header>
+    {% if configured_model_routes %}
+    <div class="table-shell compact-table">
+      <table class="model-routes-table">
+        <thead>
+          <tr>
+            <th>Model</th>
+            <th>Upstream</th>
+            <th>Upstream Model</th>
+            <th>API Key</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for route in configured_model_routes %}
+          <tr>
+            <td><code>{{ route.model }}</code></td>
+            <td><code>{{ route.upstream_url }}</code></td>
+            <td><code>{{ route.upstream_model }}</code></td>
+            <td>
+              <span class="key-state key-state-{{ route.api_key_state | replace(' ', '-') }}">
+                {{ route.api_key_state }}
+              </span>
+              {% if route.api_key_env %}
+              <small>{{ route.api_key_env }}</small>
+              {% elif route.api_key_state == 'configured' %}
+              <small>direct key</small>
+              {% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <p class="muted">No model routes are configured. Requests use the global upstream fallback.</p>
+    {% endif %}
+  </article>
+
   <form class="panel form-panel" method="post" action="/admin/settings/test-upstream">
     <header>
       <h2>Test Upstream</h2>
@@ -73,6 +116,10 @@
           {{ test_result.status_code | default('error', true) }}
         </span>
         <span>{{ test_result.kind }}</span>
+        <span>{{ test_result.model_route | default('global fallback', true) }}</span>
+        {% if test_result.upstream_model %}
+        <span>{{ test_result.upstream_model }}</span>
+        {% endif %}
         <span>{{ test_result.duration_ms | duration_ms }}</span>
       </div>
       <code>{{ test_result.url }}</code>
