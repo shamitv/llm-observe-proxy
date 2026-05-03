@@ -6,10 +6,10 @@
     <h1>Request Browser</h1>
   </div>
   <div class="stats">
-    <span><strong>{{ stats.total }}</strong>Total</span>
-    <span><strong>{{ stats.streams }}</strong>Streams</span>
-    <span><strong>{{ stats.images }}</strong>Images</span>
-    <span><strong>{{ stats.tools }}</strong>Tools</span>
+    <span><strong>{{ stats.total | compact_number }}</strong>Total</span>
+    <span><strong>{{ stats.streams | compact_number }}</strong>Streams</span>
+    <span><strong>{{ stats.images | compact_number }}</strong>Images</span>
+    <span><strong>{{ stats.tools | compact_number }}</strong>Tools</span>
   </div>
 </section>
 
@@ -18,7 +18,7 @@
   <div>
     <p class="eyebrow">Run in progress</p>
     <h2><a href="/admin/runs/{{ active_run.id }}">{{ active_run.name }}</a></h2>
-    <p class="muted">{{ active_run.request_count }} request{{ '' if active_run.request_count == 1 else 's' }} · {{ active_run.open_duration_ms | default('-', true) }} ms open</p>
+    <p class="muted">{{ active_run.request_count | compact_number }} request{{ '' if active_run.request_count == 1 else 's' }} · {{ active_run.open_duration_ms | duration_ms }} open</p>
   </div>
   <form method="post" action="/admin/runs/end">
     <button class="button danger" type="submit">End run</button>

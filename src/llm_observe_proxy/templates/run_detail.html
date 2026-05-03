@@ -17,7 +17,7 @@
   <div>
     <p class="eyebrow">Run in progress</p>
     <h2>{{ run.name }}</h2>
-    <p class="muted">{{ stats.request_count }} request{{ '' if stats.request_count == 1 else 's' }} · {{ run.open_duration_ms | default('-', true) }} ms open</p>
+    <p class="muted">{{ stats.request_count | compact_number }} request{{ '' if stats.request_count == 1 else 's' }} · {{ run.open_duration_ms | duration_ms }} open</p>
   </div>
   <form method="post" action="/admin/runs/end">
     <button class="button danger" type="submit">End run</button>
@@ -26,14 +26,14 @@
 {% endif %}
 
 <section class="kpi-grid">
-  <div class="kpi"><span>Requests</span><strong>{{ stats.request_count }}</strong></div>
-  <div class="kpi"><span>LLM wall time</span><strong>{{ stats.llm_wall_time_ms | default('-', true) }} ms</strong></div>
-  <div class="kpi"><span>Run open</span><strong>{{ stats.run_open_duration_ms | default('-', true) }} ms</strong></div>
-  <div class="kpi"><span>Request duration</span><strong>{{ stats.total_request_duration_ms | default('-', true) }} ms</strong></div>
-  <div class="kpi"><span>Input tokens</span><strong>{{ stats.tokens.input | default('-', true) }}</strong></div>
-  <div class="kpi"><span>Output tokens</span><strong>{{ stats.tokens.output | default('-', true) }}</strong></div>
-  <div class="kpi"><span>Total tokens</span><strong>{{ stats.tokens.total | default('-', true) }}</strong></div>
-  <div class="kpi"><span>Output tok/s</span><strong>{{ stats.throughput.output_wall | default('-', true) }}</strong></div>
+  <div class="kpi"><span>Requests</span><strong>{{ stats.request_count | compact_number }}</strong></div>
+  <div class="kpi"><span>LLM wall time</span><strong>{{ stats.llm_wall_time_ms | duration_ms }}</strong></div>
+  <div class="kpi"><span>Run open</span><strong>{{ stats.run_open_duration_ms | duration_ms }}</strong></div>
+  <div class="kpi"><span>Request duration</span><strong>{{ stats.total_request_duration_ms | duration_ms }}</strong></div>
+  <div class="kpi"><span>Input tokens</span><strong>{{ stats.tokens.input | compact_number }}</strong></div>
+  <div class="kpi"><span>Output tokens</span><strong>{{ stats.tokens.output | compact_number }}</strong></div>
+  <div class="kpi"><span>Total tokens</span><strong>{{ stats.tokens.total | compact_number }}</strong></div>
+  <div class="kpi"><span>Output tok/s</span><strong>{{ stats.throughput.output_wall | compact_rate }}</strong></div>
 </section>
 
 <section class="split">
@@ -41,7 +41,7 @@
     <header><h2>Models</h2></header>
     <div class="breakdown-list">
       {% for item in stats.models %}
-      <span><strong>{{ item.count }}</strong>{{ item.label }}</span>
+      <span><strong>{{ item.count | compact_number }}</strong>{{ item.label }}</span>
       {% else %}
       <p class="muted">No model usage yet.</p>
       {% endfor %}
@@ -51,7 +51,7 @@
     <header><h2>Endpoints</h2></header>
     <div class="breakdown-list">
       {% for item in stats.endpoints %}
-      <span><strong>{{ item.count }}</strong>{{ item.label }}</span>
+      <span><strong>{{ item.count | compact_number }}</strong>{{ item.label }}</span>
       {% else %}
       <p class="muted">No endpoint usage yet.</p>
       {% endfor %}
@@ -64,7 +64,7 @@
     <header><h2>Status Codes</h2></header>
     <div class="breakdown-list">
       {% for item in stats.statuses %}
-      <span><strong>{{ item.count }}</strong>{{ item.label }}</span>
+      <span><strong>{{ item.count | compact_number }}</strong>{{ item.label }}</span>
       {% else %}
       <p class="muted">No status codes yet.</p>
       {% endfor %}
@@ -73,10 +73,10 @@
   <article class="panel">
     <header><h2>Signals</h2></header>
     <div class="breakdown-list">
-      <span><strong>{{ stats.signals.streams }}</strong>Streams</span>
-      <span><strong>{{ stats.signals.images }}</strong>Images</span>
-      <span><strong>{{ stats.signals.tools }}</strong>Tools</span>
-      <span><strong>{{ stats.signals.errors }}</strong>Errors</span>
+      <span><strong>{{ stats.signals.streams | compact_number }}</strong>Streams</span>
+      <span><strong>{{ stats.signals.images | compact_number }}</strong>Images</span>
+      <span><strong>{{ stats.signals.tools | compact_number }}</strong>Tools</span>
+      <span><strong>{{ stats.signals.errors | compact_number }}</strong>Errors</span>
     </div>
   </article>
 </section>

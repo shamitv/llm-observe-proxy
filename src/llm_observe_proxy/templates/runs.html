@@ -6,7 +6,7 @@
     <h1>Runs</h1>
   </div>
   <div class="stats">
-    <span><strong>{{ runs | length }}</strong>Shown</span>
+    <span><strong>{{ runs | length | compact_number }}</strong>Shown</span>
     <span><strong>{{ '1' if active_run else '0' }}</strong>Active</span>
   </div>
 </section>
@@ -20,7 +20,7 @@
   <div>
     <p class="eyebrow">Run in progress</p>
     <h2><a href="/admin/runs/{{ active_run.id }}">{{ active_run.name }}</a></h2>
-    <p class="muted">{{ active_run.request_count }} request{{ '' if active_run.request_count == 1 else 's' }} · {{ active_run.open_duration_ms | default('-', true) }} ms open</p>
+    <p class="muted">{{ active_run.request_count | compact_number }} request{{ '' if active_run.request_count == 1 else 's' }} · {{ active_run.open_duration_ms | duration_ms }} open</p>
   </div>
   <form method="post" action="/admin/runs/end">
     <button class="button danger" type="submit">End run</button>
@@ -61,15 +61,15 @@
           <span class="muted">{{ run.started_at }}</span>
         </td>
         <td><span class="pill">{{ 'active' if run.is_active else 'complete' }}</span></td>
-        <td>{{ run.request_count }}</td>
-        <td>{{ run.llm_wall_time_ms | default('-', true) }} ms</td>
-        <td>{{ run.total_tokens | default('-', true) }}</td>
-        <td>{{ run.output_tokens_per_second | default('-', true) }}</td>
+        <td>{{ run.request_count | compact_number }}</td>
+        <td>{{ run.llm_wall_time_ms | duration_ms }}</td>
+        <td>{{ run.total_tokens | compact_number }}</td>
+        <td>{{ run.output_tokens_per_second | compact_rate }}</td>
         <td class="signals">
-          {% if run.signals.streams %}<span>{{ run.signals.streams }} Stream</span>{% endif %}
-          {% if run.signals.images %}<span>{{ run.signals.images }} Image</span>{% endif %}
-          {% if run.signals.tools %}<span>{{ run.signals.tools }} Tool</span>{% endif %}
-          {% if run.signals.errors %}<span>{{ run.signals.errors }} Error</span>{% endif %}
+          {% if run.signals.streams %}<span>{{ run.signals.streams | compact_number }} Stream</span>{% endif %}
+          {% if run.signals.images %}<span>{{ run.signals.images | compact_number }} Image</span>{% endif %}
+          {% if run.signals.tools %}<span>{{ run.signals.tools | compact_number }} Tool</span>{% endif %}
+          {% if run.signals.errors %}<span>{{ run.signals.errors | compact_number }} Error</span>{% endif %}
         </td>
       </tr>
       {% else %}

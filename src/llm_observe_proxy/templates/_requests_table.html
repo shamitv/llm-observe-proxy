@@ -42,13 +42,13 @@
         </td>
         {% endif %}
         <td><span class="pill status-{{ record.status | default('pending', true) }}">{{ record.status | default('pending', true) }}</span></td>
-        <td class="numeric">{{ record.duration_ms | default('-', true) }} ms</td>
-        <td class="numeric">{{ record.tokens_per_second | default('-', true) }}</td>
+        <td class="numeric">{{ record.duration_ms | duration_ms }}</td>
+        <td class="numeric">{{ record.tokens_per_second | compact_rate }}</td>
         <td>
           <div class="token-triplet">
-            <span><strong>{{ record.tokens.input | default('-', true) }}</strong><small>Input</small></span>
-            <span><strong>{{ record.tokens.output | default('-', true) }}</strong><small>Output</small></span>
-            <span><strong>{{ record.tokens.total | default('-', true) }}</strong><small>Total</small></span>
+            <span><strong>{{ record.tokens.input | compact_number }}</strong><small>Input</small></span>
+            <span><strong>{{ record.tokens.output | compact_number }}</strong><small>Output</small></span>
+            <span><strong>{{ record.tokens.total | compact_number }}</strong><small>Total</small></span>
           </div>
         </td>
         <td class="signals">
