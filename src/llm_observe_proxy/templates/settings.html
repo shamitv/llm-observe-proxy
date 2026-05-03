@@ -59,15 +59,22 @@
       <table class="model-routes-table">
         <thead>
           <tr>
+            <th>Source</th>
             <th>Model</th>
             <th>Upstream</th>
             <th>Upstream Model</th>
             <th>API Key</th>
+            <th>Actions</th>
           </tr>
         </thead>
         <tbody>
           {% for route in configured_model_routes %}
           <tr>
+            <td>
+              <span class="source-pill source-{{ route.source }}">
+                {{ 'Settings' if route.editable else 'Startup' }}
+              </span>
+            </td>
             <td><code>{{ route.model }}</code></td>
             <td><code>{{ route.upstream_url }}</code></td>
             <td><code>{{ route.upstream_model }}</code></td>
@@ -81,6 +88,16 @@
               <small>direct key</small>
               {% endif %}
             </td>
+            <td>
+              {% if route.editable %}
+              <form method="post" action="/admin/settings/model-routes/delete">
+                <input type="hidden" name="model" value="{{ route.model }}">
+                <button class="button danger compact-button" type="submit">Delete</button>
+              </form>
+              {% else %}
+              <span class="muted">Locked</span>
+              {% endif %}
+            </td>
           </tr>
           {% endfor %}
         </tbody>
@@ -89,6 +106,25 @@
     {% else %}
     <p class="muted">No model routes are configured. Requests use the global upstream fallback.</p>
     {% endif %}
+    <form class="model-route-form" method="post" action="/admin/settings/model-routes">
+      <label>
+        Model
+        <input name="model" placeholder="local-qwen" required>
+      </label>
+      <label>
+        Upstream URL
+        <input name="upstream_url" placeholder="http://localhost:8000/v1" required>
+      </label>
+      <label>
+        Upstream Model
+        <input name="upstream_model" placeholder="qwen3-coder-30b">
+      </label>
+      <label>
+        API Key Env
+        <input name="api_key_env" placeholder="OPENAI_API_KEY">
+      </label>
+      <button class="button primary" type="submit">Save Route</button>
+    </form>
   </article>
 
   <form class="panel form-panel" method="post" action="/admin/settings/test-upstream">
