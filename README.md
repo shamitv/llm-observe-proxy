@@ -22,8 +22,8 @@ Published package: https://pypi.org/project/llm-observe-proxy/
 - Detail pages with response render modes for JSON, plain text, Markdown, tool calls,
   and raw SSE streams.
 - Request image gallery for data URL and remote image references.
-- Settings UI for upstream URL, incoming host/port preferences, all-IPs exposure, and
-  retention trimming.
+- Settings UI for upstream URL, model upstream routes, incoming host/port preferences,
+  all-IPs exposure, and retention trimming.
 - Config-driven model routes for sending selected proxy-facing model names to different
   upstream `/v1` endpoints with optional upstream model rewrites and API key injection.
 - No authentication by default, intended for local or trusted development networks.
@@ -119,8 +119,8 @@ Load model-specific upstream routes from a JSON file:
 llm-observe-proxy --models-file .\models.json
 ```
 
-You can also change the upstream URL and next-start incoming host/port settings from
-`/admin/settings`.
+You can also change the upstream URL, model upstream routes, and next-start incoming
+host/port settings from `/admin/settings`.
 
 ## Model Routes
 
@@ -157,9 +157,15 @@ llm-observe-proxy --models-file .\models.json
 You can also set `LLM_OBSERVE_MODELS_JSON` to the same JSON array. If both
 `LLM_OBSERVE_MODELS_FILE` and `LLM_OBSERVE_MODELS_JSON` are set, the file wins.
 
+You can add, update, and delete UI-managed model routes from `/admin/settings`.
+UI-managed routes are stored in SQLite and take effect immediately. Routes loaded from
+`--models-file`, `LLM_OBSERVE_MODELS_FILE`, or `LLM_OBSERVE_MODELS_JSON` remain read-only
+in the UI, and duplicate model names are rejected.
+
 When a route has an API key, the proxy injects `Authorization: Bearer <key>` for the
 upstream request. Captured request headers remain the original client headers; injected
-keys are not stored or shown in the admin UI. Prefer `api_key_env` for shared configs.
+keys are not stored or shown in the admin UI. UI-managed routes store only `api_key_env`;
+prefer `api_key_env` for shared configs.
 
 ## Runs
 

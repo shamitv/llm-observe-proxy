@@ -16,6 +16,8 @@ and this project uses semantic versioning.
 - Request browser filtering by run, plus run badges on request rows and detail pages.
 - Per-request TPS column in admin request tables, computed from output tokens and
   request duration when usage data is available.
+- Settings UI support for adding, updating, deleting, and immediately using
+  SQLite-persisted model upstream routes.
 - SQLite compatibility upgrade for adding run associations to existing databases.
 
 ## [0.1.1] - 2026-05-01
