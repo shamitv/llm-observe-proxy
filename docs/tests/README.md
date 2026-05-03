@@ -34,8 +34,14 @@ the test session fails early with a clear message.
 | Package/app | App factory exposes `/healthz`. | `test_app_factory_exposes_health_route` |
 | CLI | `python -m llm_observe_proxy --help` works and exposes incoming bind and upstream options. | `test_module_cli_help_smoke` |
 | CLI bind settings | CLI startup resolves saved incoming host/port settings when explicit bind args are omitted. | `test_cli_resolve_bind_uses_saved_incoming_settings` |
+| Model route config | JSON/env/file model route configuration is parsed, normalized, and validated. | `test_model_routes_parse_from_json_env`, `test_model_routes_file_wins_over_json_env`, `test_model_routes_reject_invalid_configuration` |
+| Routing helpers | Exact model selection rewrites forwarded JSON bodies and applies route-aware authorization policy. | `test_routing_selects_exact_model_and_rewrites_body`, `test_route_api_key_resolution_and_header_policy` |
 | Non-streaming chat | `/v1/chat/completions` forwards to upstream and stores endpoint, model, status, request body, response body, and timing metadata. | `test_non_streaming_chat_completion_records_and_forwards_headers` |
 | Header forwarding | Authorization and client request id headers are forwarded upstream. | `test_non_streaming_chat_completion_records_and_forwards_headers` |
+| Model route proxying | Configured model routes select their upstream, rewrite the forwarded model, inject route keys, preserve original captured bodies, and record route metadata. | `test_configured_model_route_rewrites_injects_key_and_records_metadata` |
+| Model route auth | Routes without keys preserve client authorization; routes with missing `api_key_env` drop client authorization. | `test_configured_model_route_without_key_preserves_client_authorization`, `test_configured_model_route_with_missing_key_env_drops_client_authorization` |
+| Model route fallback | Unknown, missing, and non-JSON models use the global upstream fallback. | `test_unknown_missing_and_non_json_models_use_global_fallback` |
+| Model route streaming | Streaming requests use configured routes and still capture raw SSE plus route metadata. | `test_streaming_request_uses_configured_model_route_and_captures_metadata` |
 | Responses reasoning | `/v1/responses` records a payload containing `reasoning` data and shows it in the UI JSON view. | `test_responses_reasoning_payload_is_recorded_and_visible_in_ui` |
 | Chat streaming | Chat Completions SSE streams are proxied and raw `text/event-stream` bytes are stored. | `test_chat_streaming_captures_raw_sse` |
 | Responses streaming tool call | Responses API streaming events containing a function call set `has_tool_calls` and render in tool mode. | `test_responses_streaming_tool_call_sets_tool_signal_and_ui_renderer` |
@@ -48,8 +54,12 @@ the test session fails early with a clear message.
 | Run request grouping | Requests made during an active run receive `task_run_id`; requests outside a run do not. | `test_requests_are_associated_with_active_task_run` |
 | Run streaming grouping | A streaming request keeps the run assigned at request start even if the run ends before the stream finishes. | `test_streaming_request_keeps_task_run_after_run_ends` |
 | Run filtering and detail | Request browser filters by run, run detail shows associated requests and aggregate stats, and request detail links back to the run. | `test_run_filter_detail_and_badges_show_associated_requests` |
-| SQLite run upgrade | Existing SQLite databases get the nullable `task_run_id` column and index without data loss. | `test_init_db_upgrades_existing_sqlite_request_records_with_task_run_id` |
+| SQLite run upgrade | Existing SQLite databases get the nullable `task_run_id` column and index without data loss. | `test_init_db_upgrades_existing_sqlite_request_records_with_route_metadata` |
+| SQLite route upgrade | Existing SQLite databases get nullable route metadata columns and indexes without data loss. | `test_init_db_upgrades_existing_sqlite_request_records_with_route_metadata` |
 | Upstream settings | Admin UI accepts a valid `/v1` upstream URL and later proxy calls use it. | `test_settings_updates_upstream_url` |
+| Model route settings | Settings renders configured model routes read-only and masks direct secret values. | `test_settings_renders_model_routes_without_secret_values` |
+| Route-aware upstream test | Admin upstream test uses configured routes for matching models and global fallback for unknown models. | `test_settings_test_upstream_uses_configured_model_route`, `test_settings_test_upstream_falls_back_for_unknown_model` |
+| Route metadata UI | Request browser/detail pages show route and upstream-model metadata for routed requests. | `test_request_browser_and_detail_show_route_metadata` |
 | Incoming settings | Admin UI shows `localhost:8080` by default and stores custom incoming port plus the `0.0.0.0` expose option. | `test_settings_updates_incoming_server` |
 | Incoming validation | Admin UI rejects incoming ports outside `1..65535`. | `test_settings_rejects_invalid_incoming_port` |
 | Upstream validation | Admin UI rejects invalid upstream URLs that do not point to `/v1`. | `test_settings_rejects_invalid_upstream_url` |
@@ -67,6 +77,7 @@ These behaviors are not explicitly covered yet:
 - Streamed tool-call deltas that must be reconstructed across multiple chunks.
 - Upstream non-200 error response logging.
 - Upstream connection failure and timeout logging.
+- Multi-upstream `/v1/models` synthesis or merging.
 - Responses API `input_image` shapes beyond Chat Completions `image_url`.
 - Pagination/date filtering in the admin request browser.
 - Concurrent proxy requests.

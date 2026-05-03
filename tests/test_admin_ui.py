@@ -10,8 +10,8 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
-from llm_observe_proxy.app import create_app
 from llm_observe_proxy.admin import templates
+from llm_observe_proxy.app import create_app
 from llm_observe_proxy.config import ModelRoute, Settings
 from llm_observe_proxy.database import ImageAsset, RequestRecord, TaskRun
 
