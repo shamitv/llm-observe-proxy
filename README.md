@@ -20,6 +20,7 @@ Published package: https://pypi.org/project/llm-observe-proxy/
 - Runs for grouping all requests made during a task, benchmark, or repro workflow.
 - Run detail pages with request counts, LLM wall time, token totals, cost totals,
   tokens/sec, model and endpoint breakdowns, and signal/error counts.
+- Run what-if pricing for comparing captured usage against other configured model prices.
 - Detail pages with response render modes for JSON, plain text, Markdown, tool calls,
   and raw SSE streams.
 - Request image gallery for data URL and remote image references.
@@ -194,9 +195,17 @@ on May 3, 2026. They are inserted only when missing, so UI edits are preserved. 
 estimates intentionally ignore cache, batch/flex/priority tiers, tool fees, image/audio
 pricing, regional premiums, and long-context premiums.
 
-Run detail pages also include what-if cost comparisons. By default they compare the run's
-captured token usage against GPT-5.5 and GPT-5.4 Mini when those prices are active, and
-you can choose any other active model price without changing captured request snapshots.
+Run detail pages include what-if cost comparisons. By default they compare captured run
+usage against GPT-5.5 and GPT-5.4 Mini when those prices are active. You can select any
+other active model price from the run page or link directly with repeated query
+parameters:
+
+```text
+/admin/runs/1?what_if=openai:gpt-5.5&what_if=openai:gpt-5.4-mini
+```
+
+What-if comparisons use stored request token counts and do not change captured request
+cost snapshots.
 
 ## Runs
 
@@ -216,8 +225,7 @@ detail page reports LLM wall time from the first request start to the last respo
 completion, plus token totals, cost totals, and tokens/sec metrics. The request table's
 **TPS** column shows per-request output tokens per second when token usage and duration
 are available. Run-level **Output tok/s** uses output tokens divided by summed request
-duration. Run detail pages can also compare the same captured usage against active model
-prices with repeated `what_if` query parameters.
+duration, matching the total request duration shown on the page.
 
 ## Screenshots
 
