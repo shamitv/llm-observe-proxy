@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -139,6 +140,50 @@ def test_run_filter_detail_and_badges_show_associated_requests(
         "Run <strong><a href=\"/admin/runs/1\">Local video task</a></strong>"
         in request_detail.text
     )
+
+
+def test_admin_formats_large_numbers_and_durations(
+    proxy_client: TestClient,
+    proxy_app: FastAPI,
+) -> None:
+    proxy_client.post("/admin/runs/start", data={"name": "Large totals"})
+    proxy_client.post(
+        "/v1/chat/completions",
+        json={"model": "gpt-test", "messages": [{"role": "user", "content": "inside"}]},
+    )
+
+    started = datetime(2026, 5, 1, tzinfo=UTC)
+    with proxy_app.state.session_factory() as session:
+        task_run = session.scalars(select(TaskRun)).one()
+        record = session.scalars(select(RequestRecord)).one()
+        task_run.started_at = started
+        task_run.ended_at = started + timedelta(milliseconds=2_652_932)
+        record.created_at = started
+        record.completed_at = started + timedelta(milliseconds=2_579_395)
+        record.duration_ms = 1_605_175
+        record.response_body = json.dumps(
+            {
+                "usage": {
+                    "prompt_tokens": 5_060_618,
+                    "completion_tokens": 56_738,
+                    "total_tokens": 5_117_356,
+                }
+            }
+        ).encode()
+        session.commit()
+
+    detail = proxy_client.get("/admin/runs/1")
+    assert detail.status_code == 200
+    assert "42m 59s" in detail.text
+    assert "44m 13s" in detail.text
+    assert "26m 45s" in detail.text
+    assert ">5.06M<" in detail.text
+    assert ">56.7k<" in detail.text
+    assert ">5.12M<" in detail.text
+
+    browser = proxy_client.get("/admin")
+    assert "<strong>5.06M</strong><small>Input</small>" in browser.text
+    assert "26m 45s" in browser.text
 
 
 def test_settings_updates_incoming_server(proxy_client: TestClient) -> None:
