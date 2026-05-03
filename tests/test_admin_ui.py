@@ -654,7 +654,10 @@ def test_admin_formats_large_numbers_and_durations(
     assert ">5.06M<" in detail.text
     assert ">56.7k<" in detail.text
     assert ">5.12M<" in detail.text
+    assert ">35.35<" in detail.text
 
+    runs = proxy_client.get("/admin/runs")
+    assert ">35.35<" in runs.text
     browser = proxy_client.get("/admin")
     assert "<strong>5.06M</strong><small>Input</small>" in browser.text
     assert "26m 45s" in browser.text

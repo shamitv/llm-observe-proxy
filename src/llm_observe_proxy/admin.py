@@ -1141,7 +1141,7 @@ def _task_run_list_item(
         "llm_wall_time_ms": stats["llm_wall_time_ms"],
         "total_tokens": detail["tokens"]["total"],
         "total_cost_usd": detail["cost_usd"],
-        "output_tokens_per_second": detail["throughput"]["output_wall"],
+        "output_tokens_per_second": detail["throughput"]["output_observed"],
         "signals": detail["signals"],
     }
 

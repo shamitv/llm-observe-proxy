@@ -215,8 +215,9 @@ The request browser can filter by run, and request rows link back to their run. 
 detail page reports LLM wall time from the first request start to the last response
 completion, plus token totals, cost totals, and tokens/sec metrics. The request table's
 **TPS** column shows per-request output tokens per second when token usage and duration
-are available. Run detail pages can also compare the same captured usage against active
-model prices with repeated `what_if` query parameters.
+are available. Run-level **Output tok/s** uses output tokens divided by summed request
+duration. Run detail pages can also compare the same captured usage against active model
+prices with repeated `what_if` query parameters.
 
 ## Screenshots
 
