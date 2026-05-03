@@ -75,6 +75,8 @@ class RequestRecord(Base):
     query_string: Mapped[str] = mapped_column(Text, default="")
     endpoint: Mapped[str] = mapped_column(String(512), index=True)
     model: Mapped[str | None] = mapped_column(String(256), nullable=True, index=True)
+    upstream_model: Mapped[str | None] = mapped_column(String(256), nullable=True, index=True)
+    model_route: Mapped[str | None] = mapped_column(String(256), nullable=True, index=True)
     upstream_url: Mapped[str] = mapped_column(Text)
     request_headers_json: Mapped[str] = mapped_column(Text)
     request_body: Mapped[bytes] = mapped_column(LargeBinary, default=b"")
@@ -150,7 +152,7 @@ def create_session_factory(engine: Engine) -> SessionFactory:
 
 def init_db(engine: Engine) -> None:
     Base.metadata.create_all(engine)
-    _ensure_sqlite_task_run_schema(engine)
+    _ensure_sqlite_request_record_schema(engine)
 
 
 @contextmanager
@@ -290,7 +292,7 @@ def _ensure_sqlite_parent(engine: Engine) -> None:
     Path(database).expanduser().parent.mkdir(parents=True, exist_ok=True)
 
 
-def _ensure_sqlite_task_run_schema(engine: Engine) -> None:
+def _ensure_sqlite_request_record_schema(engine: Engine) -> None:
     if engine.dialect.name != "sqlite":
         return
     inspector = inspect(engine)
@@ -300,10 +302,30 @@ def _ensure_sqlite_task_run_schema(engine: Engine) -> None:
     with engine.begin() as connection:
         if "task_run_id" not in columns:
             connection.execute(text("ALTER TABLE request_records ADD COLUMN task_run_id INTEGER"))
+        if "upstream_model" not in columns:
+            connection.execute(
+                text("ALTER TABLE request_records ADD COLUMN upstream_model VARCHAR(256)")
+            )
+        if "model_route" not in columns:
+            connection.execute(
+                text("ALTER TABLE request_records ADD COLUMN model_route VARCHAR(256)")
+            )
         connection.execute(
             text(
                 "CREATE INDEX IF NOT EXISTS "
                 "ix_request_records_task_run_id ON request_records (task_run_id)"
+            )
+        )
+        connection.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS "
+                "ix_request_records_upstream_model ON request_records (upstream_model)"
+            )
+        )
+        connection.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS "
+                "ix_request_records_model_route ON request_records (model_route)"
             )
         )
 

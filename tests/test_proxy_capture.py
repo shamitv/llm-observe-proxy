@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import base64
+import json
+from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
+from llm_observe_proxy.app import create_app
+from llm_observe_proxy.config import ModelRoute, Settings
 from llm_observe_proxy.database import (
     ImageAsset,
     RequestRecord,
@@ -13,6 +17,9 @@ from llm_observe_proxy.database import (
     session_scope,
     start_task_run,
 )
+
+GLOBAL_UPSTREAM_URL = "http://localhost:8080/v1"
+ROUTE_UPSTREAM_URL = "http://127.0.0.1:8080/v1"
 
 
 def test_non_streaming_chat_completion_records_and_forwards_headers(
@@ -40,6 +47,166 @@ def test_non_streaming_chat_completion_records_and_forwards_headers(
         assert record.has_images is False
         assert record.has_tool_calls is False
         assert b"Plain chat response" in record.response_body
+
+
+def test_configured_model_route_rewrites_injects_key_and_records_metadata(
+    tmp_path: Path,
+    fake_upstream,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("ROUTE_KEY", "route-secret")
+    route = ModelRoute(
+        model="local-qwen",
+        upstream_url=ROUTE_UPSTREAM_URL,
+        upstream_model="qwen3-coder-30b",
+        api_key_env="ROUTE_KEY",
+    )
+    app = _create_routed_app(tmp_path, route)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/chat/completions",
+            json={"model": "local-qwen", "messages": [{"role": "user", "content": "hello"}]},
+            headers={"Authorization": "Bearer client-key", "X-Client-Request-Id": "trace-1"},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["model"] == "qwen3-coder-30b"
+    assert fake_upstream.last_request["body"]["model"] == "qwen3-coder-30b"
+    assert fake_upstream.last_request["headers"]["authorization"] == "Bearer route-secret"
+    assert fake_upstream.last_request["headers"]["x-client-request-id"] == "trace-1"
+
+    with app.state.session_factory() as session:
+        record = session.scalars(select(RequestRecord)).one()
+        assert record.model == "local-qwen"
+        assert record.upstream_model == "qwen3-coder-30b"
+        assert record.model_route == "local-qwen"
+        assert record.upstream_url == f"{ROUTE_UPSTREAM_URL}/chat/completions"
+        assert json.loads(record.request_body)["model"] == "local-qwen"
+        assert "client-key" in record.request_headers_json
+        assert "route-secret" not in record.request_headers_json
+
+
+def test_configured_model_route_without_key_preserves_client_authorization(
+    tmp_path: Path,
+    fake_upstream,
+) -> None:
+    route = ModelRoute(model="local-default", upstream_url=ROUTE_UPSTREAM_URL)
+    app = _create_routed_app(tmp_path, route)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/chat/completions",
+            json={"model": "local-default", "messages": [{"role": "user", "content": "hello"}]},
+            headers={"Authorization": "Bearer client-key"},
+        )
+
+    assert response.status_code == 200
+    assert fake_upstream.last_request["body"]["model"] == "local-default"
+    assert fake_upstream.last_request["headers"]["authorization"] == "Bearer client-key"
+
+    with app.state.session_factory() as session:
+        record = session.scalars(select(RequestRecord)).one()
+        assert record.upstream_model == "local-default"
+        assert record.model_route == "local-default"
+
+
+def test_configured_model_route_with_missing_key_env_drops_client_authorization(
+    tmp_path: Path,
+    fake_upstream,
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("MISSING_ROUTE_KEY", raising=False)
+    route = ModelRoute(
+        model="openai-mini",
+        upstream_url=ROUTE_UPSTREAM_URL,
+        upstream_model="gpt-4.1-mini",
+        api_key_env="MISSING_ROUTE_KEY",
+    )
+    app = _create_routed_app(tmp_path, route)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/chat/completions",
+            json={"model": "openai-mini", "messages": [{"role": "user", "content": "hello"}]},
+            headers={"Authorization": "Bearer client-key"},
+        )
+
+    assert response.status_code == 200
+    assert fake_upstream.last_request["body"]["model"] == "gpt-4.1-mini"
+    assert "authorization" not in fake_upstream.last_request["headers"]
+
+
+def test_unknown_missing_and_non_json_models_use_global_fallback(
+    tmp_path: Path,
+    fake_upstream,
+) -> None:
+    route = ModelRoute(model="configured", upstream_url=ROUTE_UPSTREAM_URL)
+    app = _create_routed_app(tmp_path, route)
+
+    with TestClient(app) as client:
+        unknown = client.post(
+            "/v1/chat/completions",
+            json={"model": "unknown", "messages": [{"role": "user", "content": "hello"}]},
+        )
+        missing = client.post(
+            "/v1/chat/completions",
+            json={"messages": [{"role": "user", "content": "hello"}]},
+        )
+        raw = client.post(
+            "/v1/chat/completions",
+            content=b"not json",
+            headers={"content-type": "text/plain"},
+        )
+
+    assert unknown.status_code == 200
+    assert missing.status_code == 200
+    assert raw.status_code == 200
+    assert fake_upstream.last_request["body"] is None
+
+    with app.state.session_factory() as session:
+        records = session.scalars(select(RequestRecord).order_by(RequestRecord.id)).all()
+        assert [record.model for record in records] == ["unknown", None, None]
+        assert [record.model_route for record in records] == [None, None, None]
+        assert [record.upstream_model for record in records] == [None, None, None]
+        assert all(record.upstream_url.startswith(GLOBAL_UPSTREAM_URL) for record in records)
+
+
+def test_streaming_request_uses_configured_model_route_and_captures_metadata(
+    tmp_path: Path,
+    fake_upstream,
+) -> None:
+    route = ModelRoute(
+        model="local-stream",
+        upstream_url=ROUTE_UPSTREAM_URL,
+        upstream_model="stream-upstream",
+    )
+    app = _create_routed_app(tmp_path, route)
+
+    with TestClient(app) as client:
+        with client.stream(
+            "POST",
+            "/v1/chat/completions",
+            json={
+                "model": "local-stream",
+                "messages": [{"role": "user", "content": "stream"}],
+                "stream": True,
+            },
+        ) as response:
+            body = b"".join(response.iter_bytes())
+
+    assert response.status_code == 200
+    assert body.endswith(b"data: [DONE]\n\n")
+    assert fake_upstream.last_request["body"]["model"] == "stream-upstream"
+
+    with app.state.session_factory() as session:
+        record = session.scalars(select(RequestRecord)).one()
+        assert record.is_stream is True
+        assert record.model == "local-stream"
+        assert record.upstream_model == "stream-upstream"
+        assert record.model_route == "local-stream"
+        assert json.loads(record.request_body)["model"] == "local-stream"
+        assert record.response_body == body
 
 
 def test_requests_are_associated_with_active_task_run(
@@ -254,3 +421,14 @@ def test_generic_v1_passthrough_records_query_string(
         record = session.scalars(select(RequestRecord)).one()
         assert record.endpoint == "/v1/models"
         assert record.query_string == "limit=2"
+
+
+def _create_routed_app(tmp_path: Path, *routes: ModelRoute) -> FastAPI:
+    db_path = tmp_path / "routed-proxy.sqlite3"
+    return create_app(
+        Settings(
+            database_url=f"sqlite:///{db_path.as_posix()}",
+            upstream_url=GLOBAL_UPSTREAM_URL,
+            model_routes=routes,
+        )
+    )

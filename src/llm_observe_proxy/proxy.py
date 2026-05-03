@@ -27,6 +27,11 @@ from llm_observe_proxy.database import (
     get_upstream_url,
     session_scope,
 )
+from llm_observe_proxy.routing import (
+    build_forward_body,
+    build_forward_headers,
+    select_model_route,
+)
 
 HOP_BY_HOP_HEADERS = {
     "connection",
@@ -57,9 +62,16 @@ async def proxy_openai(path: str, request: Request) -> Response:
     request_payload = decode_json_bytes(request_body)
     request_headers = _headers_to_dict(request.headers)
     query_string = request.url.query
+    routing_decision = select_model_route(request_payload, settings)
+    forward_body = build_forward_body(request_body, request_payload, routing_decision)
+    forward_headers = build_forward_headers(
+        request.headers,
+        routing_decision,
+        HOP_BY_HOP_HEADERS,
+    )
 
     with _session(session_factory) as session:
-        upstream_base = get_upstream_url(session, settings)
+        upstream_base = routing_decision.upstream_base_url or get_upstream_url(session, settings)
         upstream_url = _build_upstream_url(upstream_base, path, query_string)
         images = extract_images(request_payload)
         active_run = get_active_task_run(session)
@@ -70,6 +82,8 @@ async def proxy_openai(path: str, request: Request) -> Response:
             query_string=query_string,
             endpoint=f"/v1/{path}",
             model=extract_model(request_payload),
+            upstream_model=routing_decision.upstream_model,
+            model_route=routing_decision.model_route,
             upstream_url=upstream_url,
             request_headers_json=compact_json(request_headers),
             request_body=request_body,
@@ -99,8 +113,8 @@ async def proxy_openai(path: str, request: Request) -> Response:
             client=client,
             method=request.method,
             upstream_url=upstream_url,
-            request_body=request_body,
-            request_headers=request.headers,
+            request_body=forward_body,
+            request_headers=forward_headers,
             session_factory=session_factory,
             record_id=record_id,
             started=started,
@@ -110,8 +124,8 @@ async def proxy_openai(path: str, request: Request) -> Response:
         upstream_response = await client.request(
             request.method,
             upstream_url,
-            content=request_body,
-            headers=_forward_headers(request.headers),
+            content=forward_body,
+            headers=forward_headers,
         )
         response_body = upstream_response.content
         response_headers = _headers_to_dict(upstream_response.headers)
@@ -167,7 +181,7 @@ async def _proxy_streaming(
             method,
             upstream_url,
             content=request_body,
-            headers=_forward_headers(request_headers),
+            headers=request_headers,
         )
         upstream_response = await client.send(upstream_request, stream=True)
     except httpx.HTTPError as exc:
