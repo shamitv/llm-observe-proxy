@@ -22,7 +22,9 @@ from llm_observe_proxy.capture import (
     extract_token_usage,
 )
 from llm_observe_proxy.config import ModelRoute, normalize_upstream_url
+from llm_observe_proxy.costing import RunCostEstimate, estimate_run_cost
 from llm_observe_proxy.database import (
+    ModelPrice,
     RequestRecord,
     SessionFactory,
     TaskRun,
@@ -195,6 +197,9 @@ TEST_IMAGE_DATA_URL = (
     "data:image/png;base64,"
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII="
 )
+DEFAULT_RUN_WHAT_IF_KEYS = ("openai:gpt-5.5", "openai:gpt-5.4-mini")
+
+
 @router.get("", response_class=HTMLResponse)
 @router.get("/", response_class=HTMLResponse)
 async def index(
@@ -354,8 +359,12 @@ async def runs(request: Request) -> HTMLResponse:
 
 
 @router.get("/runs/{run_id}", response_class=HTMLResponse)
-async def run_detail(request: Request, run_id: int) -> HTMLResponse:
+async def run_detail(
+    request: Request,
+    run_id: int,
+) -> HTMLResponse:
     session_factory: SessionFactory = request.app.state.session_factory
+    what_if = request.query_params.getlist("what_if") or None
     with session_scope(session_factory) as session:
         task_run = session.get(TaskRun, run_id)
         if task_run is None:
@@ -365,15 +374,18 @@ async def run_detail(request: Request, run_id: int) -> HTMLResponse:
                 {"record_id": run_id, "page_title": "Run Not Found"},
                 status_code=404,
             )
-        records = [
-            _record_list_item(record)
-            for record in session.scalars(
-                select(RequestRecord)
-                .where(RequestRecord.task_run_id == run_id)
-                .order_by(desc(RequestRecord.created_at))
-            ).all()
-        ]
+        request_records = session.scalars(
+            select(RequestRecord)
+            .where(RequestRecord.task_run_id == run_id)
+            .order_by(desc(RequestRecord.created_at))
+        ).all()
+        records = [_record_list_item(record) for record in request_records]
         stats = _task_run_stats_detail(task_run, session)
+        what_if_costs = _run_what_if_context(
+            request_records,
+            session,
+            requested_keys=what_if,
+        )
         active_run = _task_run_summary(get_active_task_run(session), session)
         upstream_url = get_upstream_url(session, request.app.state.settings)
 
@@ -384,6 +396,7 @@ async def run_detail(request: Request, run_id: int) -> HTMLResponse:
             "run": _task_run_summary(task_run, session=None),
             "records": records,
             "stats": stats,
+            "what_if": what_if_costs,
             "active_run": active_run,
             "upstream_url": upstream_url,
             "page_title": f"Run: {task_run.name}",
@@ -842,6 +855,92 @@ def _model_price_row(price) -> dict[str, object]:
     }
 
 
+def _run_what_if_context(
+    records: list[RequestRecord],
+    session,
+    *,
+    requested_keys: list[str] | None,
+) -> dict[str, object]:
+    active_prices = [price for price in list_model_prices(session) if price.active]
+    price_by_key = {_model_price_key(price): price for price in active_prices}
+    selected_keys = _selected_run_what_if_keys(requested_keys, price_by_key)
+    selected_key_set = set(selected_keys)
+    usages = [_record_effective_token_usage(record) for record in records]
+    scenarios = [
+        _run_cost_estimate_row(estimate_run_cost(usages, price_by_key[key]))
+        for key in selected_keys
+        if key in price_by_key
+    ]
+
+    message = None
+    if not active_prices:
+        message = "No active model prices are configured."
+    elif requested_keys and not scenarios:
+        message = "No active model prices matched the selected comparison."
+    elif not requested_keys and not scenarios:
+        message = "Default comparison prices are not configured. Choose active prices to compare."
+
+    return {
+        "options": [
+            _run_what_if_option(price, checked=_model_price_key(price) in selected_key_set)
+            for price in active_prices
+        ],
+        "scenarios": scenarios,
+        "message": message,
+    }
+
+
+def _selected_run_what_if_keys(
+    requested_keys: list[str] | None,
+    price_by_key: dict[str, ModelPrice],
+) -> list[str]:
+    source_keys = requested_keys if requested_keys else list(DEFAULT_RUN_WHAT_IF_KEYS)
+    selected: list[str] = []
+    for value in source_keys:
+        key = value.strip()
+        if not key or key in selected or key not in price_by_key:
+            continue
+        selected.append(key)
+    return selected
+
+
+def _run_what_if_option(price: ModelPrice, *, checked: bool) -> dict[str, object]:
+    key = _model_price_key(price)
+    return {
+        "key": key,
+        "provider_name": price.provider.name,
+        "model": price.model,
+        "display_name": price.display_name,
+        "label": price.display_name or price.model,
+        "checked": checked,
+    }
+
+
+def _run_cost_estimate_row(estimate: RunCostEstimate) -> dict[str, object]:
+    return {
+        "key": f"{estimate.provider_slug}:{estimate.model}",
+        "provider_name": estimate.provider_name,
+        "model": estimate.model,
+        "display_name": estimate.display_name,
+        "label": estimate.display_name or estimate.model,
+        "input_usd_per_million": estimate.input_usd_per_million,
+        "output_usd_per_million": estimate.output_usd_per_million,
+        "input_tokens": estimate.input_tokens,
+        "output_tokens": estimate.output_tokens,
+        "total_tokens": estimate.total_tokens,
+        "input_cost_usd": estimate.input_cost_usd,
+        "output_cost_usd": estimate.output_cost_usd,
+        "total_cost_usd": estimate.total_cost_usd,
+        "included_request_count": estimate.included_request_count,
+        "missing_usage_request_count": estimate.missing_usage_request_count,
+        "notes": estimate.notes,
+    }
+
+
+def _model_price_key(price: ModelPrice) -> str:
+    return f"{price.provider_slug}:{price.model}"
+
+
 async def _settings_with_error(request: Request, error: str) -> HTMLResponse:
     session_factory: SessionFactory = request.app.state.session_factory
     with session_scope(session_factory) as session:
@@ -935,6 +1034,30 @@ def _record_token_usage(record: RequestRecord):
     else:
         payload = decode_json_bytes(record.response_body)
     return extract_token_usage(payload)
+
+
+def _record_effective_token_usage(record: RequestRecord) -> ExtractedTokenUsage:
+    token_usage = _record_token_usage(record)
+    input_tokens = (
+        record.billing_input_tokens
+        if record.billing_input_tokens is not None
+        else token_usage.input_tokens
+    )
+    output_tokens = (
+        record.billing_output_tokens
+        if record.billing_output_tokens is not None
+        else token_usage.output_tokens
+    )
+    total_tokens = (
+        record.billing_total_tokens
+        if record.billing_total_tokens is not None
+        else token_usage.total_tokens
+    )
+    return ExtractedTokenUsage(
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        total_tokens=total_tokens,
+    )
 
 
 def _stream_token_usage(body: bytes | None) -> ExtractedTokenUsage:
@@ -1039,22 +1162,10 @@ def _task_run_stats_detail(task_run: TaskRun, session) -> dict[str, object]:
     total_tokens: list[int | None] = []
     total_costs: list[Decimal | None] = []
     for record in records:
-        token_usage = _record_token_usage(record)
-        input_tokens.append(
-            record.billing_input_tokens
-            if record.billing_input_tokens is not None
-            else token_usage.input_tokens
-        )
-        output_tokens.append(
-            record.billing_output_tokens
-            if record.billing_output_tokens is not None
-            else token_usage.output_tokens
-        )
-        total_tokens.append(
-            record.billing_total_tokens
-            if record.billing_total_tokens is not None
-            else token_usage.total_tokens
-        )
+        token_usage = _record_effective_token_usage(record)
+        input_tokens.append(token_usage.input_tokens)
+        output_tokens.append(token_usage.output_tokens)
+        total_tokens.append(token_usage.total_tokens)
         total_costs.append(record.billing_total_cost_usd)
 
     token_totals = {

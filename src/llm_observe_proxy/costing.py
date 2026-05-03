@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Iterable
 from dataclasses import dataclass
 from decimal import Decimal
 
@@ -26,6 +27,26 @@ class CostEstimate:
     output_cost_usd: Decimal | None = None
     total_cost_usd: Decimal | None = None
     snapshot: dict[str, object] | None = None
+
+
+@dataclass(frozen=True)
+class RunCostEstimate:
+    provider_slug: str
+    provider_name: str
+    currency: str
+    model: str
+    display_name: str | None
+    input_usd_per_million: Decimal
+    output_usd_per_million: Decimal
+    input_tokens: int
+    output_tokens: int
+    total_tokens: int
+    input_cost_usd: Decimal
+    output_cost_usd: Decimal
+    total_cost_usd: Decimal
+    included_request_count: int
+    missing_usage_request_count: int
+    notes: str | None = None
 
 
 def estimate_cost(
@@ -78,6 +99,53 @@ def estimate_cost(
         output_cost_usd=output_cost,
         total_cost_usd=total_cost,
         snapshot=snapshot,
+    )
+
+
+def estimate_run_cost(
+    usages: Iterable[ExtractedTokenUsage],
+    price: ModelPrice,
+) -> RunCostEstimate:
+    input_tokens = 0
+    output_tokens = 0
+    total_tokens = 0
+    included_request_count = 0
+    missing_usage_request_count = 0
+
+    for usage in usages:
+        if usage.input_tokens is None or usage.output_tokens is None:
+            missing_usage_request_count += 1
+            continue
+
+        included_request_count += 1
+        input_tokens += usage.input_tokens
+        output_tokens += usage.output_tokens
+        total_tokens += (
+            usage.total_tokens
+            if usage.total_tokens is not None
+            else usage.input_tokens + usage.output_tokens
+        )
+
+    input_cost = _token_cost(input_tokens, price.input_usd_per_million)
+    output_cost = _token_cost(output_tokens, price.output_usd_per_million)
+    provider = price.provider
+    return RunCostEstimate(
+        provider_slug=price.provider_slug,
+        provider_name=provider.name if provider else price.provider_slug,
+        currency=provider.currency if provider else "USD",
+        model=price.model,
+        display_name=price.display_name,
+        input_usd_per_million=price.input_usd_per_million,
+        output_usd_per_million=price.output_usd_per_million,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        total_tokens=total_tokens,
+        input_cost_usd=input_cost,
+        output_cost_usd=output_cost,
+        total_cost_usd=input_cost + output_cost,
+        included_request_count=included_request_count,
+        missing_usage_request_count=missing_usage_request_count,
+        notes=price.notes,
     )
 
 
