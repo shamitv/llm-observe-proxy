@@ -287,7 +287,7 @@ table {
 }
 
 .requests-table {
-  min-width: 1390px;
+  min-width: 1600px;
   table-layout: fixed;
 }
 
@@ -316,11 +316,11 @@ table {
 }
 
 .requests-table .col-tps {
-  width: 74px;
+  width: 90px;
 }
 
 .requests-table .col-tokens {
-  width: 170px;
+  width: 214px;
 }
 
 .requests-table .col-cost {
@@ -408,8 +408,8 @@ td:first-child a {
 
 .token-triplet {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 6px;
+  grid-template-columns: repeat(3, minmax(50px, 1fr));
+  column-gap: 10px;
 }
 
 .token-triplet span {
@@ -419,7 +419,10 @@ td:first-child a {
 }
 
 .token-triplet strong {
+  overflow: hidden;
   font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .token-triplet small {
@@ -427,6 +430,7 @@ td:first-child a {
   font-size: 10px;
   line-height: 1.1;
   text-transform: uppercase;
+  white-space: nowrap;
 }
 
 .request-preview span {
