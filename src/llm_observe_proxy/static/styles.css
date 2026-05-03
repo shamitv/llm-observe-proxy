@@ -473,6 +473,16 @@ td:first-child a {
   grid-column: 1 / -1;
 }
 
+.model-route-form {
+  display: grid;
+  grid-template-columns: minmax(140px, 1fr) minmax(220px, 1.4fr) minmax(160px, 1fr) minmax(150px, 1fr) auto;
+  gap: 12px;
+  align-items: end;
+  border-top: 1px solid var(--line);
+  margin-top: 14px;
+  padding-top: 14px;
+}
+
 .compact-table {
   max-height: 320px;
   overflow: auto;
@@ -486,6 +496,31 @@ td:first-child a {
 .model-routes-table code {
   white-space: normal;
   overflow-wrap: anywhere;
+}
+
+.model-routes-table form {
+  margin: 0;
+}
+
+.source-pill {
+  display: inline-flex;
+  align-items: center;
+  min-height: 26px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  padding: 3px 9px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.source-ui {
+  color: var(--brand-strong);
+}
+
+.compact-button {
+  min-height: 30px;
+  padding: 5px 9px;
 }
 
 .key-state-missing {
@@ -677,6 +712,7 @@ figcaption {
 
 @media (max-width: 1040px) {
   .toolbar,
+  .model-route-form,
   .run-start-form,
   .split,
   .settings-grid {

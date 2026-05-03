@@ -87,6 +87,48 @@ def test_configured_model_route_rewrites_injects_key_and_records_metadata(
         assert "route-secret" not in record.request_headers_json
 
 
+def test_ui_model_route_rewrites_injects_key_and_records_metadata(
+    tmp_path: Path,
+    fake_upstream,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("UI_ROUTE_KEY", "ui-route-secret")
+    app = _create_routed_app(tmp_path)
+
+    with TestClient(app) as client:
+        route_response = client.post(
+            "/admin/settings/model-routes",
+            data={
+                "model": "local-ui",
+                "upstream_url": ROUTE_UPSTREAM_URL,
+                "upstream_model": "ui-upstream",
+                "api_key_env": "UI_ROUTE_KEY",
+            },
+            follow_redirects=False,
+        )
+        response = client.post(
+            "/v1/chat/completions",
+            json={"model": "local-ui", "messages": [{"role": "user", "content": "hello"}]},
+            headers={"Authorization": "Bearer client-key"},
+        )
+
+    assert route_response.status_code == 303
+    assert response.status_code == 200
+    assert response.json()["model"] == "ui-upstream"
+    assert fake_upstream.last_request["body"]["model"] == "ui-upstream"
+    assert fake_upstream.last_request["headers"]["authorization"] == "Bearer ui-route-secret"
+
+    with app.state.session_factory() as session:
+        record = session.scalars(select(RequestRecord)).one()
+        assert record.model == "local-ui"
+        assert record.upstream_model == "ui-upstream"
+        assert record.model_route == "local-ui"
+        assert record.upstream_url == f"{ROUTE_UPSTREAM_URL}/chat/completions"
+        assert json.loads(record.request_body)["model"] == "local-ui"
+        assert "client-key" in record.request_headers_json
+        assert "ui-route-secret" not in record.request_headers_json
+
+
 def test_configured_model_route_without_key_preserves_client_authorization(
     tmp_path: Path,
     fake_upstream,

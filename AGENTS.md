@@ -136,6 +136,20 @@ For UI or settings changes, add or update tests in `tests/test_admin_ui.py`.
 For proxy capture behavior, use `tests/test_proxy_capture.py`.
 For renderer or CLI changes, use `tests/test_rendering_and_cli.py`.
 
+## User-Facing Documentation
+
+- `README.md` is the GitHub/developer README and may include local screenshot references
+  under `docs/screenshots/`.
+- `README.pypi.md` is the PyPI long description configured in `pyproject.toml`. Keep it
+  screenshot-free; do not use relative `docs/screenshots/...` image references because
+  they render as broken images on PyPI.
+- When adding or changing user-facing features, update both `README.md` and
+  `README.pypi.md` so install, usage, routes, settings, and feature descriptions stay
+  aligned.
+- If UI screenshots need refreshing, regenerate them only from the seeded demo harness
+  (`scripts/seed_demo_db.py` and `scripts/capture_screenshots.py`), not from real local
+  traffic or private data.
+
 ## UI Guidance
 
 Keep the UI professional and operational:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any
 
@@ -27,12 +28,17 @@ class RoutingDecision:
         return self.route.effective_upstream_model if self.route else None
 
 
-def select_model_route(request_payload: Any | None, settings: Settings) -> RoutingDecision:
+def select_model_route(
+    request_payload: Any | None,
+    settings: Settings,
+    model_routes: Iterable[ModelRoute] | None = None,
+) -> RoutingDecision:
     requested_model = extract_model(request_payload)
     if not requested_model or not isinstance(request_payload, dict):
         return RoutingDecision(requested_model=requested_model)
 
-    for route in settings.model_routes:
+    routes = model_routes if model_routes is not None else settings.model_routes
+    for route in routes:
         if route.model == requested_model:
             return RoutingDecision(requested_model=requested_model, route=route)
     return RoutingDecision(requested_model=requested_model)

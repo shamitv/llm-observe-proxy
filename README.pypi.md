@@ -8,7 +8,7 @@ grouping task runs, and changing runtime settings.
 It is useful when you want LiteLLM-style observability without introducing a full gateway
 or external database.
 
-Published package: https://pypi.org/project/llm-observe-proxy/
+Project repository: https://github.com/shamitv/llm-observe-proxy
 
 ## Features
 
@@ -48,14 +48,6 @@ Run it once without installing:
 
 ```powershell
 uvx llm-observe-proxy
-```
-
-For local development from this repository:
-
-```powershell
-C:\Python\Python313\python.exe -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -e .[dev]
-.\.venv\Scripts\llm-observe-proxy.exe
 ```
 
 By default, the proxy listens on:
@@ -185,29 +177,8 @@ detail page reports LLM wall time from the first request start to the last respo
 completion, plus token totals and tokens/sec metrics. The request table's **TPS** column
 shows per-request output tokens per second when token usage and duration are available.
 
-## Screenshots
-
-Screenshots are generated from a seeded demo database and stored in `docs/screenshots`.
-
-| Request browser | Tool calls |
-| --- | --- |
-| ![Request browser](docs/screenshots/requests.png) | ![Tool-call detail](docs/screenshots/tool-calls.png) |
-
-| Images | Settings |
-| --- | --- |
-| ![Image request detail](docs/screenshots/images.png) | ![Settings](docs/screenshots/settings.png) |
-
-Additional screenshots:
-
-- [Simple request detail](docs/screenshots/simple-request.png)
-- [Streaming SSE detail](docs/screenshots/streaming.png)
-
-Regenerate screenshots:
-
-```powershell
-.\.venv\Scripts\python.exe scripts\seed_demo_db.py .tmp\screenshots.sqlite3
-.\.venv\Scripts\python.exe scripts\capture_screenshots.py --database .tmp\screenshots.sqlite3 --output docs\screenshots
-```
+Screenshots and the full developer README are available in the project repository:
+https://github.com/shamitv/llm-observe-proxy
 
 ## Routes
 
@@ -253,14 +224,13 @@ not rebind a currently running process.
 ```
 
 The test suite starts a fake upstream on `localhost:8080/v1`, so stop any local process
-using port `8080` before running tests. See [docs/tests/README.md](docs/tests/README.md)
-for the full coverage matrix.
+using port `8080` before running tests.
 
 ## Publishing
 
-See [docs/publishing.md](docs/publishing.md) for name checks, build commands, and the
-pre-publish checklist.
+See the repository publishing guide for name checks, build commands, and the pre-publish
+checklist.
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+MIT.

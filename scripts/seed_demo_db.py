@@ -7,7 +7,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from llm_observe_proxy.capture import compact_json, extract_images
-from llm_observe_proxy.config import Settings
+from llm_observe_proxy.config import ModelRoute, Settings
 from llm_observe_proxy.database import (
     ImageAsset,
     RequestRecord,
@@ -16,6 +16,7 @@ from llm_observe_proxy.database import (
     init_db,
     session_scope,
     set_setting,
+    upsert_ui_model_route,
 )
 
 
@@ -34,6 +35,15 @@ def main() -> None:
     session_factory = create_session_factory(engine)
     with session_scope(session_factory) as session:
         set_setting(session, "upstream_url", "http://localhost:8000/v1")
+        upsert_ui_model_route(
+            session,
+            settings,
+            ModelRoute(
+                model="local-qwen",
+                upstream_url="http://localhost:8000/v1",
+                upstream_model="qwen3-coder-30b",
+            ),
+        )
         _add_simple_chat(session)
         _add_tool_call(session)
         _add_image_request(session)
@@ -43,13 +53,13 @@ def main() -> None:
 
 def _add_simple_chat(session) -> None:
     request_body = {
-        "model": "gpt-demo",
+        "model": "local-qwen",
         "messages": [{"role": "user", "content": "Summarize today's support queue."}],
     }
     response_body = {
         "id": "chatcmpl-demo-simple",
         "object": "chat.completion",
-        "model": "gpt-demo",
+        "model": "qwen3-coder-30b",
         "choices": [
             {
                 "message": {
@@ -63,7 +73,14 @@ def _add_simple_chat(session) -> None:
             }
         ],
     }
-    _add_record(session, 4, request_body, response_body)
+    _add_record(
+        session,
+        4,
+        request_body,
+        response_body,
+        upstream_model="qwen3-coder-30b",
+        model_route="local-qwen",
+    )
 
 
 def _add_tool_call(session) -> None:
@@ -176,6 +193,8 @@ def _add_record(
     response_content_type: str = "application/json",
     is_stream: bool = False,
     has_tool_calls: bool = False,
+    upstream_model: str | None = None,
+    model_route: str | None = None,
 ) -> None:
     request_body = json.dumps(request_payload).encode("utf-8")
     response_body = (
@@ -193,6 +212,8 @@ def _add_record(
         query_string="",
         endpoint="/v1/chat/completions",
         model=request_payload.get("model"),
+        upstream_model=upstream_model,
+        model_route=model_route,
         upstream_url="http://localhost:8000/v1/chat/completions",
         request_headers_json=compact_json({"content-type": "application/json"}),
         request_body=request_body,
