@@ -4,6 +4,7 @@ import json
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from sqlite3 import Connection as SQLiteConnection
 
@@ -13,8 +14,10 @@ from sqlalchemy import (
     ForeignKey,
     Integer,
     LargeBinary,
+    Numeric,
     String,
     Text,
+    UniqueConstraint,
     create_engine,
     event,
     inspect,
@@ -31,9 +34,54 @@ from sqlalchemy.orm import (
     sessionmaker,
 )
 
-from llm_observe_proxy.config import EXPOSED_INCOMING_HOST, ModelRoute, Settings, parse_model_routes
+from llm_observe_proxy.config import (
+    EXPOSED_INCOMING_HOST,
+    ModelRoute,
+    Settings,
+    normalize_provider_slug,
+    normalize_provider_url,
+    parse_model_routes,
+)
 
 MODEL_ROUTES_SETTING_KEY = "model_routes_json"
+DEFAULT_PRICING_SOURCE = "Seeded from official standard paid text pricing checked on 2026-05-03."
+DEFAULT_MODEL_PROVIDERS = (
+    {
+        "slug": "openai",
+        "name": "OpenAI",
+        "upstream_url": "https://api.openai.com/v1",
+        "currency": "USD",
+    },
+    {
+        "slug": "anthropic",
+        "name": "Anthropic",
+        "upstream_url": "https://api.anthropic.com/v1",
+        "currency": "USD",
+    },
+    {
+        "slug": "google",
+        "name": "Google Gemini",
+        "upstream_url": "https://generativelanguage.googleapis.com/v1beta/openai",
+        "currency": "USD",
+    },
+)
+DEFAULT_MODEL_PRICES = (
+    ("openai", "gpt-5.5", "GPT-5.5", "5.00", "30.00"),
+    ("openai", "gpt-5.5-pro", "GPT-5.5 Pro", "30.00", "180.00"),
+    ("openai", "gpt-5.4", "GPT-5.4", "2.50", "15.00"),
+    ("openai", "gpt-5.4-mini", "GPT-5.4 Mini", "0.75", "4.50"),
+    ("openai", "gpt-5.4-nano", "GPT-5.4 Nano", "0.20", "1.25"),
+    ("openai", "gpt-5.4-pro", "GPT-5.4 Pro", "30.00", "180.00"),
+    ("anthropic", "claude-opus-4-7", "Claude Opus 4.7", "5.00", "25.00"),
+    ("anthropic", "claude-opus-4-6", "Claude Opus 4.6", "5.00", "25.00"),
+    ("anthropic", "claude-sonnet-4-6", "Claude Sonnet 4.6", "3.00", "15.00"),
+    ("anthropic", "claude-haiku-4-5", "Claude Haiku 4.5", "1.00", "5.00"),
+    ("google", "gemini-3.1-pro-preview", "Gemini 3.1 Pro Preview", "2.00", "12.00"),
+    ("google", "gemini-3-flash-preview", "Gemini 3 Flash Preview", "0.50", "3.00"),
+    ("google", "gemini-2.5-pro", "Gemini 2.5 Pro", "1.25", "10.00"),
+    ("google", "gemini-2.5-flash", "Gemini 2.5 Flash", "0.30", "2.50"),
+    ("google", "gemini-2.5-flash-lite", "Gemini 2.5 Flash-Lite", "0.10", "0.40"),
+)
 
 
 def _now() -> datetime:
@@ -93,6 +141,29 @@ class RequestRecord(Base):
     has_images: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     has_tool_calls: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    billing_provider_slug: Mapped[str | None] = mapped_column(
+        String(64),
+        nullable=True,
+        index=True,
+    )
+    billing_provider_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    billing_model: Mapped[str | None] = mapped_column(String(256), nullable=True, index=True)
+    billing_input_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    billing_output_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    billing_total_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    billing_input_cost_usd: Mapped[Decimal | None] = mapped_column(
+        Numeric(18, 8),
+        nullable=True,
+    )
+    billing_output_cost_usd: Mapped[Decimal | None] = mapped_column(
+        Numeric(18, 8),
+        nullable=True,
+    )
+    billing_total_cost_usd: Mapped[Decimal | None] = mapped_column(
+        Numeric(18, 8),
+        nullable=True,
+    )
+    pricing_snapshot_json: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     images: Mapped[list[ImageAsset]] = relationship(
         back_populates="record",
@@ -116,6 +187,53 @@ class ImageAsset(Base):
     data_base64: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     record: Mapped[RequestRecord] = relationship(back_populates="images")
+
+
+class ModelProvider(Base):
+    __tablename__ = "model_providers"
+
+    slug: Mapped[str] = mapped_column(String(64), primary_key=True)
+    name: Mapped[str] = mapped_column(String(128))
+    upstream_url: Mapped[str | None] = mapped_column(Text, nullable=True, unique=True)
+    currency: Mapped[str] = mapped_column(String(16), default="USD")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=_now,
+        onupdate=_now,
+    )
+
+    prices: Mapped[list[ModelPrice]] = relationship(
+        back_populates="provider",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+
+
+class ModelPrice(Base):
+    __tablename__ = "model_prices"
+    __table_args__ = (UniqueConstraint("provider_slug", "model", name="uq_provider_model"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    provider_slug: Mapped[str] = mapped_column(
+        ForeignKey("model_providers.slug", ondelete="CASCADE"),
+        index=True,
+    )
+    model: Mapped[str] = mapped_column(String(256), index=True)
+    aliases_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    display_name: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    input_usd_per_million: Mapped[Decimal] = mapped_column(Numeric(18, 6))
+    output_usd_per_million: Mapped[Decimal] = mapped_column(Numeric(18, 6))
+    active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=_now,
+        onupdate=_now,
+    )
+
+    provider: Mapped[ModelProvider] = relationship(back_populates="prices")
 
 
 class AppSetting(Base):
@@ -156,6 +274,7 @@ def create_session_factory(engine: Engine) -> SessionFactory:
 def init_db(engine: Engine) -> None:
     Base.metadata.create_all(engine)
     _ensure_sqlite_request_record_schema(engine)
+    seed_default_model_pricing(engine)
 
 
 @contextmanager
@@ -221,6 +340,163 @@ def set_incoming_server(session: Session, port: int, expose_all_ips: bool) -> No
     set_setting(session, "expose_all_ips", "true" if expose_all_ips else "false")
 
 
+def list_model_providers(session: Session) -> list[ModelProvider]:
+    return list(session.scalars(select(ModelProvider).order_by(ModelProvider.name)).all())
+
+
+def list_model_prices(session: Session) -> list[ModelPrice]:
+    return list(
+        session.scalars(
+            select(ModelPrice)
+            .join(ModelProvider)
+            .order_by(ModelProvider.name, ModelPrice.model)
+        ).all()
+    )
+
+
+def upsert_model_provider(
+    session: Session,
+    *,
+    slug: str,
+    name: str,
+    upstream_url: str = "",
+    currency: str = "USD",
+) -> ModelProvider:
+    provider_slug = normalize_provider_slug(slug)
+    if provider_slug is None:
+        raise ValueError("Provider slug is required.")
+
+    provider_name = name.strip()
+    if not provider_name:
+        raise ValueError("Provider name is required.")
+
+    provider_currency = (currency.strip() or "USD").upper()
+    if not provider_currency.isascii() or len(provider_currency) > 16:
+        raise ValueError("Provider currency must be a short ASCII value.")
+
+    normalized_url = normalize_provider_url(upstream_url)
+    if normalized_url:
+        existing = session.scalar(
+            select(ModelProvider).where(ModelProvider.upstream_url == normalized_url)
+        )
+        if existing is not None and existing.slug != provider_slug:
+            raise ValueError("Provider URL is already assigned to another provider.")
+
+    provider = session.get(ModelProvider, provider_slug)
+    if provider is None:
+        provider = ModelProvider(slug=provider_slug, name=provider_name)
+        session.add(provider)
+
+    provider.name = provider_name
+    provider.upstream_url = normalized_url
+    provider.currency = provider_currency
+    session.flush()
+    return provider
+
+
+def delete_model_provider(session: Session, slug: str) -> bool:
+    provider_slug = normalize_provider_slug(slug)
+    if provider_slug is None:
+        return False
+    provider = session.get(ModelProvider, provider_slug)
+    if provider is None:
+        return False
+    session.delete(provider)
+    return True
+
+
+def upsert_model_price(
+    session: Session,
+    *,
+    provider_slug: str,
+    model: str,
+    input_usd_per_million: object,
+    output_usd_per_million: object,
+    aliases: str | list[str] | tuple[str, ...] = "",
+    display_name: str = "",
+    active: bool = True,
+    notes: str = "",
+) -> ModelPrice:
+    resolved_provider_slug = normalize_provider_slug(provider_slug)
+    if resolved_provider_slug is None:
+        raise ValueError("Provider is required.")
+    provider = session.get(ModelProvider, resolved_provider_slug)
+    if provider is None:
+        raise ValueError("Provider was not found.")
+
+    resolved_model = model.strip()
+    if not resolved_model:
+        raise ValueError("Model is required.")
+
+    input_rate = _decimal_rate(input_usd_per_million, "Input price")
+    output_rate = _decimal_rate(output_usd_per_million, "Output price")
+    price = session.scalar(
+        select(ModelPrice).where(
+            ModelPrice.provider_slug == resolved_provider_slug,
+            ModelPrice.model == resolved_model,
+        )
+    )
+    if price is None:
+        price = ModelPrice(provider_slug=resolved_provider_slug, model=resolved_model)
+        session.add(price)
+
+    price.display_name = display_name.strip() or None
+    price.aliases_json = _aliases_json(aliases)
+    price.input_usd_per_million = input_rate
+    price.output_usd_per_million = output_rate
+    price.active = active
+    price.notes = notes.strip() or None
+    session.flush()
+    return price
+
+
+def delete_model_price(session: Session, provider_slug: str, model: str) -> bool:
+    resolved_provider_slug = normalize_provider_slug(provider_slug)
+    resolved_model = model.strip()
+    if resolved_provider_slug is None or not resolved_model:
+        return False
+    price = session.scalar(
+        select(ModelPrice).where(
+            ModelPrice.provider_slug == resolved_provider_slug,
+            ModelPrice.model == resolved_model,
+        )
+    )
+    if price is None:
+        return False
+    session.delete(price)
+    return True
+
+
+def seed_default_model_pricing(engine: Engine) -> None:
+    with Session(engine) as session:
+        for provider_data in DEFAULT_MODEL_PROVIDERS:
+            if session.get(ModelProvider, provider_data["slug"]) is None:
+                session.add(ModelProvider(**provider_data))
+        session.flush()
+
+        for provider_slug, model, display_name, input_rate, output_rate in DEFAULT_MODEL_PRICES:
+            existing = session.scalar(
+                select(ModelPrice).where(
+                    ModelPrice.provider_slug == provider_slug,
+                    ModelPrice.model == model,
+                )
+            )
+            if existing is not None:
+                continue
+            session.add(
+                ModelPrice(
+                    provider_slug=provider_slug,
+                    model=model,
+                    display_name=display_name,
+                    input_usd_per_million=Decimal(input_rate),
+                    output_usd_per_million=Decimal(output_rate),
+                    active=True,
+                    notes=DEFAULT_PRICING_SOURCE,
+                )
+            )
+        session.commit()
+
+
 def get_ui_model_routes(session: Session) -> tuple[ModelRoute, ...]:
     value = get_setting(session, MODEL_ROUTES_SETTING_KEY)
     if not value:
@@ -234,6 +510,7 @@ def get_ui_model_routes(session: Session) -> tuple[ModelRoute, ...]:
             model=route.model,
             upstream_url=route.upstream_url,
             upstream_model=route.upstream_model,
+            provider_slug=route.provider_slug,
             api_key_env=route.api_key_env,
         )
         for route in routes
@@ -357,6 +634,46 @@ def _ensure_sqlite_request_record_schema(engine: Engine) -> None:
             connection.execute(
                 text("ALTER TABLE request_records ADD COLUMN model_route VARCHAR(256)")
             )
+        if "billing_provider_slug" not in columns:
+            connection.execute(
+                text("ALTER TABLE request_records ADD COLUMN billing_provider_slug VARCHAR(64)")
+            )
+        if "billing_provider_name" not in columns:
+            connection.execute(
+                text("ALTER TABLE request_records ADD COLUMN billing_provider_name VARCHAR(128)")
+            )
+        if "billing_model" not in columns:
+            connection.execute(
+                text("ALTER TABLE request_records ADD COLUMN billing_model VARCHAR(256)")
+            )
+        if "billing_input_tokens" not in columns:
+            connection.execute(
+                text("ALTER TABLE request_records ADD COLUMN billing_input_tokens INTEGER")
+            )
+        if "billing_output_tokens" not in columns:
+            connection.execute(
+                text("ALTER TABLE request_records ADD COLUMN billing_output_tokens INTEGER")
+            )
+        if "billing_total_tokens" not in columns:
+            connection.execute(
+                text("ALTER TABLE request_records ADD COLUMN billing_total_tokens INTEGER")
+            )
+        if "billing_input_cost_usd" not in columns:
+            connection.execute(
+                text("ALTER TABLE request_records ADD COLUMN billing_input_cost_usd NUMERIC")
+            )
+        if "billing_output_cost_usd" not in columns:
+            connection.execute(
+                text("ALTER TABLE request_records ADD COLUMN billing_output_cost_usd NUMERIC")
+            )
+        if "billing_total_cost_usd" not in columns:
+            connection.execute(
+                text("ALTER TABLE request_records ADD COLUMN billing_total_cost_usd NUMERIC")
+            )
+        if "pricing_snapshot_json" not in columns:
+            connection.execute(
+                text("ALTER TABLE request_records ADD COLUMN pricing_snapshot_json TEXT")
+            )
         connection.execute(
             text(
                 "CREATE INDEX IF NOT EXISTS "
@@ -375,6 +692,19 @@ def _ensure_sqlite_request_record_schema(engine: Engine) -> None:
                 "ix_request_records_model_route ON request_records (model_route)"
             )
         )
+        connection.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS "
+                "ix_request_records_billing_provider_slug "
+                "ON request_records (billing_provider_slug)"
+            )
+        )
+        connection.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS "
+                "ix_request_records_billing_model ON request_records (billing_model)"
+            )
+        )
 
 
 def _set_ui_model_routes(session: Session, routes: list[ModelRoute]) -> None:
@@ -383,11 +713,44 @@ def _set_ui_model_routes(session: Session, routes: list[ModelRoute]) -> None:
             "model": route.model,
             "upstream_url": route.upstream_url,
             **({"upstream_model": route.upstream_model} if route.upstream_model else {}),
+            **({"provider_slug": route.provider_slug} if route.provider_slug else {}),
             **({"api_key_env": route.api_key_env} if route.api_key_env else {}),
         }
         for route in routes
     ]
     set_setting(session, MODEL_ROUTES_SETTING_KEY, json.dumps(payload, separators=(",", ":")))
+
+
+def _decimal_rate(value: object, label: str) -> Decimal:
+    try:
+        rate = Decimal(str(value).strip())
+    except (InvalidOperation, ValueError):
+        raise ValueError(f"{label} must be a valid number.") from None
+    if rate < 0:
+        raise ValueError(f"{label} must be zero or greater.")
+    return rate
+
+
+def _aliases_json(value: str | list[str] | tuple[str, ...]) -> str | None:
+    if isinstance(value, str):
+        aliases = [
+            alias.strip()
+            for chunk in value.splitlines()
+            for alias in chunk.split(",")
+            if alias.strip()
+        ]
+    else:
+        aliases = [alias.strip() for alias in value if isinstance(alias, str) and alias.strip()]
+
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for alias in aliases:
+        if alias not in seen:
+            deduped.append(alias)
+            seen.add(alias)
+    if not deduped:
+        return None
+    return json.dumps(deduped, ensure_ascii=False, separators=(",", ":"))
 
 
 def _duration_ms(started_at: datetime | None, ended_at: datetime | None) -> int | None:
