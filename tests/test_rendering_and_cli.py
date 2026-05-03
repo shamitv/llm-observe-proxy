@@ -4,9 +4,11 @@ import json
 import subprocess
 import sys
 
+import pytest
 from sqlalchemy import inspect, text
 
 from llm_observe_proxy import create_app
+from llm_observe_proxy.admin import _stream_token_usage
 from llm_observe_proxy.capture import extract_token_usage, has_tool_payload
 from llm_observe_proxy.cli import resolve_bind
 from llm_observe_proxy.config import (
@@ -69,6 +71,22 @@ def test_renderer_modes_for_json_text_markdown_tool_and_sse() -> None:
     assert "data:" in sse_render.text
 
 
+def test_renderer_text_mode_does_not_parse_sse_events(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fail_decode(_body: bytes | None):
+        raise AssertionError("text mode should not parse SSE events")
+
+    monkeypatch.setattr("llm_observe_proxy.rendering.decode_sse_json_events", fail_decode)
+
+    rendered = render_payload(
+        b'data: {"choices":[{"delta":{"content":"hi"}}]}\n\ndata: [DONE]\n\n',
+        "text/event-stream",
+        "text",
+    )
+
+    assert rendered.mode == "text"
+    assert "data:" in rendered.text
+
+
 def test_renderer_ignores_non_string_type_fields_in_nested_json() -> None:
     request_body = {
         "model": "gpt-test",
@@ -110,6 +128,27 @@ def test_extract_token_usage_supports_chat_responses_and_responses_api() -> None
     assert responses_usage.input_tokens == 8
     assert responses_usage.output_tokens == 4
     assert responses_usage.total_tokens == 12
+
+
+def test_stream_token_usage_reads_final_sse_usage_event(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fail_decode(_body: bytes | None):
+        raise AssertionError("stream usage should use targeted final-event parsing")
+
+    monkeypatch.setattr("llm_observe_proxy.admin.decode_sse_json_events", fail_decode)
+    body = b"".join(
+        [
+            b'data: {"choices":[{"delta":{"content":"hello"}}]}\n\n',
+            b'data: {"choices":[],"usage":{"prompt_tokens":1000,'
+            b'"completion_tokens":25,"total_tokens":1025}}\n\n',
+            b"data: [DONE]\n\n",
+        ]
+    )
+
+    usage = _stream_token_usage(body)
+
+    assert usage.input_tokens == 1000
+    assert usage.output_tokens == 25
+    assert usage.total_tokens == 1025
 
 
 def test_tool_detector_ignores_non_string_type_fields() -> None:

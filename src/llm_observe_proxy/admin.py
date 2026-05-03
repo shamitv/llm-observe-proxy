@@ -15,7 +15,12 @@ from jinja2 import Undefined, pass_context
 from sqlalchemy import desc, func, select
 from starlette.templating import Jinja2Templates
 
-from llm_observe_proxy.capture import decode_json_bytes, decode_sse_json_events, extract_token_usage
+from llm_observe_proxy.capture import (
+    ExtractedTokenUsage,
+    decode_json_bytes,
+    decode_sse_json_events,
+    extract_token_usage,
+)
 from llm_observe_proxy.database import (
     RequestRecord,
     SessionFactory,
@@ -153,6 +158,14 @@ TEST_PROMPT_DEFAULT = "Reply with a short upstream connectivity check."
 TEST_IMAGE_DATA_URL = (
     "data:image/png;base64,"
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII="
+)
+STREAM_USAGE_MARKERS = (
+    b'"usage"',
+    b'"input_tokens"',
+    b'"prompt_tokens"',
+    b'"output_tokens"',
+    b'"completion_tokens"',
+    b'"total_tokens"',
 )
 
 
@@ -683,10 +696,42 @@ def _record_list_item(record: RequestRecord) -> dict[str, object]:
 
 def _record_token_usage(record: RequestRecord):
     if record.is_stream:
-        payload = decode_sse_json_events(record.response_body)
+        return _stream_token_usage(record.response_body)
     else:
         payload = decode_json_bytes(record.response_body)
     return extract_token_usage(payload)
+
+
+def _stream_token_usage(body: bytes | None) -> ExtractedTokenUsage:
+    if not body or not _body_may_contain_usage(body):
+        return ExtractedTokenUsage()
+
+    usage_index = max(body.rfind(marker) for marker in STREAM_USAGE_MARKERS)
+    data_index = body.rfind(b"data:", 0, usage_index)
+    if data_index >= 0:
+        event_end = body.find(b"\n\n", usage_index)
+        if event_end < 0:
+            event_end = len(body)
+        event = body[data_index:event_end]
+        try:
+            text = event.decode("utf-8")
+            data = "\n".join(
+                line.removeprefix("data:").strip()
+                for line in text.splitlines()
+                if line.startswith("data:")
+            )
+            if data and data != "[DONE]":
+                return extract_token_usage(json.loads(data))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            pass
+
+    return extract_token_usage(decode_sse_json_events(body))
+
+
+def _body_may_contain_usage(body: bytes | None) -> bool:
+    if not body:
+        return False
+    return any(marker in body for marker in STREAM_USAGE_MARKERS)
 
 
 def _record_detail(record: RequestRecord) -> dict[str, object]:
