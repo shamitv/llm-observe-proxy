@@ -101,6 +101,128 @@ def test_settings_renders_model_routes_without_secret_values(
     assert "direct-secret" not in response.text
 
 
+def test_settings_manages_ui_model_routes(
+    proxy_client: TestClient,
+    proxy_app: FastAPI,
+) -> None:
+    response = proxy_client.post(
+        "/admin/settings/model-routes",
+        data={
+            "model": "local-ui",
+            "upstream_url": ROUTE_UPSTREAM_URL,
+            "upstream_model": "ui-upstream",
+            "api_key_env": "UI_ROUTE_KEY",
+            "api_key": "direct-secret",
+        },
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    settings = proxy_client.get("/admin/settings")
+    assert "local-ui" in settings.text
+    assert "ui-upstream" in settings.text
+    assert "UI_ROUTE_KEY" in settings.text
+    assert "direct-secret" not in settings.text
+    assert "Settings" in settings.text
+
+    response = proxy_client.post(
+        "/admin/settings/model-routes",
+        data={
+            "model": "local-ui",
+            "upstream_url": ROUTE_UPSTREAM_URL,
+            "upstream_model": "ui-updated",
+            "api_key_env": "",
+        },
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    updated = proxy_client.get("/admin/settings")
+    assert "ui-updated" in updated.text
+    assert "ui-upstream" not in updated.text
+
+    response = proxy_client.post(
+        "/admin/settings/model-routes/delete",
+        data={"model": "local-ui"},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    deleted = proxy_client.get("/admin/settings")
+    assert "local-ui" not in deleted.text
+
+    proxy_client.post(
+        "/v1/chat/completions",
+        json={"model": "local-ui", "messages": [{"role": "user", "content": "hello"}]},
+    )
+    with proxy_app.state.session_factory() as session:
+        record = session.scalars(select(RequestRecord)).one()
+        assert record.model_route is None
+
+
+def test_settings_validates_ui_model_routes_against_startup_config(tmp_path: Path) -> None:
+    app = _create_model_route_app(
+        tmp_path,
+        ModelRoute(model="locked-model", upstream_url=ROUTE_UPSTREAM_URL),
+    )
+
+    with TestClient(app) as client:
+        blank = client.post(
+            "/admin/settings/model-routes",
+            data={"model": "   ", "upstream_url": ROUTE_UPSTREAM_URL},
+        )
+        invalid_url = client.post(
+            "/admin/settings/model-routes",
+            data={"model": "new-model", "upstream_url": "http://localhost:8080"},
+        )
+        duplicate = client.post(
+            "/admin/settings/model-routes",
+            data={"model": "locked-model", "upstream_url": ROUTE_UPSTREAM_URL},
+        )
+        delete_locked = client.post(
+            "/admin/settings/model-routes/delete",
+            data={"model": "locked-model"},
+        )
+
+    assert blank.status_code == 400
+    assert "Model route model is required." in blank.text
+    assert invalid_url.status_code == 400
+    assert "Upstream URL must point to a /v1 base URL." in invalid_url.text
+    assert duplicate.status_code == 400
+    assert "Model route already exists in startup configuration." in duplicate.text
+    assert delete_locked.status_code == 400
+    assert "Startup configuration routes cannot be deleted from the UI." in delete_locked.text
+    assert "Locked" in delete_locked.text
+
+
+def test_ui_model_routes_persist_across_app_restart(tmp_path: Path) -> None:
+    db_path = tmp_path / "ui-routes.sqlite3"
+    settings = Settings(
+        database_url=f"sqlite:///{db_path.as_posix()}",
+        upstream_url=GLOBAL_UPSTREAM_URL,
+    )
+
+    with TestClient(create_app(settings)) as client:
+        response = client.post(
+            "/admin/settings/model-routes",
+            data={
+                "model": "persisted-ui",
+                "upstream_url": ROUTE_UPSTREAM_URL,
+                "upstream_model": "persisted-upstream",
+            },
+            follow_redirects=False,
+        )
+
+    assert response.status_code == 303
+
+    with TestClient(create_app(settings)) as client:
+        page = client.get("/admin/settings")
+
+    assert page.status_code == 200
+    assert "persisted-ui" in page.text
+    assert "persisted-upstream" in page.text
+
+
 def test_settings_test_upstream_uses_configured_model_route(
     tmp_path: Path,
     fake_upstream: Any,
@@ -149,6 +271,34 @@ def test_settings_test_upstream_falls_back_for_unknown_model(
     assert response.status_code == 200
     assert "global fallback" in response.text
     assert fake_upstream.last_request["body"]["model"] == "unknown"
+
+
+def test_settings_test_upstream_uses_ui_model_route(
+    proxy_client: TestClient,
+    fake_upstream: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("UI_ROUTE_KEY", "ui-secret")
+    proxy_client.post(
+        "/admin/settings/model-routes",
+        data={
+            "model": "local-ui",
+            "upstream_url": ROUTE_UPSTREAM_URL,
+            "upstream_model": "ui-upstream",
+            "api_key_env": "UI_ROUTE_KEY",
+        },
+    )
+
+    response = proxy_client.post(
+        "/admin/settings/test-upstream",
+        data={"test_kind": "simple", "model": "local-ui", "prompt": "check ui route"},
+    )
+
+    assert response.status_code == 200
+    assert "local-ui" in response.text
+    assert "ui-upstream" in response.text
+    assert fake_upstream.last_request["body"]["model"] == "ui-upstream"
+    assert fake_upstream.last_request["headers"]["authorization"] == "Bearer ui-secret"
 
 
 def test_request_browser_and_detail_show_route_metadata(
