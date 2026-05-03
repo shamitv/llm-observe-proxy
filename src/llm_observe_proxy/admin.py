@@ -6,7 +6,6 @@ from collections import Counter
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
 
 import httpx
 from fastapi import APIRouter, Form, Query, Request
@@ -21,6 +20,7 @@ from llm_observe_proxy.capture import (
     decode_sse_json_events,
     extract_token_usage,
 )
+from llm_observe_proxy.config import normalize_upstream_url
 from llm_observe_proxy.database import (
     RequestRecord,
     SessionFactory,
@@ -39,6 +39,12 @@ from llm_observe_proxy.database import (
     start_task_run,
 )
 from llm_observe_proxy.rendering import escape_preview, render_payload
+from llm_observe_proxy.routing import (
+    build_forward_body,
+    build_forward_headers,
+    model_route_display,
+    select_model_route,
+)
 
 TEMPLATE_DIR = Path(__file__).parent / "templates"
 
@@ -446,16 +452,34 @@ async def test_upstream(
     prompt: str = Form(TEST_PROMPT_DEFAULT),
 ) -> HTMLResponse:
     session_factory: SessionFactory = request.app.state.session_factory
-    with session_scope(session_factory) as session:
-        upstream_url = get_upstream_url(session, request.app.state.settings)
 
     try:
         payload = build_upstream_test_payload(test_kind, model, prompt)
     except ValueError as exc:
         return await _settings_with_error(request, str(exc))
 
+    settings = request.app.state.settings
+    routing_decision = select_model_route(payload, settings)
+    request_body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    forward_body = build_forward_body(request_body, payload, routing_decision)
+    forward_headers = build_forward_headers(
+        {"content-type": "application/json"},
+        routing_decision,
+        set(),
+    )
+
+    with session_scope(session_factory) as session:
+        upstream_url = routing_decision.upstream_base_url or get_upstream_url(session, settings)
+
     chat_url = f"{upstream_url.rstrip('/')}/chat/completions"
-    result = await _send_upstream_test(chat_url, payload, test_kind)
+    result = await _send_upstream_test(
+        chat_url,
+        forward_body,
+        forward_headers,
+        test_kind,
+        routing_decision.model_route,
+        routing_decision.upstream_model,
+    )
 
     days = 30
     cutoff = datetime.now(UTC) - timedelta(days=days)
@@ -499,16 +523,6 @@ async def trim_records(
         for record in records:
             session.delete(record)
     return RedirectResponse(f"/admin/settings?days={days}&trimmed={deleted}", status_code=303)
-
-
-def normalize_upstream_url(value: str) -> str:
-    normalized = value.strip().rstrip("/")
-    parsed = urlparse(normalized)
-    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-        raise ValueError("Upstream URL must be an absolute http(s) URL.")
-    if not normalized.endswith("/v1"):
-        raise ValueError("Upstream URL must point to a /v1 base URL.")
-    return normalized
 
 
 def build_upstream_test_payload(test_kind: str, model: str, prompt: str) -> dict[str, Any]:
@@ -561,13 +575,16 @@ def build_upstream_test_payload(test_kind: str, model: str, prompt: str) -> dict
 
 async def _send_upstream_test(
     chat_url: str,
-    payload: dict[str, Any],
+    body: bytes,
+    headers: dict[str, str],
     test_kind: str,
+    model_route: str | None,
+    upstream_model: str | None,
 ) -> dict[str, Any]:
     started = datetime.now(UTC)
     try:
         async with httpx.AsyncClient(timeout=30) as client:
-            response = await client.post(chat_url, json=payload)
+            response = await client.post(chat_url, content=body, headers=headers)
     except httpx.HTTPError as exc:
         return {
             "kind": test_kind,
@@ -575,6 +592,8 @@ async def _send_upstream_test(
             "ok": False,
             "error": str(exc),
             "duration_ms": int((datetime.now(UTC) - started).total_seconds() * 1000),
+            "model_route": model_route,
+            "upstream_model": upstream_model,
         }
 
     body = response.text
@@ -590,6 +609,8 @@ async def _send_upstream_test(
         "content_type": response.headers.get("content-type", ""),
         "duration_ms": int((datetime.now(UTC) - started).total_seconds() * 1000),
         "body": body[:6000],
+        "model_route": model_route,
+        "upstream_model": upstream_model,
     }
 
 
@@ -607,6 +628,9 @@ def _settings_context(
 ) -> dict[str, Any]:
     return {
         "upstream_url": get_upstream_url(session, request.app.state.settings),
+        "model_routes": [
+            model_route_display(route) for route in request.app.state.settings.model_routes
+        ],
         "incoming_host": get_incoming_host(session, request.app.state.settings),
         "incoming_port": get_incoming_port(session, request.app.state.settings),
         "expose_all_ips": get_expose_all_ips(session, request.app.state.settings),
@@ -677,6 +701,8 @@ def _record_list_item(record: RequestRecord) -> dict[str, object]:
         "method": record.method,
         "endpoint": record.endpoint,
         "model": record.model or "unknown",
+        "upstream_model": record.upstream_model,
+        "model_route": record.model_route,
         "status": record.response_status,
         "duration_ms": record.duration_ms,
         "is_stream": record.is_stream,
@@ -744,6 +770,8 @@ def _record_detail(record: RequestRecord) -> dict[str, object]:
         "query_string": record.query_string,
         "endpoint": record.endpoint,
         "model": record.model,
+        "upstream_model": record.upstream_model,
+        "model_route": record.model_route,
         "upstream_url": record.upstream_url,
         "request_headers_json": record.request_headers_json,
         "request_body": record.request_body,

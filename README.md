@@ -24,6 +24,8 @@ Published package: https://pypi.org/project/llm-observe-proxy/
 - Request image gallery for data URL and remote image references.
 - Settings UI for upstream URL, incoming host/port preferences, all-IPs exposure, and
   retention trimming.
+- Config-driven model routes for sending selected proxy-facing model names to different
+  upstream `/v1` endpoints with optional upstream model rewrites and API key injection.
 - No authentication by default, intended for local or trusted development networks.
 
 ## Install
@@ -111,8 +113,53 @@ Set the upstream from the CLI:
 llm-observe-proxy --upstream-url http://localhost:8000/v1
 ```
 
+Load model-specific upstream routes from a JSON file:
+
+```powershell
+llm-observe-proxy --models-file .\models.json
+```
+
 You can also change the upstream URL and next-start incoming host/port settings from
 `/admin/settings`.
+
+## Model Routes
+
+Model routes let one proxy endpoint send different client-facing models to different
+OpenAI-compatible upstreams. Routes match the request payload's top-level `model`
+exactly. Unknown models, requests without a JSON model, and generic calls such as
+`GET /v1/models` use the global upstream fallback.
+
+Example route file:
+
+```json
+[
+  {
+    "model": "local-qwen",
+    "upstream_url": "http://localhost:8000/v1",
+    "upstream_model": "qwen3-coder-30b"
+  },
+  {
+    "model": "openai-mini",
+    "upstream_url": "https://api.openai.com/v1",
+    "upstream_model": "gpt-4.1-mini",
+    "api_key_env": "OPENAI_API_KEY"
+  }
+]
+```
+
+Run with the file:
+
+```powershell
+$env:OPENAI_API_KEY = "sk-..."
+llm-observe-proxy --models-file .\models.json
+```
+
+You can also set `LLM_OBSERVE_MODELS_JSON` to the same JSON array. If both
+`LLM_OBSERVE_MODELS_FILE` and `LLM_OBSERVE_MODELS_JSON` are set, the file wins.
+
+When a route has an API key, the proxy injects `Authorization: Bearer <key>` for the
+upstream request. Captured request headers remain the original client headers; injected
+keys are not stored or shown in the admin UI. Prefer `api_key_env` for shared configs.
 
 ## Runs
 
@@ -182,6 +229,8 @@ Environment variables:
 | `LLM_OBSERVE_INCOMING_PORT` | `8080` | Bind port. |
 | `LLM_OBSERVE_EXPOSE_ALL_IPS` | `false` | Bind to `0.0.0.0` when true. |
 | `LLM_OBSERVE_UPSTREAM_URL` | `http://localhost:8000/v1` | Upstream OpenAI-compatible `/v1` base URL. |
+| `LLM_OBSERVE_MODELS_JSON` | unset | JSON array of model route objects. |
+| `LLM_OBSERVE_MODELS_FILE` | unset | Path to a JSON file containing model routes. Wins over `LLM_OBSERVE_MODELS_JSON`. |
 | `LLM_OBSERVE_LOG_LEVEL` | `INFO` | Uvicorn log level. |
 
 Incoming host/port settings saved in the UI are used on the next process startup; they do

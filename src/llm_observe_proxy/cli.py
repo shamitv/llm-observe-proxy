@@ -32,6 +32,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--reload", action="store_true", help="Enable Uvicorn reload.")
     parser.add_argument("--database-url", help="SQLite SQLAlchemy URL.")
     parser.add_argument("--upstream-url", help="Default upstream /v1 URL.")
+    parser.add_argument("--models-file", help="JSON file containing configured model routes.")
     return parser
 
 
@@ -43,6 +44,8 @@ def main() -> None:
         os.environ["LLM_OBSERVE_DATABASE_URL"] = args.database_url
     if args.upstream_url:
         os.environ["LLM_OBSERVE_UPSTREAM_URL"] = args.upstream_url
+    if args.models_file:
+        os.environ["LLM_OBSERVE_MODELS_FILE"] = args.models_file
 
     settings = get_settings()
     host, port = resolve_bind(args.host, args.port, args.expose_all_ips, settings)

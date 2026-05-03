@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -10,7 +11,12 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select
 
 from llm_observe_proxy.admin import templates
+from llm_observe_proxy.app import create_app
+from llm_observe_proxy.config import ModelRoute, Settings
 from llm_observe_proxy.database import ImageAsset, RequestRecord, TaskRun
+
+GLOBAL_UPSTREAM_URL = "http://localhost:8080/v1"
+ROUTE_UPSTREAM_URL = "http://127.0.0.1:8080/v1"
 
 
 def test_request_browser_filters_and_markdown_renderer(proxy_client: TestClient) -> None:
@@ -58,6 +64,121 @@ def test_settings_updates_upstream_url(proxy_client: TestClient, proxy_app: Fast
     with proxy_app.state.session_factory() as session:
         record = session.scalars(select(RequestRecord)).one()
         assert record.upstream_url == "http://localhost:8080/v1/chat/completions"
+
+
+def test_settings_renders_model_routes_without_secret_values(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("MISSING_ROUTE_KEY", raising=False)
+    app = _create_model_route_app(
+        tmp_path,
+        ModelRoute(
+            model="local-qwen",
+            upstream_url=ROUTE_UPSTREAM_URL,
+            upstream_model="qwen3-coder-30b",
+            api_key="direct-secret",
+        ),
+        ModelRoute(
+            model="openai-mini",
+            upstream_url="https://api.openai.com/v1",
+            upstream_model="gpt-4.1-mini",
+            api_key_env="MISSING_ROUTE_KEY",
+        ),
+    )
+
+    with TestClient(app) as client:
+        response = client.get("/admin/settings")
+
+    assert response.status_code == 200
+    assert "Model Routes" in response.text
+    assert "local-qwen" in response.text
+    assert "qwen3-coder-30b" in response.text
+    assert "configured" in response.text
+    assert "openai-mini" in response.text
+    assert "MISSING_ROUTE_KEY" in response.text
+    assert "missing" in response.text
+    assert "direct-secret" not in response.text
+
+
+def test_settings_test_upstream_uses_configured_model_route(
+    tmp_path: Path,
+    fake_upstream: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ROUTE_KEY", "route-secret")
+    app = _create_model_route_app(
+        tmp_path,
+        ModelRoute(
+            model="local-qwen",
+            upstream_url=ROUTE_UPSTREAM_URL,
+            upstream_model="qwen3-coder-30b",
+            api_key_env="ROUTE_KEY",
+        ),
+    )
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/admin/settings/test-upstream",
+            data={"test_kind": "simple", "model": "local-qwen", "prompt": "check route"},
+        )
+
+    assert response.status_code == 200
+    assert "local-qwen" in response.text
+    assert "qwen3-coder-30b" in response.text
+    assert fake_upstream.last_request["path"] == "/v1/chat/completions"
+    assert fake_upstream.last_request["body"]["model"] == "qwen3-coder-30b"
+    assert fake_upstream.last_request["headers"]["authorization"] == "Bearer route-secret"
+
+
+def test_settings_test_upstream_falls_back_for_unknown_model(
+    tmp_path: Path,
+    fake_upstream: Any,
+) -> None:
+    app = _create_model_route_app(
+        tmp_path,
+        ModelRoute(model="configured", upstream_url=ROUTE_UPSTREAM_URL),
+    )
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/admin/settings/test-upstream",
+            data={"test_kind": "simple", "model": "unknown", "prompt": "check fallback"},
+        )
+
+    assert response.status_code == 200
+    assert "global fallback" in response.text
+    assert fake_upstream.last_request["body"]["model"] == "unknown"
+
+
+def test_request_browser_and_detail_show_route_metadata(
+    tmp_path: Path,
+    fake_upstream: Any,
+) -> None:
+    app = _create_model_route_app(
+        tmp_path,
+        ModelRoute(
+            model="local-qwen",
+            upstream_url=ROUTE_UPSTREAM_URL,
+            upstream_model="qwen3-coder-30b",
+        ),
+    )
+
+    with TestClient(app) as client:
+        client.post(
+            "/v1/chat/completions",
+            json={"model": "local-qwen", "messages": [{"role": "user", "content": "hello"}]},
+        )
+        browser = client.get("/admin")
+        detail = client.get("/admin/requests/1")
+
+    assert fake_upstream.last_request["body"]["model"] == "qwen3-coder-30b"
+    assert browser.status_code == 200
+    assert "route-badge" in browser.text
+    assert "local-qwen" in browser.text
+    assert detail.status_code == 200
+    assert "Upstream Model <strong>qwen3-coder-30b</strong>" in detail.text
+    assert "Route <strong>local-qwen</strong>" in detail.text
 
 
 def test_runs_require_name_and_manage_active_state(
@@ -340,3 +461,14 @@ def test_trim_deletes_records_older_than_requested_days(
         images = session.scalars(select(ImageAsset)).all()
         assert [record.id for record in records] == [1]
         assert images == []
+
+
+def _create_model_route_app(tmp_path: Path, *routes: ModelRoute) -> FastAPI:
+    db_path = tmp_path / "admin-model-routes.sqlite3"
+    return create_app(
+        Settings(
+            database_url=f"sqlite:///{db_path.as_posix()}",
+            upstream_url=GLOBAL_UPSTREAM_URL,
+            model_routes=routes,
+        )
+    )
