@@ -13,7 +13,7 @@ from sqlalchemy import select
 from llm_observe_proxy.admin import templates
 from llm_observe_proxy.app import create_app
 from llm_observe_proxy.config import ModelRoute, Settings
-from llm_observe_proxy.database import ImageAsset, RequestRecord, TaskRun
+from llm_observe_proxy.database import ImageAsset, ModelPrice, ModelProvider, RequestRecord, TaskRun
 
 GLOBAL_UPSTREAM_URL = "http://localhost:8080/v1"
 ROUTE_UPSTREAM_URL = "http://127.0.0.1:8080/v1"
@@ -111,6 +111,7 @@ def test_settings_manages_ui_model_routes(
             "model": "local-ui",
             "upstream_url": ROUTE_UPSTREAM_URL,
             "upstream_model": "ui-upstream",
+            "provider_slug": "openai",
             "api_key_env": "UI_ROUTE_KEY",
             "api_key": "direct-secret",
         },
@@ -121,6 +122,7 @@ def test_settings_manages_ui_model_routes(
     settings = proxy_client.get("/admin/settings")
     assert "local-ui" in settings.text
     assert "ui-upstream" in settings.text
+    assert "OpenAI" in settings.text
     assert "UI_ROUTE_KEY" in settings.text
     assert "direct-secret" not in settings.text
     assert "Settings" in settings.text
@@ -131,6 +133,7 @@ def test_settings_manages_ui_model_routes(
             "model": "local-ui",
             "upstream_url": ROUTE_UPSTREAM_URL,
             "upstream_model": "ui-updated",
+            "provider_slug": "openai",
             "api_key_env": "",
         },
         follow_redirects=False,
@@ -221,6 +224,89 @@ def test_ui_model_routes_persist_across_app_restart(tmp_path: Path) -> None:
     assert page.status_code == 200
     assert "persisted-ui" in page.text
     assert "persisted-upstream" in page.text
+
+
+def test_settings_manages_model_providers_and_prices(
+    proxy_client: TestClient,
+    proxy_app: FastAPI,
+) -> None:
+    settings = proxy_client.get("/admin/settings")
+    assert settings.status_code == 200
+    assert "Model Providers" in settings.text
+    assert "Model Pricing" in settings.text
+    assert "OpenAI" in settings.text
+    assert "gpt-5.4-mini" in settings.text
+
+    invalid_provider = proxy_client.post(
+        "/admin/settings/providers",
+        data={"slug": "Bad Slug", "name": "Bad", "upstream_url": "", "currency": "USD"},
+    )
+    assert invalid_provider.status_code == 400
+    assert "Provider slug must start" in invalid_provider.text
+
+    response = proxy_client.post(
+        "/admin/settings/providers",
+        data={
+            "slug": "custom",
+            "name": "Custom Gateway",
+            "upstream_url": "http://localhost:9000/v1/",
+            "currency": "USD",
+        },
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+
+    response = proxy_client.post(
+        "/admin/settings/model-prices",
+        data={
+            "provider_slug": "custom",
+            "model": "custom-large",
+            "display_name": "Custom Large",
+            "aliases": "custom-alias",
+            "input_usd_per_million": "1.25",
+            "output_usd_per_million": "5",
+            "active": "yes",
+            "notes": "Local contract",
+        },
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+
+    updated = proxy_client.get("/admin/settings")
+    assert "Custom Gateway" in updated.text
+    assert "http://localhost:9000/v1" in updated.text
+    assert "custom-large" in updated.text
+    assert "custom-alias" in updated.text
+    assert "$1.25" in updated.text
+    assert "$5.00" in updated.text
+
+    with proxy_app.state.session_factory() as session:
+        provider = session.get(ModelProvider, "custom")
+        price = session.scalars(
+            select(ModelPrice).where(
+                ModelPrice.provider_slug == "custom",
+                ModelPrice.model == "custom-large",
+            )
+        ).one()
+        assert provider.upstream_url == "http://localhost:9000/v1"
+        assert price.active is True
+
+    response = proxy_client.post(
+        "/admin/settings/model-prices/delete",
+        data={"provider_slug": "custom", "model": "custom-large"},
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+    response = proxy_client.post(
+        "/admin/settings/providers/delete",
+        data={"slug": "custom"},
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+
+    deleted = proxy_client.get("/admin/settings")
+    assert "custom-large" not in deleted.text
+    assert "Custom Gateway" not in deleted.text
 
 
 def test_settings_test_upstream_uses_configured_model_route(
@@ -441,6 +527,9 @@ def test_admin_formats_large_numbers_and_durations(
                 }
             }
         ).encode()
+        record.billing_input_tokens = 5_060_618
+        record.billing_output_tokens = 56_738
+        record.billing_total_tokens = 5_117_356
         session.commit()
 
     detail = proxy_client.get("/admin/runs/1")

@@ -19,6 +19,8 @@
 {% set current_incoming_port = incoming_port | default(8080, true) %}
 {% set current_expose_all_ips = expose_all_ips | default(false, true) %}
 {% set configured_model_routes = model_routes | default([], true) %}
+{% set configured_providers = providers | default([], true) %}
+{% set configured_model_prices = model_prices | default([], true) %}
 
 <section class="settings-grid">
   <form class="panel form-panel" method="post" action="/admin/settings/incoming">
@@ -63,6 +65,7 @@
             <th>Model</th>
             <th>Upstream</th>
             <th>Upstream Model</th>
+            <th>Provider</th>
             <th>API Key</th>
             <th>Actions</th>
           </tr>
@@ -78,6 +81,13 @@
             <td><code>{{ route.model }}</code></td>
             <td><code>{{ route.upstream_url }}</code></td>
             <td><code>{{ route.upstream_model }}</code></td>
+            <td>
+              {% if route.provider_slug %}
+              <span class="source-pill">{{ route.provider_name | default(route.provider_slug, true) }}</span>
+              {% else %}
+              <span class="muted">Auto</span>
+              {% endif %}
+            </td>
             <td>
               <span class="key-state key-state-{{ route.api_key_state | replace(' ', '-') }}">
                 {{ route.api_key_state }}
@@ -120,10 +130,158 @@
         <input name="upstream_model" placeholder="qwen3-coder-30b">
       </label>
       <label>
+        Provider
+        <select name="provider_slug">
+          <option value="">Auto by upstream URL</option>
+          {% for provider in configured_providers %}
+          <option value="{{ provider.slug }}">{{ provider.name }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>
         API Key Env
         <input name="api_key_env" placeholder="OPENAI_API_KEY">
       </label>
       <button class="button primary" type="submit">Save Route</button>
+    </form>
+  </article>
+
+  <article class="panel providers-panel">
+    <header>
+      <h2>Model Providers</h2>
+      <span>{{ configured_providers | length }} configured</span>
+    </header>
+    {% if configured_providers %}
+    <div class="table-shell compact-table">
+      <table class="model-routes-table">
+        <thead>
+          <tr>
+            <th>Slug</th>
+            <th>Name</th>
+            <th>Upstream URL</th>
+            <th>Currency</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for provider in configured_providers %}
+          <tr>
+            <td><code>{{ provider.slug }}</code></td>
+            <td>{{ provider.name }}</td>
+            <td><code>{{ provider.upstream_url | default('-', true) }}</code></td>
+            <td>{{ provider.currency }}</td>
+            <td>
+              <form method="post" action="/admin/settings/providers/delete">
+                <input type="hidden" name="slug" value="{{ provider.slug }}">
+                <button class="button danger compact-button" type="submit">Delete</button>
+              </form>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% endif %}
+    <form class="provider-form" method="post" action="/admin/settings/providers">
+      <label>
+        Slug
+        <input name="slug" placeholder="openai" required>
+      </label>
+      <label>
+        Name
+        <input name="name" placeholder="OpenAI" required>
+      </label>
+      <label>
+        Upstream URL
+        <input name="upstream_url" placeholder="https://api.openai.com/v1">
+      </label>
+      <label>
+        Currency
+        <input name="currency" value="USD" required>
+      </label>
+      <button class="button primary" type="submit">Save Provider</button>
+    </form>
+  </article>
+
+  <article class="panel prices-panel">
+    <header>
+      <h2>Model Pricing</h2>
+      <span>{{ configured_model_prices | length }} configured</span>
+    </header>
+    {% if configured_model_prices %}
+    <div class="table-shell compact-table">
+      <table class="model-routes-table">
+        <thead>
+          <tr>
+            <th>Provider</th>
+            <th>Model</th>
+            <th>Display Name</th>
+            <th>Input / 1M</th>
+            <th>Output / 1M</th>
+            <th>Aliases</th>
+            <th>Active</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for price in configured_model_prices %}
+          <tr>
+            <td>{{ price.provider_name }}</td>
+            <td><code>{{ price.model }}</code></td>
+            <td>{{ price.display_name | default('-', true) }}</td>
+            <td>{{ price.input_usd_per_million | usd }}</td>
+            <td>{{ price.output_usd_per_million | usd }}</td>
+            <td>{{ price.aliases | default('-', true) }}</td>
+            <td><span class="pill">{{ 'yes' if price.active else 'no' }}</span></td>
+            <td>
+              <form method="post" action="/admin/settings/model-prices/delete">
+                <input type="hidden" name="provider_slug" value="{{ price.provider_slug }}">
+                <input type="hidden" name="model" value="{{ price.model }}">
+                <button class="button danger compact-button" type="submit">Delete</button>
+              </form>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% endif %}
+    <form class="price-form" method="post" action="/admin/settings/model-prices">
+      <label>
+        Provider
+        <select name="provider_slug" required>
+          {% for provider in configured_providers %}
+          <option value="{{ provider.slug }}">{{ provider.name }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>
+        Model
+        <input name="model" placeholder="gpt-5.4-mini" required>
+      </label>
+      <label>
+        Display Name
+        <input name="display_name" placeholder="GPT-5.4 Mini">
+      </label>
+      <label>
+        Input USD / 1M
+        <input name="input_usd_per_million" placeholder="0.75" type="number" min="0" step="0.000001" required>
+      </label>
+      <label>
+        Output USD / 1M
+        <input name="output_usd_per_million" placeholder="4.50" type="number" min="0" step="0.000001" required>
+      </label>
+      <label>
+        Aliases
+        <input name="aliases" placeholder="alternate-model-id">
+      </label>
+      <label>
+        Notes
+        <input name="notes" placeholder="Standard paid text pricing">
+      </label>
+      <input type="hidden" name="active" value="no">
+      <label class="check"><input type="checkbox" name="active" value="yes" checked> Active</label>
+      <button class="button primary" type="submit">Save Price</button>
     </form>
   </article>
 

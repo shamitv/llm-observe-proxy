@@ -9,6 +9,7 @@
       <col class="col-duration">
       <col class="col-tps">
       <col class="col-tokens">
+      <col class="col-cost">
       <col class="col-signals">
       <col class="col-preview">
     </colgroup>
@@ -22,6 +23,7 @@
         <th>Duration</th>
         <th>TPS</th>
         <th>Tokens</th>
+        <th>Cost</th>
         <th>Signals</th>
         <th>Preview</th>
       </tr>
@@ -56,6 +58,12 @@
             <span><strong>{{ record.tokens.total | compact_number }}</strong><small>Total</small></span>
           </div>
         </td>
+        <td class="numeric">
+          <strong>{{ record.cost_usd | usd }}</strong>
+          {% if record.billing_provider %}
+          <span class="muted">{{ record.billing_provider }}</span>
+          {% endif %}
+        </td>
         <td class="signals">
           {% if record.is_stream %}<span>Stream</span>{% endif %}
           {% if record.has_images %}<span>Image</span>{% endif %}
@@ -65,7 +73,7 @@
         <td class="request-preview"><span>{{ record.preview | preview | safe }}</span></td>
       </tr>
       {% else %}
-      <tr><td colspan="{{ 10 if show_run else 9 }}" class="empty">No captured requests yet.</td></tr>
+      <tr><td colspan="{{ 11 if show_run else 10 }}" class="empty">No captured requests yet.</td></tr>
       {% endfor %}
     </tbody>
   </table>

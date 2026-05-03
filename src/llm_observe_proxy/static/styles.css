@@ -287,7 +287,7 @@ table {
 }
 
 .requests-table {
-  min-width: 1290px;
+  min-width: 1390px;
   table-layout: fixed;
 }
 
@@ -321,6 +321,10 @@ table {
 
 .requests-table .col-tokens {
   width: 170px;
+}
+
+.requests-table .col-cost {
+  width: 120px;
 }
 
 .requests-table .col-signals {
@@ -469,18 +473,33 @@ td:first-child a {
   margin-bottom: 18px;
 }
 
-.model-routes-panel {
+.model-routes-panel,
+.providers-panel,
+.prices-panel {
   grid-column: 1 / -1;
 }
 
-.model-route-form {
+.model-route-form,
+.provider-form,
+.price-form {
   display: grid;
-  grid-template-columns: minmax(140px, 1fr) minmax(220px, 1.4fr) minmax(160px, 1fr) minmax(150px, 1fr) auto;
   gap: 12px;
   align-items: end;
   border-top: 1px solid var(--line);
   margin-top: 14px;
   padding-top: 14px;
+}
+
+.model-route-form {
+  grid-template-columns: minmax(140px, 1fr) minmax(220px, 1.4fr) minmax(160px, 1fr) minmax(150px, 1fr) minmax(150px, 1fr) auto;
+}
+
+.provider-form {
+  grid-template-columns: minmax(120px, 0.8fr) minmax(180px, 1fr) minmax(240px, 1.5fr) minmax(90px, 0.5fr) auto;
+}
+
+.price-form {
+  grid-template-columns: minmax(150px, 1fr) minmax(170px, 1fr) minmax(170px, 1fr) minmax(120px, 0.8fr) minmax(120px, 0.8fr) minmax(160px, 1fr) minmax(190px, 1.1fr) auto auto;
 }
 
 .compact-table {
@@ -713,6 +732,8 @@ figcaption {
 @media (max-width: 1040px) {
   .toolbar,
   .model-route-form,
+  .provider-form,
+  .price-form,
   .run-start-form,
   .split,
   .settings-grid {

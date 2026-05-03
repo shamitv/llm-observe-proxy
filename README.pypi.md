@@ -14,18 +14,20 @@ Project repository: https://github.com/shamitv/llm-observe-proxy
 
 - OpenAI-compatible passthrough route: `ANY /v1/{path:path}`.
 - SQLite capture for request/response headers, bodies, status, timing, model, endpoint,
-  streaming state, tool-call signals, image assets, and errors.
-- Admin UI for searching and browsing captured traffic, including per-request output TPS.
+  streaming state, tool-call signals, image assets, cost snapshots, and errors.
+- Admin UI for searching and browsing captured traffic, including per-request output TPS
+  and estimated cost.
 - Runs for grouping all requests made during a task, benchmark, or repro workflow.
-- Run detail pages with request counts, LLM wall time, token totals, tokens/sec, model
-  and endpoint breakdowns, and signal/error counts.
+- Run detail pages with request counts, LLM wall time, token totals, cost totals,
+  tokens/sec, model and endpoint breakdowns, and signal/error counts.
 - Detail pages with response render modes for JSON, plain text, Markdown, tool calls,
   and raw SSE streams.
 - Request image gallery for data URL and remote image references.
-- Settings UI for upstream URL, model upstream routes, incoming host/port preferences,
-  all-IPs exposure, and retention trimming.
+- Settings UI for upstream URL, model upstream routes, model provider/pricing config,
+  incoming host/port preferences, all-IPs exposure, and retention trimming.
 - Config-driven model routes for sending selected proxy-facing model names to different
-  upstream `/v1` endpoints with optional upstream model rewrites and API key injection.
+  upstream `/v1` endpoints with optional upstream model rewrites, provider selection,
+  and API key injection.
 - No authentication by default, intended for local or trusted development networks.
 
 ## Install
@@ -111,8 +113,8 @@ Load model-specific upstream routes from a JSON file:
 llm-observe-proxy --models-file .\models.json
 ```
 
-You can also change the upstream URL, model upstream routes, and next-start incoming
-host/port settings from `/admin/settings`.
+You can also change the upstream URL, model upstream routes, model provider pricing,
+and next-start incoming host/port settings from `/admin/settings`.
 
 ## Model Routes
 
@@ -134,6 +136,7 @@ Example route file:
     "model": "openai-mini",
     "upstream_url": "https://api.openai.com/v1",
     "upstream_model": "gpt-4.1-mini",
+    "provider_slug": "openai",
     "api_key_env": "OPENAI_API_KEY"
   }
 ]
@@ -159,6 +162,30 @@ upstream request. Captured request headers remain the original client headers; i
 keys are not stored or shown in the admin UI. UI-managed routes store only `api_key_env`;
 prefer `api_key_env` for shared configs.
 
+## Cost Estimates
+
+Cost estimates are snapshotted when a response is captured. The proxy stores the billing
+provider, billing model, token counts, input/output rate snapshot, and estimated USD cost
+on the request row. Historical rows are not recalculated when pricing changes.
+
+The estimator uses separate input and output token rates per 1M tokens:
+
+```text
+cost = (input_tokens * input_rate + output_tokens * output_rate) / 1,000,000
+```
+
+Billing identity is resolved from the routed upstream model when a model route rewrites
+the request, otherwise from the upstream response model when present, otherwise from the
+client request model. Provider identity comes from a route's optional `provider_slug`,
+then falls back to a provider whose configured upstream URL exactly matches the active
+upstream base.
+
+SQLite is seeded with editable standard paid text rates for common OpenAI, Anthropic,
+and Google Gemini models. Those seed values were checked against official pricing pages
+on May 3, 2026. They are inserted only when missing, so UI edits are preserved. V1 cost
+estimates intentionally ignore cache, batch/flex/priority tiers, tool fees, image/audio
+pricing, regional premiums, and long-context premiums.
+
 ## Runs
 
 Use **Runs** when you want to measure or review LLM usage for one bounded task, such as
@@ -174,8 +201,9 @@ is active are linked to that run; requests outside a run are still captured norm
 
 The request browser can filter by run, and request rows link back to their run. The run
 detail page reports LLM wall time from the first request start to the last response
-completion, plus token totals and tokens/sec metrics. The request table's **TPS** column
-shows per-request output tokens per second when token usage and duration are available.
+completion, plus token totals, cost totals, and tokens/sec metrics. The request table's
+**TPS** column shows per-request output tokens per second when token usage and duration
+are available.
 
 Screenshots and the full developer README are available in the project repository:
 https://github.com/shamitv/llm-observe-proxy
@@ -194,6 +222,10 @@ https://github.com/shamitv/llm-observe-proxy
 - `POST /admin/settings/upstream`: update upstream URL.
 - `POST /admin/settings/model-routes`: create or update a UI-managed model route.
 - `POST /admin/settings/model-routes/delete`: delete a UI-managed model route.
+- `POST /admin/settings/providers`: create or update a model provider.
+- `POST /admin/settings/providers/delete`: delete a model provider and its prices.
+- `POST /admin/settings/model-prices`: create or update model token pricing.
+- `POST /admin/settings/model-prices/delete`: delete model token pricing.
 - `POST /admin/trim`: delete records older than `N` days.
 - `GET /healthz`: health check.
 

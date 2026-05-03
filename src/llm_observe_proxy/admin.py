@@ -4,6 +4,7 @@ import json
 import math
 from collections import Counter
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -17,7 +18,7 @@ from starlette.templating import Jinja2Templates
 from llm_observe_proxy.capture import (
     ExtractedTokenUsage,
     decode_json_bytes,
-    decode_sse_json_events,
+    extract_stream_token_usage,
     extract_token_usage,
 )
 from llm_observe_proxy.config import ModelRoute, normalize_upstream_url
@@ -25,6 +26,8 @@ from llm_observe_proxy.database import (
     RequestRecord,
     SessionFactory,
     TaskRun,
+    delete_model_price,
+    delete_model_provider,
     delete_ui_model_route,
     end_active_task_run,
     get_active_task_run,
@@ -35,11 +38,15 @@ from llm_observe_proxy.database import (
     get_task_run_stats,
     get_ui_model_routes,
     get_upstream_url,
+    list_model_prices,
+    list_model_providers,
     list_task_runs_with_stats,
     session_scope,
     set_incoming_server,
     set_setting,
     start_task_run,
+    upsert_model_price,
+    upsert_model_provider,
     upsert_ui_model_route,
 )
 from llm_observe_proxy.rendering import escape_preview, render_payload
@@ -121,10 +128,28 @@ def format_duration_ms(value: object) -> str:
     return f"{days} {day_label} {hours}h" if hours else f"{days} {day_label}"
 
 
+def format_usd(value: object) -> str:
+    number = _coerce_number(value)
+    if number is None:
+        return "-"
+    absolute = abs(number)
+    if absolute >= 1000:
+        return f"${format_compact_number(number)}"
+    if absolute == 0:
+        return "$0.00"
+    if absolute < 0.01:
+        return f"${number:.6f}"
+    if absolute < 1:
+        return f"${number:.4f}"
+    return f"${number:.2f}"
+
+
 def _coerce_number(value: object) -> float | None:
     if value is None or isinstance(value, Undefined) or isinstance(value, bool):
         return None
-    if isinstance(value, int | float):
+    if isinstance(value, Decimal):
+        number = float(value)
+    elif isinstance(value, int | float):
         number = float(value)
     elif isinstance(value, str):
         stripped = value.strip()
@@ -161,6 +186,7 @@ def _compact_decimals(value: float) -> int:
 templates.env.filters["compact_number"] = format_compact_number
 templates.env.filters["compact_rate"] = format_compact_rate
 templates.env.filters["duration_ms"] = format_duration_ms
+templates.env.filters["usd"] = format_usd
 
 router = APIRouter(prefix="/admin", include_in_schema=False)
 
@@ -169,16 +195,6 @@ TEST_IMAGE_DATA_URL = (
     "data:image/png;base64,"
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII="
 )
-STREAM_USAGE_MARKERS = (
-    b'"usage"',
-    b'"input_tokens"',
-    b'"prompt_tokens"',
-    b'"output_tokens"',
-    b'"completion_tokens"',
-    b'"total_tokens"',
-)
-
-
 @router.get("", response_class=HTMLResponse)
 @router.get("/", response_class=HTMLResponse)
 async def index(
@@ -454,6 +470,7 @@ async def upsert_model_route(
     model: str = Form(...),
     upstream_url: str = Form(...),
     upstream_model: str = Form(""),
+    provider_slug: str = Form(""),
     api_key_env: str = Form(""),
 ) -> HTMLResponse:
     settings = request.app.state.settings
@@ -462,6 +479,7 @@ async def upsert_model_route(
             model=model,
             upstream_url=upstream_url,
             upstream_model=upstream_model,
+            provider_slug=provider_slug,
             api_key_env=api_key_env,
         )
     except ValueError as exc:
@@ -490,6 +508,82 @@ async def delete_model_route(request: Request, model: str = Form(...)) -> HTMLRe
     with session_scope(session_factory) as session:
         if not delete_ui_model_route(session, resolved_model):
             return await _settings_with_error(request, "UI model route was not found.")
+    return RedirectResponse("/admin/settings", status_code=303)
+
+
+@router.post("/settings/providers", response_class=HTMLResponse)
+async def upsert_provider(
+    request: Request,
+    slug: str = Form(...),
+    name: str = Form(...),
+    upstream_url: str = Form(""),
+    currency: str = Form("USD"),
+) -> HTMLResponse:
+    session_factory: SessionFactory = request.app.state.session_factory
+    try:
+        with session_scope(session_factory) as session:
+            upsert_model_provider(
+                session,
+                slug=slug,
+                name=name,
+                upstream_url=upstream_url,
+                currency=currency,
+            )
+    except ValueError as exc:
+        return await _settings_with_error(request, str(exc))
+    return RedirectResponse("/admin/settings", status_code=303)
+
+
+@router.post("/settings/providers/delete", response_class=HTMLResponse)
+async def delete_provider(request: Request, slug: str = Form(...)) -> HTMLResponse:
+    session_factory: SessionFactory = request.app.state.session_factory
+    with session_scope(session_factory) as session:
+        if not delete_model_provider(session, slug):
+            return await _settings_with_error(request, "Provider was not found.")
+    return RedirectResponse("/admin/settings", status_code=303)
+
+
+@router.post("/settings/model-prices", response_class=HTMLResponse)
+async def upsert_price(
+    request: Request,
+    provider_slug: str = Form(...),
+    model: str = Form(...),
+    display_name: str = Form(""),
+    aliases: str = Form(""),
+    input_usd_per_million: str = Form(...),
+    output_usd_per_million: str = Form(...),
+    active: str | None = Form(None),
+    notes: str = Form(""),
+) -> HTMLResponse:
+    session_factory: SessionFactory = request.app.state.session_factory
+    try:
+        with session_scope(session_factory) as session:
+            upsert_model_price(
+                session,
+                provider_slug=provider_slug,
+                model=model,
+                display_name=display_name,
+                aliases=aliases,
+                input_usd_per_million=input_usd_per_million,
+                output_usd_per_million=output_usd_per_million,
+                active=active == "yes",
+                notes=notes,
+            )
+    except ValueError as exc:
+        return await _settings_with_error(request, str(exc))
+    return RedirectResponse("/admin/settings", status_code=303)
+
+
+@router.post("/settings/model-prices/delete", response_class=HTMLResponse)
+async def delete_price(
+    request: Request,
+    provider_slug: str = Form(...),
+    model: str = Form(...),
+) -> HTMLResponse:
+    session_factory: SessionFactory = request.app.state.session_factory
+    with session_scope(session_factory) as session:
+        if not delete_model_price(session, provider_slug, model):
+            return await _settings_with_error(request, "Model price was not found.")
     return RedirectResponse("/admin/settings", status_code=303)
 
 
@@ -679,9 +773,12 @@ def _settings_context(
     test_prompt: str = TEST_PROMPT_DEFAULT,
 ) -> dict[str, Any]:
     settings = request.app.state.settings
+    providers = list_model_providers(session)
     return {
         "upstream_url": get_upstream_url(session, settings),
-        "model_routes": _settings_model_route_rows(session, settings),
+        "model_routes": _settings_model_route_rows(session, settings, providers),
+        "providers": [_provider_row(provider) for provider in providers],
+        "model_prices": [_model_price_row(price) for price in list_model_prices(session)],
         "incoming_host": get_incoming_host(session, settings),
         "incoming_port": get_incoming_port(session, settings),
         "expose_all_ips": get_expose_all_ips(session, settings),
@@ -696,19 +793,53 @@ def _settings_context(
     }
 
 
-def _settings_model_route_rows(session, settings) -> list[dict[str, object]]:
+def _settings_model_route_rows(session, settings, providers) -> list[dict[str, object]]:
+    provider_names = {provider.slug: provider.name for provider in providers}
     rows: list[dict[str, object]] = []
     for route in settings.model_routes:
         row = model_route_display(route)
         row["source"] = "startup"
         row["editable"] = False
+        row["provider_name"] = provider_names.get(route.provider_slug or "")
         rows.append(row)
     for route in get_ui_model_routes(session):
         row = model_route_display(route)
         row["source"] = "ui"
         row["editable"] = True
+        row["provider_name"] = provider_names.get(route.provider_slug or "")
         rows.append(row)
     return rows
+
+
+def _provider_row(provider) -> dict[str, object]:
+    return {
+        "slug": provider.slug,
+        "name": provider.name,
+        "upstream_url": provider.upstream_url,
+        "currency": provider.currency,
+    }
+
+
+def _model_price_row(price) -> dict[str, object]:
+    aliases: list[str] = []
+    if price.aliases_json:
+        try:
+            value = json.loads(price.aliases_json)
+        except json.JSONDecodeError:
+            value = []
+        if isinstance(value, list):
+            aliases = [item for item in value if isinstance(item, str)]
+    return {
+        "provider_slug": price.provider_slug,
+        "provider_name": price.provider.name,
+        "model": price.model,
+        "display_name": price.display_name,
+        "aliases": ", ".join(aliases),
+        "input_usd_per_million": price.input_usd_per_million,
+        "output_usd_per_million": price.output_usd_per_million,
+        "active": price.active,
+        "notes": price.notes,
+    }
 
 
 async def _settings_with_error(request: Request, error: str) -> HTMLResponse:
@@ -761,6 +892,15 @@ def _record_list_item(record: RequestRecord) -> dict[str, object]:
         "text",
     )
     token_usage = _record_token_usage(record)
+    input_tokens = record.billing_input_tokens
+    if input_tokens is None:
+        input_tokens = token_usage.input_tokens
+    output_tokens = record.billing_output_tokens
+    if output_tokens is None:
+        output_tokens = token_usage.output_tokens
+    total_tokens = record.billing_total_tokens
+    if total_tokens is None:
+        total_tokens = token_usage.total_tokens
     return {
         "id": record.id,
         "created_at": record.created_at,
@@ -776,11 +916,14 @@ def _record_list_item(record: RequestRecord) -> dict[str, object]:
         "has_tool_calls": record.has_tool_calls,
         "task_run": _task_run_summary(record.task_run, session=None),
         "tokens": {
-            "input": token_usage.input_tokens,
-            "output": token_usage.output_tokens,
-            "total": token_usage.total_tokens,
+            "input": input_tokens,
+            "output": output_tokens,
+            "total": total_tokens,
         },
-        "tokens_per_second": _tokens_per_second(token_usage.output_tokens, record.duration_ms),
+        "tokens_per_second": _tokens_per_second(output_tokens, record.duration_ms),
+        "cost_usd": record.billing_total_cost_usd,
+        "billing_provider": record.billing_provider_name or record.billing_provider_slug,
+        "billing_model": record.billing_model,
         "error": record.error,
         "preview": response_render.text,
     }
@@ -795,35 +938,7 @@ def _record_token_usage(record: RequestRecord):
 
 
 def _stream_token_usage(body: bytes | None) -> ExtractedTokenUsage:
-    if not body or not _body_may_contain_usage(body):
-        return ExtractedTokenUsage()
-
-    usage_index = max(body.rfind(marker) for marker in STREAM_USAGE_MARKERS)
-    data_index = body.rfind(b"data:", 0, usage_index)
-    if data_index >= 0:
-        event_end = body.find(b"\n\n", usage_index)
-        if event_end < 0:
-            event_end = len(body)
-        event = body[data_index:event_end]
-        try:
-            text = event.decode("utf-8")
-            data = "\n".join(
-                line.removeprefix("data:").strip()
-                for line in text.splitlines()
-                if line.startswith("data:")
-            )
-            if data and data != "[DONE]":
-                return extract_token_usage(json.loads(data))
-        except (UnicodeDecodeError, json.JSONDecodeError):
-            pass
-
-    return extract_token_usage(decode_sse_json_events(body))
-
-
-def _body_may_contain_usage(body: bytes | None) -> bool:
-    if not body:
-        return False
-    return any(marker in body for marker in STREAM_USAGE_MARKERS)
+    return extract_stream_token_usage(body)
 
 
 def _record_detail(record: RequestRecord) -> dict[str, object]:
@@ -850,6 +965,16 @@ def _record_detail(record: RequestRecord) -> dict[str, object]:
         "is_stream": record.is_stream,
         "has_images": record.has_images,
         "has_tool_calls": record.has_tool_calls,
+        "billing_provider_slug": record.billing_provider_slug,
+        "billing_provider_name": record.billing_provider_name,
+        "billing_model": record.billing_model,
+        "billing_input_tokens": record.billing_input_tokens,
+        "billing_output_tokens": record.billing_output_tokens,
+        "billing_total_tokens": record.billing_total_tokens,
+        "billing_input_cost_usd": record.billing_input_cost_usd,
+        "billing_output_cost_usd": record.billing_output_cost_usd,
+        "billing_total_cost_usd": record.billing_total_cost_usd,
+        "pricing_snapshot_json": record.pricing_snapshot_json,
         "task_run": _task_run_summary(record.task_run, session=None),
         "error": record.error,
     }
@@ -892,6 +1017,7 @@ def _task_run_list_item(
         "request_count": stats["request_count"],
         "llm_wall_time_ms": stats["llm_wall_time_ms"],
         "total_tokens": detail["tokens"]["total"],
+        "total_cost_usd": detail["cost_usd"],
         "output_tokens_per_second": detail["throughput"]["output_wall"],
         "signals": detail["signals"],
     }
@@ -911,11 +1037,25 @@ def _task_run_stats_detail(task_run: TaskRun, session) -> dict[str, object]:
     input_tokens: list[int | None] = []
     output_tokens: list[int | None] = []
     total_tokens: list[int | None] = []
+    total_costs: list[Decimal | None] = []
     for record in records:
         token_usage = _record_token_usage(record)
-        input_tokens.append(token_usage.input_tokens)
-        output_tokens.append(token_usage.output_tokens)
-        total_tokens.append(token_usage.total_tokens)
+        input_tokens.append(
+            record.billing_input_tokens
+            if record.billing_input_tokens is not None
+            else token_usage.input_tokens
+        )
+        output_tokens.append(
+            record.billing_output_tokens
+            if record.billing_output_tokens is not None
+            else token_usage.output_tokens
+        )
+        total_tokens.append(
+            record.billing_total_tokens
+            if record.billing_total_tokens is not None
+            else token_usage.total_tokens
+        )
+        total_costs.append(record.billing_total_cost_usd)
 
     token_totals = {
         "input": _sum_known(input_tokens),
@@ -928,6 +1068,7 @@ def _task_run_stats_detail(task_run: TaskRun, session) -> dict[str, object]:
         **base_stats,
         "run_open_duration_ms": run_open_duration_ms,
         "tokens": token_totals,
+        "cost_usd": _sum_decimal_known(total_costs),
         "throughput": {
             "output_wall": _tokens_per_second(token_totals["output"], llm_wall_time_ms),
             "total_wall": _tokens_per_second(token_totals["total"], llm_wall_time_ms),
@@ -956,6 +1097,13 @@ def _sum_known(values: list[int | None]) -> int | None:
     if not known:
         return None
     return sum(known)
+
+
+def _sum_decimal_known(values: list[Decimal | None]) -> Decimal | None:
+    known = [value for value in values if value is not None]
+    if not known:
+        return None
+    return sum(known, Decimal("0"))
 
 
 def _tokens_per_second(tokens: int | None, duration_ms: object) -> str | None:

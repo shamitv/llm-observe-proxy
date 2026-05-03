@@ -49,6 +49,7 @@
         <th>Requests</th>
         <th>LLM Wall Time</th>
         <th>Total Tokens</th>
+        <th>Cost</th>
         <th>Output tok/s</th>
         <th>Signals</th>
       </tr>
@@ -64,6 +65,7 @@
         <td>{{ run.request_count | compact_number }}</td>
         <td>{{ run.llm_wall_time_ms | duration_ms }}</td>
         <td>{{ run.total_tokens | compact_number }}</td>
+        <td>{{ run.total_cost_usd | usd }}</td>
         <td>{{ run.output_tokens_per_second | compact_rate }}</td>
         <td class="signals">
           {% if run.signals.streams %}<span>{{ run.signals.streams | compact_number }} Stream</span>{% endif %}
@@ -73,7 +75,7 @@
         </td>
       </tr>
       {% else %}
-      <tr><td colspan="7" class="empty">No runs yet.</td></tr>
+      <tr><td colspan="8" class="empty">No runs yet.</td></tr>
       {% endfor %}
     </tbody>
   </table>
