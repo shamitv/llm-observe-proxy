@@ -6,7 +6,7 @@ build-backend = "hatchling.build"
 name = "llm-observe-proxy"
 version = "0.1.1"
 description = "OpenAI-compatible LLM proxy with SQLite request capture, observability, and an admin UI."
-readme = "README.md"
+readme = { file = "README.pypi.md", content-type = "text/markdown" }
 requires-python = ">=3.10"
 license = "MIT"
 license-files = ["LICENSE"]
