@@ -3,13 +3,14 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+from decimal import Decimal
 
 import pytest
-from sqlalchemy import inspect, text
+from sqlalchemy import inspect, select, text
 
 from llm_observe_proxy import create_app
 from llm_observe_proxy.admin import _stream_token_usage
-from llm_observe_proxy.capture import extract_token_usage, has_tool_payload
+from llm_observe_proxy.capture import ExtractedTokenUsage, extract_token_usage, has_tool_payload
 from llm_observe_proxy.cli import resolve_bind
 from llm_observe_proxy.config import (
     DEFAULT_INCOMING_HOST,
@@ -18,12 +19,16 @@ from llm_observe_proxy.config import (
     EXPOSED_INCOMING_HOST,
     Settings,
 )
+from llm_observe_proxy.costing import estimate_cost, estimate_run_cost
 from llm_observe_proxy.database import (
+    ModelPrice,
+    ModelProvider,
     create_db_engine,
     create_session_factory,
     init_db,
     session_scope,
     set_incoming_server,
+    upsert_model_price,
 )
 from llm_observe_proxy.rendering import render_payload
 
@@ -134,7 +139,7 @@ def test_stream_token_usage_reads_final_sse_usage_event(monkeypatch: pytest.Monk
     def fail_decode(_body: bytes | None):
         raise AssertionError("stream usage should use targeted final-event parsing")
 
-    monkeypatch.setattr("llm_observe_proxy.admin.decode_sse_json_events", fail_decode)
+    monkeypatch.setattr("llm_observe_proxy.capture.decode_sse_json_events", fail_decode)
     body = b"".join(
         [
             b'data: {"choices":[{"delta":{"content":"hello"}}]}\n\n',
@@ -202,6 +207,123 @@ def test_cli_resolve_bind_uses_saved_incoming_settings(tmp_path) -> None:
     assert resolve_bind(None, None, True, settings) == (EXPOSED_INCOMING_HOST, 9090)
 
 
+def test_init_db_seeds_model_pricing_without_overwriting_edits(tmp_path) -> None:
+    db_path = tmp_path / "pricing.sqlite3"
+    settings = Settings(database_url=f"sqlite:///{db_path.as_posix()}")
+    engine = create_db_engine(settings.database_url)
+    init_db(engine)
+
+    session_factory = create_session_factory(engine)
+    with session_scope(session_factory) as session:
+        providers = session.scalars(select(ModelProvider.slug).order_by(ModelProvider.slug)).all()
+        openai_price = session.scalars(
+            select(ModelPrice).where(
+                ModelPrice.provider_slug == "openai",
+                ModelPrice.model == "gpt-5.4-mini",
+            )
+        ).one()
+        openai_price.input_usd_per_million = Decimal("123")
+
+    init_db(engine)
+
+    with session_scope(session_factory) as session:
+        edited_price = session.scalars(
+            select(ModelPrice).where(
+                ModelPrice.provider_slug == "openai",
+                ModelPrice.model == "gpt-5.4-mini",
+            )
+        ).one()
+        price_count = session.scalar(text("SELECT count(*) FROM model_prices"))
+    engine.dispose()
+
+    assert providers == ["anthropic", "google", "openai"]
+    assert edited_price.input_usd_per_million == Decimal("123.000000")
+    assert price_count >= 15
+
+
+def test_cost_estimator_handles_rates_aliases_unknowns_and_missing_usage(tmp_path) -> None:
+    db_path = tmp_path / "estimator.sqlite3"
+    settings = Settings(database_url=f"sqlite:///{db_path.as_posix()}")
+    engine = create_db_engine(settings.database_url)
+    init_db(engine)
+    session_factory = create_session_factory(engine)
+
+    with session_scope(session_factory) as session:
+        known = estimate_cost(
+            session,
+            usage=ExtractedTokenUsage(input_tokens=1000, output_tokens=500, total_tokens=1500),
+            billing_model="gpt-5.4-mini",
+            provider_slug="openai",
+        )
+        upsert_model_price(
+            session,
+            provider_slug="openai",
+            model="alias-root",
+            aliases="alias-one",
+            input_usd_per_million="1",
+            output_usd_per_million="2",
+        )
+        aliased = estimate_cost(
+            session,
+            usage=ExtractedTokenUsage(input_tokens=1000, output_tokens=500, total_tokens=1500),
+            billing_model="alias-one",
+            provider_slug="openai",
+        )
+        unknown = estimate_cost(
+            session,
+            usage=ExtractedTokenUsage(input_tokens=1000, output_tokens=500, total_tokens=1500),
+            billing_model="missing-model",
+            provider_slug="openai",
+        )
+        missing_usage = estimate_cost(
+            session,
+            usage=ExtractedTokenUsage(input_tokens=1000, output_tokens=None, total_tokens=None),
+            billing_model="gpt-5.4-mini",
+            provider_slug="openai",
+        )
+    engine.dispose()
+
+    assert known.total_cost_usd == Decimal("0.003000")
+    assert aliased.total_cost_usd == Decimal("0.002")
+    assert aliased.snapshot["matched_model"] == "alias-root"
+    assert unknown.total_cost_usd is None
+    assert missing_usage.total_cost_usd is None
+
+
+def test_run_cost_estimator_sums_usage_and_counts_missing_requests(tmp_path) -> None:
+    db_path = tmp_path / "run-estimator.sqlite3"
+    settings = Settings(database_url=f"sqlite:///{db_path.as_posix()}")
+    engine = create_db_engine(settings.database_url)
+    init_db(engine)
+    session_factory = create_session_factory(engine)
+
+    with session_scope(session_factory) as session:
+        price = session.scalars(
+            select(ModelPrice).where(
+                ModelPrice.provider_slug == "openai",
+                ModelPrice.model == "gpt-5.4-mini",
+            )
+        ).one()
+        estimate = estimate_run_cost(
+            [
+                ExtractedTokenUsage(input_tokens=1000, output_tokens=500, total_tokens=1500),
+                ExtractedTokenUsage(input_tokens=None, output_tokens=10, total_tokens=None),
+                ExtractedTokenUsage(input_tokens=200, output_tokens=100, total_tokens=None),
+            ],
+            price,
+        )
+    engine.dispose()
+
+    assert estimate.input_tokens == 1200
+    assert estimate.output_tokens == 600
+    assert estimate.total_tokens == 1800
+    assert estimate.input_cost_usd == Decimal("0.000900")
+    assert estimate.output_cost_usd == Decimal("0.002700")
+    assert estimate.total_cost_usd == Decimal("0.003600")
+    assert estimate.included_request_count == 2
+    assert estimate.missing_usage_request_count == 1
+
+
 def test_init_db_upgrades_existing_sqlite_request_records_with_route_metadata(tmp_path) -> None:
     db_path = tmp_path / "old.sqlite3"
     settings = Settings(database_url=f"sqlite:///{db_path.as_posix()}")
@@ -219,10 +341,23 @@ def test_init_db_upgrades_existing_sqlite_request_records_with_route_metadata(tm
         ids = connection.execute(text("SELECT id FROM request_records")).scalars().all()
     engine.dispose()
 
-    assert {"task_run_id", "upstream_model", "model_route"}.issubset(columns)
+    assert {
+        "task_run_id",
+        "upstream_model",
+        "model_route",
+        "billing_provider_slug",
+        "billing_model",
+        "billing_input_tokens",
+        "billing_output_tokens",
+        "billing_total_tokens",
+        "billing_total_cost_usd",
+        "pricing_snapshot_json",
+    }.issubset(columns)
     assert {
         "ix_request_records_task_run_id",
         "ix_request_records_upstream_model",
         "ix_request_records_model_route",
+        "ix_request_records_billing_provider_slug",
+        "ix_request_records_billing_model",
     }.issubset(indexes)
     assert ids == [42]

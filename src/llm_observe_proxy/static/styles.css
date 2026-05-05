@@ -287,7 +287,7 @@ table {
 }
 
 .requests-table {
-  min-width: 1290px;
+  min-width: 1600px;
   table-layout: fixed;
 }
 
@@ -316,11 +316,15 @@ table {
 }
 
 .requests-table .col-tps {
-  width: 74px;
+  width: 90px;
 }
 
 .requests-table .col-tokens {
-  width: 170px;
+  width: 214px;
+}
+
+.requests-table .col-cost {
+  width: 120px;
 }
 
 .requests-table .col-signals {
@@ -361,13 +365,19 @@ td:first-child a {
   overflow-wrap: anywhere;
 }
 
-.request-endpoint {
-  display: grid;
-  gap: 4px;
+.request-endpoint,
+.request-model {
+  line-height: 1.35;
+}
+
+.request-endpoint .method,
+.request-endpoint code,
+.request-model > span {
+  display: block;
 }
 
 .request-endpoint code {
-  line-height: 1.35;
+  margin-top: 4px;
   white-space: normal;
 }
 
@@ -378,10 +388,8 @@ td:first-child a {
   letter-spacing: 0.04em;
 }
 
-.request-model {
-  display: grid;
-  gap: 6px;
-  line-height: 1.35;
+.request-model > span + span {
+  margin-top: 6px;
 }
 
 .route-badge,
@@ -404,8 +412,8 @@ td:first-child a {
 
 .token-triplet {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 6px;
+  grid-template-columns: repeat(3, minmax(50px, 1fr));
+  column-gap: 10px;
 }
 
 .token-triplet span {
@@ -415,7 +423,10 @@ td:first-child a {
 }
 
 .token-triplet strong {
+  overflow: hidden;
   font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .token-triplet small {
@@ -423,6 +434,7 @@ td:first-child a {
   font-size: 10px;
   line-height: 1.1;
   text-transform: uppercase;
+  white-space: nowrap;
 }
 
 .request-preview span {
@@ -469,18 +481,33 @@ td:first-child a {
   margin-bottom: 18px;
 }
 
-.model-routes-panel {
+.model-routes-panel,
+.providers-panel,
+.prices-panel {
   grid-column: 1 / -1;
 }
 
-.model-route-form {
+.model-route-form,
+.provider-form,
+.price-form {
   display: grid;
-  grid-template-columns: minmax(140px, 1fr) minmax(220px, 1.4fr) minmax(160px, 1fr) minmax(150px, 1fr) auto;
   gap: 12px;
   align-items: end;
   border-top: 1px solid var(--line);
   margin-top: 14px;
   padding-top: 14px;
+}
+
+.model-route-form {
+  grid-template-columns: minmax(140px, 1fr) minmax(220px, 1.4fr) minmax(160px, 1fr) minmax(150px, 1fr) minmax(150px, 1fr) auto;
+}
+
+.provider-form {
+  grid-template-columns: minmax(120px, 0.8fr) minmax(180px, 1fr) minmax(240px, 1.5fr) minmax(90px, 0.5fr) auto;
+}
+
+.price-form {
+  grid-template-columns: minmax(150px, 1fr) minmax(170px, 1fr) minmax(170px, 1fr) minmax(120px, 0.8fr) minmax(120px, 0.8fr) minmax(160px, 1fr) minmax(190px, 1.1fr) auto auto;
 }
 
 .compact-table {
@@ -500,6 +527,59 @@ td:first-child a {
 
 .model-routes-table form {
   margin: 0;
+}
+
+.what-if-form {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.what-if-options {
+  display: flex;
+  flex: 1;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.what-if-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 38px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: white;
+  padding: 6px 10px;
+}
+
+.what-if-option input {
+  width: auto;
+  min-height: auto;
+}
+
+.what-if-option span {
+  display: grid;
+  gap: 2px;
+}
+
+.what-if-option small {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.what-if-table {
+  min-width: 1120px;
+}
+
+.what-if-table td:first-child {
+  min-width: 170px;
+}
+
+.what-if-table td:first-child span {
+  display: block;
+  margin-top: 3px;
 }
 
 .source-pill {
@@ -713,6 +793,9 @@ figcaption {
 @media (max-width: 1040px) {
   .toolbar,
   .model-route-form,
+  .provider-form,
+  .price-form,
+  .what-if-form,
   .run-start-form,
   .split,
   .settings-grid {

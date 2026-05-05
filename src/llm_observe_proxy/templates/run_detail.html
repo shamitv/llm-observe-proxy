@@ -33,7 +33,72 @@
   <div class="kpi"><span>Input tokens</span><strong>{{ stats.tokens.input | compact_number }}</strong></div>
   <div class="kpi"><span>Output tokens</span><strong>{{ stats.tokens.output | compact_number }}</strong></div>
   <div class="kpi"><span>Total tokens</span><strong>{{ stats.tokens.total | compact_number }}</strong></div>
-  <div class="kpi"><span>Output tok/s</span><strong>{{ stats.throughput.output_wall | compact_rate }}</strong></div>
+  <div class="kpi"><span>Estimated cost</span><strong>{{ stats.cost_usd | usd }}</strong></div>
+  <div class="kpi"><span>Output tok/s</span><strong>{{ stats.throughput.output_observed | compact_rate }}</strong></div>
+</section>
+
+<section class="panel what-if-panel">
+  <header>
+    <h2>What-if cost</h2>
+    <span>{{ what_if.scenarios | length }} compared</span>
+  </header>
+  <form class="what-if-form" method="get" action="/admin/runs/{{ run.id }}">
+    <div class="what-if-options">
+      {% for option in what_if.options %}
+      <label class="what-if-option">
+        <input type="checkbox" name="what_if" value="{{ option.key }}" {% if option.checked %}checked{% endif %}>
+        <span><strong>{{ option.label }}</strong><small>{{ option.provider_name }}</small></span>
+      </label>
+      {% else %}
+      <p class="muted">No active model prices configured.</p>
+      {% endfor %}
+    </div>
+    {% if what_if.options %}
+    <button class="button primary compact-button" type="submit">Compare</button>
+    {% endif %}
+  </form>
+  {% if what_if.message %}
+  <p class="muted">{{ what_if.message }}</p>
+  {% endif %}
+  {% if what_if.scenarios %}
+  <div class="table-shell compact-table">
+    <table class="model-routes-table what-if-table">
+      <thead>
+        <tr>
+          <th>Scenario</th>
+          <th>Input Tokens</th>
+          <th>Output Tokens</th>
+          <th>Input / 1M</th>
+          <th>Output / 1M</th>
+          <th>Input Cost</th>
+          <th>Output Cost</th>
+          <th>Total Cost</th>
+          <th>Included</th>
+          <th>Missing Usage</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for scenario in what_if.scenarios %}
+        <tr>
+          <td>
+            <strong>{{ scenario.label }}</strong>
+            <span class="muted">{{ scenario.provider_name }} / {{ scenario.model }}</span>
+          </td>
+          <td>{{ scenario.input_tokens | compact_number }}</td>
+          <td>{{ scenario.output_tokens | compact_number }}</td>
+          <td>{{ scenario.input_usd_per_million | usd }}</td>
+          <td>{{ scenario.output_usd_per_million | usd }}</td>
+          <td>{{ scenario.input_cost_usd | usd }}</td>
+          <td>{{ scenario.output_cost_usd | usd }}</td>
+          <td><strong>{{ scenario.total_cost_usd | usd }}</strong></td>
+          <td>{{ scenario.included_request_count | compact_number }}</td>
+          <td>{{ scenario.missing_usage_request_count | compact_number }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
 </section>
 
 <section class="split">

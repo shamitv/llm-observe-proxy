@@ -7,6 +7,16 @@ and this project uses semantic versioning.
 
 ## Unreleased
 
+### Added
+
+- DB-backed model providers and editable per-model input/output token pricing.
+- Seeded standard paid text pricing for common OpenAI, Anthropic, and Google Gemini
+  models, inserted only when missing so local edits are preserved.
+- Capture-time cost snapshots with billing provider, billing model, token counts, rate
+  snapshot, and estimated USD cost for non-streaming and usage-reporting streaming calls.
+- Admin UI provider/pricing management plus per-request and per-run estimated cost views.
+- Optional `provider_slug` on model routes for route-aware billing identity.
+
 ## [0.2.0] - 2026-05-03
 
 ### Added

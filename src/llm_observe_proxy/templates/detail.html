@@ -8,6 +8,7 @@
   <div class="detail-meta">
     <span>Status <strong>{{ record.response_status | default('pending', true) }}</strong></span>
     <span>Duration <strong>{{ record.duration_ms | duration_ms }}</strong></span>
+    <span>Cost <strong>{{ record.billing_total_cost_usd | usd }}</strong></span>
     <span>Model <strong>{{ record.model | default('unknown', true) }}</strong></span>
     {% if record.upstream_model %}
     <span>Upstream Model <strong>{{ record.upstream_model }}</strong></span>
@@ -76,6 +77,27 @@
   </div>
 </section>
 {% endif %}
+
+<section class="split">
+  <article class="panel">
+    <header>
+      <h2>Cost Estimate</h2>
+      <span>{{ record.billing_provider_name or record.billing_provider_slug or 'no provider' }}</span>
+    </header>
+    <div class="breakdown-list">
+      <span><strong>{{ record.billing_input_tokens | compact_number }}</strong>Input tokens</span>
+      <span><strong>{{ record.billing_output_tokens | compact_number }}</strong>Output tokens</span>
+      <span><strong>{{ record.billing_total_tokens | compact_number }}</strong>Total tokens</span>
+      <span><strong>{{ record.billing_total_cost_usd | usd }}</strong>Estimated cost</span>
+      <span><strong>{{ record.billing_model | default('-', true) }}</strong>Billing model</span>
+    </div>
+  </article>
+
+  <article class="panel">
+    <header><h2>Pricing Snapshot</h2></header>
+    <pre class="code compact-code">{{ record.pricing_snapshot_json | default('{}', true) }}</pre>
+  </article>
+</section>
 
 <section class="split">
   <article class="panel">

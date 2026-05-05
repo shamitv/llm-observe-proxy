@@ -131,11 +131,21 @@ async def _streaming_chunks(path: str, payload: dict[str, Any]):
             {"type": "response.completed", "response": {"id": "resp_stream"}},
         ]
     else:
+        model = payload.get("model", "gpt-test") if isinstance(payload, dict) else "gpt-test"
         chunks = [
-            {"id": "chat_stream", "choices": [{"delta": {"role": "assistant"}}]},
-            {"id": "chat_stream", "choices": [{"delta": {"content": "hello "}}]},
-            {"id": "chat_stream", "choices": [{"delta": {"content": "stream"}}]},
+            {"id": "chat_stream", "model": model, "choices": [{"delta": {"role": "assistant"}}]},
+            {"id": "chat_stream", "model": model, "choices": [{"delta": {"content": "hello "}}]},
+            {"id": "chat_stream", "model": model, "choices": [{"delta": {"content": "stream"}}]},
         ]
+        if payload.get("stream_options", {}).get("include_usage"):
+            chunks.append(
+                {
+                    "id": "chat_stream",
+                    "model": model,
+                    "choices": [],
+                    "usage": {"prompt_tokens": 6, "completion_tokens": 3, "total_tokens": 9},
+                }
+            )
     for chunk in chunks:
         yield f"data: {json.dumps(chunk)}\n\n".encode()
     yield b"data: [DONE]\n\n"

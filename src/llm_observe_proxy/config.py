@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -12,6 +13,7 @@ DEFAULT_INCOMING_HOST = "localhost"
 DEFAULT_INCOMING_PORT = 8080
 DEFAULT_UPSTREAM_URL = "http://localhost:8000/v1"
 EXPOSED_INCOMING_HOST = "0.0.0.0"
+PROVIDER_SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
 
 
 @dataclass(frozen=True)
@@ -19,6 +21,7 @@ class ModelRoute:
     model: str
     upstream_url: str
     upstream_model: str | None = None
+    provider_slug: str | None = None
     api_key: str | None = None
     api_key_env: str | None = None
 
@@ -29,6 +32,7 @@ class ModelRoute:
         object.__setattr__(self, "model", model)
         object.__setattr__(self, "upstream_url", normalize_upstream_url(self.upstream_url))
         object.__setattr__(self, "upstream_model", _optional_str(self.upstream_model))
+        object.__setattr__(self, "provider_slug", normalize_provider_slug(self.provider_slug))
         object.__setattr__(self, "api_key", _optional_str(self.api_key))
         object.__setattr__(self, "api_key_env", _optional_str(self.api_key_env))
         if self.api_key and self.api_key_env:
@@ -95,6 +99,30 @@ def normalize_upstream_url(value: str) -> str:
     return normalized
 
 
+def normalize_provider_url(value: str | None) -> str | None:
+    normalized = _optional_str(value)
+    if normalized is None:
+        return None
+    normalized = normalized.rstrip("/")
+    parsed = urlparse(normalized)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise ValueError("Provider URL must be an absolute http(s) URL.")
+    return normalized
+
+
+def normalize_provider_slug(value: str | None) -> str | None:
+    normalized = _optional_str(value)
+    if normalized is None:
+        return None
+    normalized = normalized.lower()
+    if not PROVIDER_SLUG_RE.match(normalized):
+        raise ValueError(
+            "Provider slug must start with a lowercase letter or number and contain only "
+            "lowercase letters, numbers, hyphens, or underscores."
+        )
+    return normalized
+
+
 def load_model_routes(
     *,
     models_file: str | None = None,
@@ -146,6 +174,9 @@ def _model_route_from_dict(item: dict[str, Any]) -> ModelRoute:
         upstream_url=upstream_url,
         upstream_model=(
             item.get("upstream_model") if isinstance(item.get("upstream_model"), str) else None
+        ),
+        provider_slug=(
+            item.get("provider_slug") if isinstance(item.get("provider_slug"), str) else None
         ),
         api_key=item.get("api_key") if isinstance(item.get("api_key"), str) else None,
         api_key_env=item.get("api_key_env") if isinstance(item.get("api_key_env"), str) else None,
