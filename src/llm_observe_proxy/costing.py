@@ -184,6 +184,18 @@ def _resolve_provider(
 
 
 def _find_model_price(session: Session, provider_slug: str, model: str) -> ModelPrice | None:
+    # Fast path: exact (provider_slug, model) match
+    exact = session.scalar(
+        select(ModelPrice).where(
+            ModelPrice.provider_slug == provider_slug,
+            ModelPrice.model == model,
+            ModelPrice.active.is_(True),
+        )
+    )
+    if exact is not None:
+        return exact
+
+    # Fallback: scan aliases for all active prices of this provider
     prices = session.scalars(
         select(ModelPrice).where(
             ModelPrice.provider_slug == provider_slug,
@@ -191,7 +203,7 @@ def _find_model_price(session: Session, provider_slug: str, model: str) -> Model
         )
     ).all()
     for price in prices:
-        if price.model == model or model in _price_aliases(price):
+        if model in _price_aliases(price):
             return price
     return None
 

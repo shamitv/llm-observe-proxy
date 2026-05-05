@@ -453,7 +453,10 @@ def upsert_model_price(
 
 
 def delete_model_price(session: Session, provider_slug: str, model: str) -> bool:
-    resolved_provider_slug = normalize_provider_slug(provider_slug)
+    try:
+        resolved_provider_slug = normalize_provider_slug(provider_slug)
+    except ValueError:
+        return False
     resolved_model = model.strip()
     if resolved_provider_slug is None or not resolved_model:
         return False

@@ -550,9 +550,12 @@ async def upsert_provider(
 @router.post("/settings/providers/delete", response_class=HTMLResponse)
 async def delete_provider(request: Request, slug: str = Form(...)) -> HTMLResponse:
     session_factory: SessionFactory = request.app.state.session_factory
-    with session_scope(session_factory) as session:
-        if not delete_model_provider(session, slug):
-            return await _settings_with_error(request, "Provider was not found.")
+    try:
+        with session_scope(session_factory) as session:
+            if not delete_model_provider(session, slug):
+                return await _settings_with_error(request, "Provider was not found.")
+    except ValueError as exc:
+        return await _settings_with_error(request, str(exc))
     return RedirectResponse("/admin/settings", status_code=303)
 
 
