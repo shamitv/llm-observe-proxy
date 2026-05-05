@@ -29,6 +29,7 @@ from sqlalchemy.orm import (
     DeclarativeBase,
     Mapped,
     Session,
+    contains_eager,
     mapped_column,
     relationship,
     sessionmaker,
@@ -349,6 +350,7 @@ def list_model_prices(session: Session) -> list[ModelPrice]:
         session.scalars(
             select(ModelPrice)
             .join(ModelProvider)
+            .options(contains_eager(ModelPrice.provider))
             .order_by(ModelProvider.name, ModelPrice.model)
         ).all()
     )
