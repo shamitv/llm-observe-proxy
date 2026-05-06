@@ -221,7 +221,11 @@ class QwenTaggedToolCallStreamRewriter:
         self._request_payload = request_payload
         self._buffered_reasoning_events: list[bytes] = []
         self._reasoning_text = ""
-        self._tool_call_emitted = False
+        self._candidate_raw_events: list[bytes] = []
+        self._candidate_outputs: list[bytes] = []
+        self._post_candidate_events: list[bytes] = []
+        self._candidate_applied: dict[str, object] | None = None
+        self._candidate_pending = False
         self._saw_structured_tool_call = False
         self._rejected = False
         self._call_index = 0
@@ -233,12 +237,53 @@ class QwenTaggedToolCallStreamRewriter:
         event = _decode_sse_event(raw_event)
         if event is None:
             if _is_done_event(raw_event):
+                if self._candidate_pending:
+                    return self._reject_candidate(
+                        "Qwen tool-call rewrite rejected: stream ended before finish reason.",
+                        raw_event,
+                    )
+                return [*self._flush_buffered_reasoning(), raw_event]
+            if self._candidate_pending:
+                self._post_candidate_events.append(raw_event)
+                return []
+            if self._buffered_reasoning_events:
+                self.warnings.append(
+                    "Qwen tool-call rewrite rejected: non-JSON SSE event interrupted block."
+                )
+                self._rejected = True
                 return [*self._flush_buffered_reasoning(), raw_event]
             return [raw_event]
 
         choices = event.get("choices")
         if not isinstance(choices, list) or not choices:
-            return [*self._flush_buffered_reasoning(), raw_event]
+            if self._candidate_pending:
+                self._post_candidate_events.append(raw_event)
+                return []
+            if self._buffered_reasoning_events:
+                self.warnings.append(
+                    "Qwen tool-call rewrite rejected: usage/control event interrupted block."
+                )
+                self._rejected = True
+                return [*self._flush_buffered_reasoning(), raw_event]
+            return [raw_event]
+
+        if self._candidate_pending:
+            if _event_has_tool_calls(event):
+                return self._reject_candidate(
+                    "Qwen tool-call rewrite rejected: structured tool call appeared "
+                    "after tagged block.",
+                    raw_event,
+                )
+            if _event_has_non_empty_assistant_text(event):
+                return self._reject_candidate(
+                    "Qwen tool-call rewrite rejected: assistant content appeared "
+                    "after tagged block.",
+                    raw_event,
+                )
+            if _event_finish_reason(event) is not None:
+                return self._accept_candidate(event, raw_event)
+            self._post_candidate_events.append(raw_event)
+            return []
 
         if _event_has_tool_calls(event):
             self._saw_structured_tool_call = True
@@ -247,10 +292,11 @@ class QwenTaggedToolCallStreamRewriter:
         reasoning = _event_reasoning_text(event)
         if (
             reasoning is not None
-            and not self._tool_call_emitted
             and not self._saw_structured_tool_call
             and not self._rejected
         ):
+            if not self._buffered_reasoning_events and "<tool_call>" not in reasoning:
+                return [raw_event]
             self._buffered_reasoning_events.append(raw_event)
             self._reasoning_text += reasoning
             parse_result = parse_qwen_tagged_tool_call(
@@ -259,7 +305,8 @@ class QwenTaggedToolCallStreamRewriter:
                 allow_pending=True,
             )
             if parse_result.status == "matched" and parse_result.parsed is not None:
-                return self._emit_tool_call(event, parse_result.parsed)
+                self._stage_tool_call(event, parse_result.parsed)
+                return []
             if parse_result.status == "rejected":
                 if parse_result.warning:
                     self.warnings.append(parse_result.warning)
@@ -268,11 +315,13 @@ class QwenTaggedToolCallStreamRewriter:
             return []
 
         if _event_finish_reason(event) is not None:
-            outputs = self._flush_buffered_reasoning()
-            if self._tool_call_emitted and _event_finish_reason(event) == "stop":
-                rewritten = _copy_event_with_finish_reason(event, "tool_calls")
-                outputs.append(_encode_sse_json_event(rewritten))
-                return outputs
+            outputs = []
+            if self._buffered_reasoning_events:
+                self.warnings.append(
+                    "Qwen tool-call rewrite rejected: incomplete tagged tool-call block."
+                )
+                self._rejected = True
+                outputs.extend(self._flush_buffered_reasoning())
             outputs.append(raw_event)
             return outputs
 
@@ -285,30 +334,33 @@ class QwenTaggedToolCallStreamRewriter:
         return [raw_event]
 
     def finish(self) -> list[bytes]:
+        if self._candidate_pending:
+            return self._reject_candidate(
+                "Qwen tool-call rewrite rejected: stream ended before finish reason."
+            )
         if self._buffered_reasoning_events:
             self.warnings.append(
                 "Qwen tool-call rewrite rejected: incomplete tagged tool-call block."
             )
         return self._flush_buffered_reasoning()
 
-    def _emit_tool_call(
+    def _stage_tool_call(
         self,
         template_event: dict[str, Any],
         parsed: ParsedQwenToolCall,
-    ) -> list[bytes]:
+    ) -> None:
+        candidate_raw_events = self._buffered_reasoning_events
         self._buffered_reasoning_events = []
         self._reasoning_text = ""
         tool_call_id = f"call_qwen_rewrite_{self._call_index}"
         self._call_index += 1
-        self._tool_call_emitted = True
-        self.rewritten = True
-        self.applied.append(
-            {
-                "id": QWEN_TAGGED_TOOL_CALL_REWRITE,
-                "action": "promoted_qwen_tagged_tool_call",
-                "function": parsed.function_name,
-            }
-        )
+        self._candidate_pending = True
+        self._candidate_raw_events = candidate_raw_events
+        self._candidate_applied = {
+            "id": QWEN_TAGGED_TOOL_CALL_REWRITE,
+            "action": "promoted_qwen_tagged_tool_call",
+            "function": parsed.function_name,
+        }
 
         outputs: list[bytes] = []
         if parsed.pre_text:
@@ -337,7 +389,43 @@ class QwenTaggedToolCallStreamRewriter:
                 )
             )
         )
+        self._candidate_outputs = outputs
+
+    def _accept_candidate(
+        self,
+        finish_event: dict[str, Any],
+        raw_finish_event: bytes,
+    ) -> list[bytes]:
+        outputs = [*self._candidate_outputs, *self._post_candidate_events]
+        if _event_finish_reason(finish_event) == "stop":
+            outputs.append(
+                _encode_sse_json_event(_copy_event_with_finish_reason(finish_event, "tool_calls"))
+            )
+        else:
+            outputs.append(raw_finish_event)
+        if self._candidate_applied is not None:
+            self.applied.append(self._candidate_applied)
+        self.rewritten = True
+        self._clear_candidate()
         return outputs
+
+    def _reject_candidate(self, warning: str, *tail_events: bytes) -> list[bytes]:
+        self.warnings.append(warning)
+        self._rejected = True
+        outputs = [
+            *self._candidate_raw_events,
+            *self._post_candidate_events,
+            *tail_events,
+        ]
+        self._clear_candidate()
+        return outputs
+
+    def _clear_candidate(self) -> None:
+        self._candidate_raw_events = []
+        self._candidate_outputs = []
+        self._post_candidate_events = []
+        self._candidate_applied = None
+        self._candidate_pending = False
 
     def _flush_buffered_reasoning(self) -> list[bytes]:
         events = self._buffered_reasoning_events
@@ -452,6 +540,12 @@ def _rewrite_qwen_non_streaming(
             request_payload=request_payload,
         )
         if parse_result.status == "matched" and parse_result.parsed is not None:
+            if _message_has_non_empty_content(message):
+                warnings.append(
+                    "Qwen tool-call rewrite rejected: assistant content appeared "
+                    "alongside tagged block."
+                )
+                continue
             parsed = parse_result.parsed
             message["content"] = parsed.pre_text or None
             message.pop("reasoning", None)
@@ -578,6 +672,17 @@ def _message_reasoning_field(message: dict[str, Any]) -> str | None:
     return None
 
 
+def _message_has_non_empty_content(message: dict[str, Any]) -> bool:
+    content = message.get("content")
+    if content is None:
+        return False
+    if isinstance(content, str):
+        return bool(content.strip())
+    if isinstance(content, list):
+        return bool(content)
+    return True
+
+
 def _decode_sse_event(raw_event: bytes) -> dict[str, Any] | None:
     try:
         text = raw_event.decode("utf-8")
@@ -631,6 +736,23 @@ def _event_reasoning_text(event: dict[str, Any]) -> str | None:
         if isinstance(delta.get(field), str):
             return delta[field]
     return None
+
+
+def _event_has_non_empty_assistant_text(event: dict[str, Any]) -> bool:
+    choices = event.get("choices")
+    if not isinstance(choices, list):
+        return False
+    for choice in choices:
+        if not isinstance(choice, dict):
+            continue
+        delta = choice.get("delta")
+        if not isinstance(delta, dict):
+            continue
+        for field in ("content", "reasoning_content", "reasoning"):
+            value = delta.get(field)
+            if isinstance(value, str) and value.strip():
+                return True
+    return False
 
 
 def _event_finish_reason(event: dict[str, Any]) -> str | None:

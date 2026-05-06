@@ -442,6 +442,7 @@ def test_streaming_qwen_reasoning_tool_call_is_rewritten_and_audited(
                 "messages": [{"role": "user", "content": "inspect requirements"}],
                 "tools": _read_file_tools(),
                 "stream": True,
+                "stream_options": {"include_usage": True},
                 "metadata": {
                     "qwen_reasoning_tool_leak": True,
                     "qwen_reasoning_tool_leak_split": True,
@@ -455,6 +456,7 @@ def test_streaming_qwen_reasoning_tool_call_is_rewritten_and_audited(
     assert response.status_code == 200
     assert b'"tool_calls"' in body
     assert b'"finish_reason":"tool_calls"' in body
+    assert b'"usage"' in body
     assert b"<tool_call>" not in body
     assert b"The requirements.txt has an incorrect package name" in body
     assert b"data: [DONE]\n\n" in body
@@ -594,6 +596,53 @@ def test_malformed_qwen_reasoning_tool_call_passes_through_with_warning(
         assert any("duplicate parameter" in warning for warning in warnings)
 
 
+def test_streaming_qwen_post_tool_content_rejects_rewrite_with_warning(
+    tmp_path: Path,
+) -> None:
+    app = _create_routed_app(
+        tmp_path,
+        ModelRoute(
+            model="local-qwen",
+            upstream_url=ROUTE_UPSTREAM_URL,
+            fixes=(QWEN_TAGGED_TOOL_CALL_REWRITE,),
+        ),
+    )
+
+    with TestClient(app) as client:
+        with client.stream(
+            "POST",
+            "/v1/chat/completions",
+            json={
+                "model": "local-qwen",
+                "messages": [{"role": "user", "content": "inspect requirements"}],
+                "tools": _read_file_tools(),
+                "stream": True,
+                "metadata": {
+                    "qwen_reasoning_tool_leak": True,
+                    "qwen_reasoning_tool_post_content": True,
+                },
+            },
+        ) as response:
+            body = b"".join(response.iter_bytes())
+
+    assert response.status_code == 200
+    assert b"<tool_call>" in body
+    assert b"Final answer after tagged reasoning." in body
+    assert b'"tool_calls"' not in body
+    assert b'"finish_reason": "stop"' in body
+
+    with app.state.session_factory() as session:
+        record = session.scalars(select(RequestRecord)).one()
+        assert record.has_tool_calls is True
+        assert record.response_was_rewritten is False
+        assert record.upstream_response_body_raw == record.response_body
+        warnings = json.loads(record.compat_fix_errors_json)["warnings"]
+        assert any(
+            "assistant content appeared after tagged block" in warning
+            for warning in warnings
+        )
+
+
 def test_non_streaming_qwen_reasoning_tool_call_is_rewritten_and_audited(
     tmp_path: Path,
 ) -> None:
@@ -637,6 +686,51 @@ def test_non_streaming_qwen_reasoning_tool_call_is_rewritten_and_audited(
         assert record.upstream_response_body_raw is not None
         assert b"reasoning_content" in record.upstream_response_body_raw
         assert b"reasoning_content" not in record.response_body
+
+
+def test_non_streaming_qwen_content_alongside_tag_rejects_rewrite_with_warning(
+    tmp_path: Path,
+) -> None:
+    app = _create_routed_app(
+        tmp_path,
+        ModelRoute(
+            model="local-qwen",
+            upstream_url=ROUTE_UPSTREAM_URL,
+            fixes=(QWEN_TAGGED_TOOL_CALL_REWRITE,),
+        ),
+    )
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "local-qwen",
+                "messages": [{"role": "user", "content": "inspect requirements"}],
+                "tools": _read_file_tools(),
+                "metadata": {
+                    "qwen_non_stream_tool_leak": True,
+                    "qwen_non_stream_tool_post_content": True,
+                },
+            },
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    choice = payload["choices"][0]
+    assert choice["finish_reason"] == "stop"
+    assert choice["message"]["content"] == "Final answer after tagged reasoning."
+    assert "reasoning_content" in choice["message"]
+    assert "tool_calls" not in choice["message"]
+
+    with app.state.session_factory() as session:
+        record = session.scalars(select(RequestRecord)).one()
+        assert record.response_was_rewritten is False
+        assert record.upstream_response_body_raw == record.response_body
+        warnings = json.loads(record.compat_fix_errors_json)["warnings"]
+        assert any(
+            "assistant content appeared alongside tagged block" in warning
+            for warning in warnings
+        )
 
 
 def test_responses_streaming_tool_call_sets_tool_signal_and_ui_renderer(

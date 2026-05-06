@@ -209,6 +209,11 @@ def _chat_payload(payload: Any) -> dict[str, Any]:
                 {
                     "message": {
                         "role": "assistant",
+                        **(
+                            {"content": "Final answer after tagged reasoning."}
+                            if payload.get("metadata", {}).get("qwen_non_stream_tool_post_content")
+                            else {}
+                        ),
                         reasoning_field: _qwen_reasoning_text(payload),
                     },
                     "finish_reason": "stop",
@@ -290,6 +295,20 @@ def _qwen_reasoning_tool_events(payload: dict[str, Any]) -> list[dict[str, Any]]
                 "model": model,
                 "choices": [],
                 "usage": {"prompt_tokens": 6, "completion_tokens": 3, "total_tokens": 9},
+            }
+        )
+    if payload.get("metadata", {}).get("qwen_reasoning_tool_post_content"):
+        events.append(
+            {
+                "id": "chat_stream",
+                "model": model,
+                "choices": [
+                    {
+                        "index": 0,
+                        "delta": {"content": "Final answer after tagged reasoning."},
+                        "finish_reason": None,
+                    }
+                ],
             }
         )
     events.append(
