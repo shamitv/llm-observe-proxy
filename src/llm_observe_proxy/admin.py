@@ -21,6 +21,11 @@ from llm_observe_proxy.capture import (
     extract_stream_token_usage,
     extract_token_usage,
 )
+from llm_observe_proxy.compatibility import (
+    compatibility_fix_rows,
+    fix_ids_text,
+    normalize_fix_ids,
+)
 from llm_observe_proxy.config import ModelRoute, normalize_upstream_url
 from llm_observe_proxy.costing import RunCostEstimate, estimate_run_cost
 from llm_observe_proxy.database import (
@@ -33,6 +38,7 @@ from llm_observe_proxy.database import (
     delete_ui_model_route,
     end_active_task_run,
     get_active_task_run,
+    get_default_compat_fixes,
     get_effective_model_routes,
     get_expose_all_ips,
     get_incoming_host,
@@ -44,6 +50,7 @@ from llm_observe_proxy.database import (
     list_model_providers,
     list_task_runs_with_stats,
     session_scope,
+    set_default_compat_fixes,
     set_incoming_server,
     set_setting,
     start_task_run,
@@ -319,6 +326,15 @@ async def detail(request: Request, record_id: int, mode: str = "auto") -> HTMLRe
         detail_record["response_content_type"],
         mode,
     )
+    raw_response_render = (
+        render_payload(
+            detail_record["upstream_response_body_raw"],
+            detail_record["response_content_type"],
+            mode,
+        )
+        if detail_record["upstream_response_body_raw"]
+        else None
+    )
     return templates.TemplateResponse(
         request,
         "detail.html",
@@ -327,6 +343,7 @@ async def detail(request: Request, record_id: int, mode: str = "auto") -> HTMLRe
             "images": images,
             "request_render": request_render,
             "response_render": response_render,
+            "raw_response_render": raw_response_render,
             "mode": response_render.mode if mode == "auto" else mode,
             "active_run": active_run,
             "upstream_url": upstream_url,
@@ -477,6 +494,18 @@ async def update_upstream(request: Request, upstream_url: str = Form(...)) -> HT
     return RedirectResponse("/admin/settings", status_code=303)
 
 
+@router.post("/settings/compat-fixes", response_class=HTMLResponse)
+async def update_default_compat_fixes(request: Request, fixes: str = Form("")) -> HTMLResponse:
+    session_factory: SessionFactory = request.app.state.session_factory
+    try:
+        parsed_fixes = normalize_fix_ids(fixes)
+        with session_scope(session_factory) as session:
+            set_default_compat_fixes(session, parsed_fixes)
+    except ValueError as exc:
+        return await _settings_with_error(request, str(exc))
+    return RedirectResponse("/admin/settings", status_code=303)
+
+
 @router.post("/settings/model-routes", response_class=HTMLResponse)
 async def upsert_model_route(
     request: Request,
@@ -485,6 +514,7 @@ async def upsert_model_route(
     upstream_model: str = Form(""),
     provider_slug: str = Form(""),
     api_key_env: str = Form(""),
+    fixes: str = Form(""),
 ) -> HTMLResponse:
     settings = request.app.state.settings
     try:
@@ -494,6 +524,7 @@ async def upsert_model_route(
             upstream_model=upstream_model,
             provider_slug=provider_slug,
             api_key_env=api_key_env,
+            fixes=normalize_fix_ids(fixes),
         )
     except ValueError as exc:
         return await _settings_with_error(request, str(exc))
@@ -790,9 +821,13 @@ def _settings_context(
 ) -> dict[str, Any]:
     settings = request.app.state.settings
     providers = list_model_providers(session)
+    default_fixes = get_default_compat_fixes(session, settings)
     return {
         "upstream_url": get_upstream_url(session, settings),
         "model_routes": _settings_model_route_rows(session, settings, providers),
+        "default_compat_fixes": default_fixes,
+        "default_compat_fixes_text": fix_ids_text(default_fixes),
+        "available_compat_fixes": compatibility_fix_rows(),
         "providers": [_provider_row(provider) for provider in providers],
         "model_prices": [_model_price_row(price) for price in list_model_prices(session)],
         "incoming_host": get_incoming_host(session, settings),
@@ -817,12 +852,14 @@ def _settings_model_route_rows(session, settings, providers) -> list[dict[str, o
         row["source"] = "startup"
         row["editable"] = False
         row["provider_name"] = provider_names.get(route.provider_slug or "")
+        row["fixes_text"] = fix_ids_text(route.fixes)
         rows.append(row)
     for route in get_ui_model_routes(session):
         row = model_route_display(route)
         row["source"] = "ui"
         row["editable"] = True
         row["provider_name"] = provider_names.get(route.provider_slug or "")
+        row["fixes_text"] = fix_ids_text(route.fixes)
         rows.append(row)
     return rows
 
@@ -1086,6 +1123,7 @@ def _record_detail(record: RequestRecord) -> dict[str, object]:
         "response_status": record.response_status,
         "response_headers_json": record.response_headers_json,
         "response_body": record.response_body,
+        "upstream_response_body_raw": record.upstream_response_body_raw,
         "response_content_type": record.response_content_type,
         "duration_ms": record.duration_ms,
         "is_stream": record.is_stream,
@@ -1101,6 +1139,9 @@ def _record_detail(record: RequestRecord) -> dict[str, object]:
         "billing_output_cost_usd": record.billing_output_cost_usd,
         "billing_total_cost_usd": record.billing_total_cost_usd,
         "pricing_snapshot_json": record.pricing_snapshot_json,
+        "response_was_rewritten": record.response_was_rewritten,
+        "compat_fixes_json": record.compat_fixes_json,
+        "compat_fix_errors_json": record.compat_fix_errors_json,
         "task_run": _task_run_summary(record.task_run, session=None),
         "error": record.error,
     }

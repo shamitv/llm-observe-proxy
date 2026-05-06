@@ -130,6 +130,18 @@ async def _streaming_chunks(path: str, payload: dict[str, Any]):
             },
             {"type": "response.completed", "response": {"id": "resp_stream"}},
         ]
+    elif payload.get("metadata", {}).get("qwen_reasoning_tool_leak"):
+        events = _qwen_reasoning_tool_events(payload)
+        for event in events:
+            raw = f"data: {json.dumps(event)}\n\n".encode()
+            if payload.get("metadata", {}).get("fragment_sse_event"):
+                split_at = max(1, len(raw) // 2)
+                yield raw[:split_at]
+                yield raw[split_at:]
+            else:
+                yield raw
+        yield b"data: [DONE]\n\n"
+        return
     else:
         model = payload.get("model", "gpt-test") if isinstance(payload, dict) else "gpt-test"
         chunks = [
@@ -184,6 +196,26 @@ def _responses_payload(payload: Any) -> dict[str, Any]:
 
 def _chat_payload(payload: Any) -> dict[str, Any]:
     model = payload.get("model", "gpt-test") if isinstance(payload, dict) else "gpt-test"
+    if isinstance(payload, dict) and payload.get("metadata", {}).get("qwen_non_stream_tool_leak"):
+        reasoning_field = payload.get("metadata", {}).get(
+            "qwen_reasoning_field",
+            "reasoning_content",
+        )
+        return {
+            "id": "chat_qwen_leak",
+            "object": "chat.completion",
+            "model": model,
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        reasoning_field: _qwen_reasoning_text(payload),
+                    },
+                    "finish_reason": "stop",
+                }
+            ],
+            "usage": {"prompt_tokens": 6, "completion_tokens": 3, "total_tokens": 9},
+        }
     if isinstance(payload, dict) and payload.get("tools"):
         return {
             "id": "chat_tool",
@@ -221,6 +253,90 @@ def _chat_payload(payload: Any) -> dict[str, Any]:
         ],
         "usage": {"prompt_tokens": 6, "completion_tokens": 3, "total_tokens": 9},
     }
+
+
+def _qwen_reasoning_tool_events(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    model = payload.get("model", "gpt-test")
+    reasoning_field = payload.get("metadata", {}).get("qwen_reasoning_field", "reasoning_content")
+    pre_text, block = _qwen_reasoning_text(payload).split("<tool_call>", maxsplit=1)
+    block = f"<tool_call>{block}"
+    reasoning_chunks = [pre_text, block]
+    if payload.get("metadata", {}).get("qwen_reasoning_tool_leak_split"):
+        midpoint = block.find("<parameter=filePath>")
+        if midpoint < 0:
+            midpoint = block.find("<parameter=command>")
+        midpoint = midpoint if midpoint > 0 else max(1, len(block) // 2)
+        reasoning_chunks = [pre_text, block[:midpoint], block[midpoint:]]
+    events = [
+        {
+            "id": "chat_stream",
+            "model": model,
+            "choices": [{"index": 0, "delta": {"role": "assistant", "content": None}}],
+        }
+    ]
+    events.extend(
+        {
+            "id": "chat_stream",
+            "model": model,
+            "choices": [{"index": 0, "delta": {reasoning_field: chunk}, "finish_reason": None}],
+        }
+        for chunk in reasoning_chunks
+        if chunk
+    )
+    if payload.get("stream_options", {}).get("include_usage"):
+        events.append(
+            {
+                "id": "chat_stream",
+                "model": model,
+                "choices": [],
+                "usage": {"prompt_tokens": 6, "completion_tokens": 3, "total_tokens": 9},
+            }
+        )
+    events.append(
+        {
+            "id": "chat_stream",
+            "model": model,
+            "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+        }
+    )
+    return events
+
+
+def _qwen_reasoning_text(payload: dict[str, Any]) -> str:
+    if payload.get("metadata", {}).get("qwen_reasoning_tool_malformed"):
+        return """Need to inspect this file:
+
+<tool_call>
+<function=read_file>
+<parameter=filePath>
+/tmp/example-workspace/example-project/backend/requirements.txt
+</parameter>
+<parameter=filePath>
+/tmp/example-workspace/example-project/backend/other.txt
+</parameter>
+<parameter=startLine>
+1
+</parameter>
+<parameter=endLine>
+30
+</parameter>
+</function>
+</tool_call>"""
+    return """The requirements.txt has an incorrect package name. Let me check and fix it:
+
+<tool_call>
+<function=read_file>
+<parameter=endLine>
+30
+</parameter>
+<parameter=filePath>
+/tmp/example-workspace/example-project/backend/requirements.txt
+</parameter>
+<parameter=startLine>
+1
+</parameter>
+</function>
+</tool_call>"""
 
 
 def _json_or_none(body: bytes) -> Any | None:

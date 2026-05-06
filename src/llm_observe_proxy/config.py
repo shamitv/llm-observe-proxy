@@ -8,6 +8,8 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
+from llm_observe_proxy.compatibility import normalize_fix_ids
+
 DEFAULT_DATABASE_URL = "sqlite:///./llm_observe_proxy.sqlite3"
 DEFAULT_INCOMING_HOST = "localhost"
 DEFAULT_INCOMING_PORT = 8080
@@ -24,6 +26,7 @@ class ModelRoute:
     provider_slug: str | None = None
     api_key: str | None = None
     api_key_env: str | None = None
+    fixes: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         model = self.model.strip()
@@ -35,6 +38,7 @@ class ModelRoute:
         object.__setattr__(self, "provider_slug", normalize_provider_slug(self.provider_slug))
         object.__setattr__(self, "api_key", _optional_str(self.api_key))
         object.__setattr__(self, "api_key_env", _optional_str(self.api_key_env))
+        object.__setattr__(self, "fixes", normalize_fix_ids(self.fixes))
         if self.api_key and self.api_key_env:
             raise ValueError("Model routes cannot define both api_key and api_key_env.")
 
@@ -51,7 +55,11 @@ class Settings:
     expose_all_ips: bool = False
     upstream_url: str = DEFAULT_UPSTREAM_URL
     model_routes: tuple[ModelRoute, ...] = ()
+    default_fixes: tuple[str, ...] = ()
     log_level: str = "INFO"
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "default_fixes", normalize_fix_ids(self.default_fixes))
 
 
 def get_settings(
@@ -62,9 +70,26 @@ def get_settings(
     expose_all_ips: bool | None = None,
     upstream_url: str | None = None,
     model_routes: tuple[ModelRoute, ...] | None = None,
+    default_fixes: tuple[str, ...] | None = None,
     models_file: str | None = None,
     log_level: str | None = None,
 ) -> Settings:
+    if model_routes is not None:
+        loaded_models = LoadedModelConfig(
+            model_routes=model_routes,
+            default_fixes=normalize_fix_ids(default_fixes),
+        )
+    else:
+        loaded_models = load_model_config(
+            models_file=models_file or os.getenv("LLM_OBSERVE_MODELS_FILE"),
+            models_json=os.getenv("LLM_OBSERVE_MODELS_JSON"),
+            default_fixes_json=os.getenv("LLM_OBSERVE_DEFAULT_FIXES_JSON"),
+        )
+        if default_fixes is not None:
+            loaded_models = LoadedModelConfig(
+                model_routes=loaded_models.model_routes,
+                default_fixes=normalize_fix_ids(default_fixes),
+            )
     return Settings(
         database_url=database_url or os.getenv("LLM_OBSERVE_DATABASE_URL", DEFAULT_DATABASE_URL),
         incoming_host=incoming_host
@@ -77,14 +102,8 @@ def get_settings(
             else _env_bool("LLM_OBSERVE_EXPOSE_ALL_IPS", False)
         ),
         upstream_url=upstream_url or os.getenv("LLM_OBSERVE_UPSTREAM_URL", DEFAULT_UPSTREAM_URL),
-        model_routes=(
-            model_routes
-            if model_routes is not None
-            else load_model_routes(
-                models_file=models_file or os.getenv("LLM_OBSERVE_MODELS_FILE"),
-                models_json=os.getenv("LLM_OBSERVE_MODELS_JSON"),
-            )
-        ),
+        model_routes=loaded_models.model_routes,
+        default_fixes=loaded_models.default_fixes,
         log_level=log_level or os.getenv("LLM_OBSERVE_LOG_LEVEL", "INFO"),
     )
 
@@ -128,6 +147,21 @@ def load_model_routes(
     models_file: str | None = None,
     models_json: str | None = None,
 ) -> tuple[ModelRoute, ...]:
+    return load_model_config(models_file=models_file, models_json=models_json).model_routes
+
+
+@dataclass(frozen=True)
+class LoadedModelConfig:
+    model_routes: tuple[ModelRoute, ...] = ()
+    default_fixes: tuple[str, ...] = ()
+
+
+def load_model_config(
+    *,
+    models_file: str | None = None,
+    models_json: str | None = None,
+    default_fixes_json: str | None = None,
+) -> LoadedModelConfig:
     if models_file:
         try:
             data = json.loads(Path(models_file).read_text(encoding="utf-8"))
@@ -135,14 +169,28 @@ def load_model_routes(
             raise ValueError("Unable to read LLM_OBSERVE_MODELS_FILE.") from exc
         except json.JSONDecodeError as exc:
             raise ValueError("LLM_OBSERVE_MODELS_FILE must contain valid JSON.") from exc
-        return parse_model_routes(data)
+        return _model_config_with_default_fixes_fallback(data, default_fixes_json)
     if models_json:
         try:
             data = json.loads(models_json)
         except json.JSONDecodeError as exc:
             raise ValueError("LLM_OBSERVE_MODELS_JSON must contain valid JSON.") from exc
-        return parse_model_routes(data)
-    return ()
+        return _model_config_with_default_fixes_fallback(data, default_fixes_json)
+    return LoadedModelConfig(default_fixes=_load_default_fixes_json(default_fixes_json))
+
+
+def parse_model_config(data: Any) -> LoadedModelConfig:
+    if isinstance(data, list):
+        return LoadedModelConfig(model_routes=parse_model_routes(data))
+    if not isinstance(data, dict):
+        raise ValueError("Model configuration must be a JSON array or object.")
+    model_routes = data.get("model_routes", [])
+    if not isinstance(model_routes, list):
+        raise ValueError("model_routes must be a JSON array.")
+    return LoadedModelConfig(
+        model_routes=parse_model_routes(model_routes),
+        default_fixes=normalize_fix_ids(data.get("default_fixes")),
+    )
 
 
 def parse_model_routes(data: Any) -> tuple[ModelRoute, ...]:
@@ -180,7 +228,32 @@ def _model_route_from_dict(item: dict[str, Any]) -> ModelRoute:
         ),
         api_key=item.get("api_key") if isinstance(item.get("api_key"), str) else None,
         api_key_env=item.get("api_key_env") if isinstance(item.get("api_key_env"), str) else None,
+        fixes=item.get("fixes", ()),
     )
+
+
+def _load_default_fixes_json(value: str | None) -> tuple[str, ...]:
+    if not value:
+        return ()
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError as exc:
+        raise ValueError("LLM_OBSERVE_DEFAULT_FIXES_JSON must contain valid JSON.") from exc
+    return normalize_fix_ids(parsed)
+
+
+def _model_config_with_default_fixes_fallback(
+    data: Any,
+    default_fixes_json: str | None,
+) -> LoadedModelConfig:
+    loaded = parse_model_config(data)
+    object_supplies_default_fixes = isinstance(data, dict) and "default_fixes" in data
+    if object_supplies_default_fixes:
+        return loaded
+    default_fixes = _load_default_fixes_json(default_fixes_json)
+    if not default_fixes:
+        return loaded
+    return LoadedModelConfig(model_routes=loaded.model_routes, default_fixes=default_fixes)
 
 
 def _env_int(name: str, default: int) -> int:
