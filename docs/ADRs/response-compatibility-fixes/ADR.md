@@ -436,9 +436,15 @@ Add tests for:
 
 ### Regression Fixtures
 
-Use sanitized Qwen/Copilot fixtures from `docs/analysis/may_4/fixtures/` as
-large integration-style regression tests where practical. Keep smaller focused
-fixtures for normal unit tests.
+Use the reduced scenarios in
+[`regression-scenarios.md`](regression-scenarios.md) as the committed regression
+source for this ADR. They are distilled from larger sanitized Qwen/Copilot
+captures and include enough request/response detail to build focused tests
+without adding the large raw captures to this repository.
+
+If full raw sanitized captures are added later, place them under a documented
+fixture directory and link to that committed location from both this ADR and the
+companion scenario document.
 
 ## Migration Plan
 
@@ -538,9 +544,12 @@ Negative:
 
 - With no configured fixes, all existing pass-through and capture tests continue
   to pass.
-- With `qwen-tagged-tool-call-rewrite` configured for a model route, a malformed
-  Qwen tagged tool call inside reasoning is returned to the client as structured
-  OpenAI `tool_calls`.
+- With `qwen-tagged-tool-call-rewrite` configured for a model route, a complete
+  well-formed Qwen tagged tool call inside reasoning is returned to the client
+  as structured OpenAI `tool_calls`.
+- Malformed or incomplete Qwen tagged tool-call blocks pass through unchanged,
+  remain available in the captured raw upstream body, and record a clear rewrite
+  warning.
 - The original upstream SSE body is still available in the captured record.
 - The client-visible transformed SSE body is available in the captured record.
 - The request detail page shows that the response was rewritten and lists the
