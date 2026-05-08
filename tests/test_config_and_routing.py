@@ -4,7 +4,13 @@ import json
 
 import pytest
 
-from llm_observe_proxy.config import ModelRoute, Settings, get_settings, load_model_routes
+from llm_observe_proxy.config import (
+    ModelRoute,
+    Settings,
+    get_settings,
+    load_model_config,
+    load_model_routes,
+)
 from llm_observe_proxy.routing import (
     RoutingDecision,
     build_forward_body,
@@ -39,6 +45,63 @@ def test_model_routes_parse_from_json_env(monkeypatch: pytest.MonkeyPatch) -> No
     assert route.upstream_url == "http://localhost:8000/v1"
     assert route.effective_upstream_model == "qwen3-coder-30b"
     assert route.provider_slug == "openai"
+    assert route.fixes == ()
+    assert settings.default_fixes == ()
+
+
+def test_model_config_object_parses_default_and_route_fixes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("LLM_OBSERVE_MODELS_FILE", raising=False)
+    monkeypatch.delenv("LLM_OBSERVE_DEFAULT_FIXES_JSON", raising=False)
+    monkeypatch.setenv(
+        "LLM_OBSERVE_MODELS_JSON",
+        json.dumps(
+            {
+                "default_fixes": ["qwen-tagged-tool-call-rewrite"],
+                "model_routes": [
+                    {
+                        "model": "local-qwen",
+                        "upstream_url": "http://localhost:8000/v1",
+                        "fixes": ["qwen-tagged-tool-call-rewrite"],
+                    }
+                ],
+            }
+        ),
+    )
+
+    settings = get_settings()
+
+    assert settings.default_fixes == ("qwen-tagged-tool-call-rewrite",)
+    assert settings.model_routes[0].fixes == ("qwen-tagged-tool-call-rewrite",)
+
+
+def test_default_fixes_json_applies_when_model_config_is_array(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("LLM_OBSERVE_MODELS_FILE", raising=False)
+    monkeypatch.setenv(
+        "LLM_OBSERVE_MODELS_JSON",
+        json.dumps([{"model": "local", "upstream_url": "http://localhost:8000/v1"}]),
+    )
+    monkeypatch.setenv(
+        "LLM_OBSERVE_DEFAULT_FIXES_JSON",
+        json.dumps(["qwen-tagged-tool-call-rewrite"]),
+    )
+
+    settings = get_settings()
+
+    assert settings.model_routes[0].model == "local"
+    assert settings.default_fixes == ("qwen-tagged-tool-call-rewrite",)
+
+
+def test_model_config_object_default_fixes_override_default_fixes_env() -> None:
+    config = load_model_config(
+        models_json=json.dumps({"default_fixes": [], "model_routes": []}),
+        default_fixes_json=json.dumps(["qwen-tagged-tool-call-rewrite"]),
+    )
+
+    assert config.default_fixes == ()
 
 
 def test_model_routes_file_wins_over_json_env(
@@ -94,6 +157,34 @@ def test_model_routes_reject_invalid_configuration() -> None:
             )
         )
 
+    with pytest.raises(ValueError, match="Unknown compatibility fix"):
+        load_model_config(
+            models_json=json.dumps(
+                {
+                    "model_routes": [
+                        {
+                            "model": "gpt-test",
+                            "upstream_url": "http://localhost:8000/v1",
+                            "fixes": ["unknown-fix"],
+                        }
+                    ]
+                }
+            )
+        )
+
+    with pytest.raises(ValueError, match="Duplicate compatibility fix"):
+        load_model_config(
+            models_json=json.dumps(
+                {
+                    "default_fixes": [
+                        "qwen-tagged-tool-call-rewrite",
+                        "qwen-tagged-tool-call-rewrite",
+                    ],
+                    "model_routes": [],
+                }
+            )
+        )
+
 
 def test_routing_selects_exact_model_and_rewrites_body() -> None:
     route = ModelRoute(
@@ -109,6 +200,7 @@ def test_routing_selects_exact_model_and_rewrites_body() -> None:
     forward_body = build_forward_body(body, payload, decision)
 
     assert decision.model_route == "local-qwen"
+    assert decision.fixes == ()
     assert decision.upstream_base_url == "http://localhost:8000/v1"
     assert decision.upstream_model == "qwen3-coder-30b"
     assert json.loads(forward_body)["model"] == "qwen3-coder-30b"

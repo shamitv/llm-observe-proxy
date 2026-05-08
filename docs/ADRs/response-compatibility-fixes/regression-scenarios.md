@@ -2,7 +2,7 @@
 
 This companion document gives enough sanitized request and response detail to
 build regression tests for
-[`ADR.md`](ADR.md)'s `qwen-tagged-tool-call-rewrite` proposal.
+[`ADR.md`](ADR.md)'s `qwen-tagged-tool-call-rewrite` implementation.
 
 The source captures were large Copilot-style `/v1/chat/completions` requests
 with dozens to hundreds of prior messages and tool definitions. They are not
@@ -14,7 +14,7 @@ behaviorally important shapes:
 - Recent conversation state that made the next action likely.
 - Upstream SSE output where a Qwen `<tool_call>` block was emitted inside
   reasoning instead of `delta.tool_calls`.
-- The expected client-visible OpenAI-compatible shape after the proposed fix.
+- The expected client-visible OpenAI-compatible shape after the fix.
 
 Use these as reduced test inputs. They are not guaranteed to reproduce the exact
 model generation by themselves because the original captures included much more
@@ -439,5 +439,7 @@ Focused tests should assert:
   where possible.
 - Malformed, incomplete, unknown-tool, or ambiguous duplicate-parameter blocks
   pass through unchanged and record warnings.
+- Assistant content after a candidate tagged block must reject the rewrite and
+  preserve the original upstream response.
 - Raw upstream SSE remains available in capture records.
 - Client-visible transformed SSE remains available in capture records.

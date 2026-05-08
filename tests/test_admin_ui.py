@@ -12,6 +12,7 @@ from sqlalchemy import select
 
 from llm_observe_proxy.admin import templates
 from llm_observe_proxy.app import create_app
+from llm_observe_proxy.compatibility import QWEN_TAGGED_TOOL_CALL_REWRITE
 from llm_observe_proxy.config import ModelRoute, Settings
 from llm_observe_proxy.database import (
     ImageAsset,
@@ -121,6 +122,7 @@ def test_settings_manages_ui_model_routes(
             "provider_slug": "openai",
             "api_key_env": "UI_ROUTE_KEY",
             "api_key": "direct-secret",
+            "fixes": QWEN_TAGGED_TOOL_CALL_REWRITE,
         },
         follow_redirects=False,
     )
@@ -131,6 +133,7 @@ def test_settings_manages_ui_model_routes(
     assert "ui-upstream" in settings.text
     assert "OpenAI" in settings.text
     assert "UI_ROUTE_KEY" in settings.text
+    assert QWEN_TAGGED_TOOL_CALL_REWRITE in settings.text
     assert "direct-secret" not in settings.text
     assert "Settings" in settings.text
 
@@ -142,6 +145,7 @@ def test_settings_manages_ui_model_routes(
             "upstream_model": "ui-updated",
             "provider_slug": "openai",
             "api_key_env": "",
+            "fixes": "",
         },
         follow_redirects=False,
     )
@@ -189,6 +193,14 @@ def test_settings_validates_ui_model_routes_against_startup_config(tmp_path: Pat
             "/admin/settings/model-routes",
             data={"model": "locked-model", "upstream_url": ROUTE_UPSTREAM_URL},
         )
+        invalid_fix = client.post(
+            "/admin/settings/model-routes",
+            data={
+                "model": "new-model",
+                "upstream_url": ROUTE_UPSTREAM_URL,
+                "fixes": "unknown-fix",
+            },
+        )
         delete_locked = client.post(
             "/admin/settings/model-routes/delete",
             data={"model": "locked-model"},
@@ -200,6 +212,8 @@ def test_settings_validates_ui_model_routes_against_startup_config(tmp_path: Pat
     assert "Upstream URL must point to a /v1 base URL." in invalid_url.text
     assert duplicate.status_code == 400
     assert "Model route already exists in startup configuration." in duplicate.text
+    assert invalid_fix.status_code == 400
+    assert "Unknown compatibility fix" in invalid_fix.text
     assert delete_locked.status_code == 400
     assert "Startup configuration routes cannot be deleted from the UI." in delete_locked.text
     assert "Locked" in delete_locked.text
@@ -219,6 +233,7 @@ def test_ui_model_routes_persist_across_app_restart(tmp_path: Path) -> None:
                 "model": "persisted-ui",
                 "upstream_url": ROUTE_UPSTREAM_URL,
                 "upstream_model": "persisted-upstream",
+                "fixes": QWEN_TAGGED_TOOL_CALL_REWRITE,
             },
             follow_redirects=False,
         )
@@ -231,6 +246,40 @@ def test_ui_model_routes_persist_across_app_restart(tmp_path: Path) -> None:
     assert page.status_code == 200
     assert "persisted-ui" in page.text
     assert "persisted-upstream" in page.text
+    assert QWEN_TAGGED_TOOL_CALL_REWRITE in page.text
+
+
+def test_default_compat_fixes_display_validate_and_persist(tmp_path: Path) -> None:
+    db_path = tmp_path / "compat-fixes.sqlite3"
+    settings = Settings(
+        database_url=f"sqlite:///{db_path.as_posix()}",
+        upstream_url=GLOBAL_UPSTREAM_URL,
+    )
+
+    with TestClient(create_app(settings)) as client:
+        page = client.get("/admin/settings")
+        invalid = client.post(
+            "/admin/settings/compat-fixes",
+            data={"fixes": "qwen-tagged-tool-call-rewrite, qwen-tagged-tool-call-rewrite"},
+        )
+        saved = client.post(
+            "/admin/settings/compat-fixes",
+            data={"fixes": f"\n{QWEN_TAGGED_TOOL_CALL_REWRITE}\n"},
+            follow_redirects=False,
+        )
+
+    assert page.status_code == 200
+    assert "Default Compatibility Fixes" in page.text
+    assert "Promote complete Qwen" in page.text
+    assert invalid.status_code == 400
+    assert "Duplicate compatibility fix" in invalid.text
+    assert saved.status_code == 303
+
+    with TestClient(create_app(settings)) as client:
+        restarted = client.get("/admin/settings")
+
+    assert restarted.status_code == 200
+    assert QWEN_TAGGED_TOOL_CALL_REWRITE in restarted.text
 
 
 def test_settings_manages_model_providers_and_prices(

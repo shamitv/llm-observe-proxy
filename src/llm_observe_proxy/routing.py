@@ -31,6 +31,10 @@ class RoutingDecision:
     def provider_slug(self) -> str | None:
         return self.route.provider_slug if self.route else None
 
+    @property
+    def fixes(self) -> tuple[str, ...]:
+        return self.route.fixes if self.route else ()
+
 
 def select_model_route(
     request_payload: Any | None,
@@ -106,6 +110,7 @@ def model_route_display(route: ModelRoute) -> dict[str, str | None]:
         "upstream_url": route.upstream_url,
         "upstream_model": route.effective_upstream_model,
         "provider_slug": route.provider_slug,
+        "fixes": route.fixes,
         "api_key_env": route.api_key_env,
         "api_key_state": model_route_api_key_state(route),
     }

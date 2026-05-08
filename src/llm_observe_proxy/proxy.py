@@ -21,12 +21,18 @@ from llm_observe_proxy.capture import (
     extract_token_usage,
     has_tool_payload,
 )
+from llm_observe_proxy.compatibility import (
+    CompatibilityResult,
+    StreamingCompatibilityTransformer,
+    apply_non_streaming_compatibility_fixes,
+)
 from llm_observe_proxy.costing import apply_cost_estimate, estimate_cost
 from llm_observe_proxy.database import (
     ImageAsset,
     RequestRecord,
     SessionFactory,
     get_active_task_run,
+    get_default_compat_fixes,
     get_effective_model_routes,
     get_upstream_url,
     session_scope,
@@ -66,13 +72,17 @@ async def proxy_openai(path: str, request: Request) -> Response:
     request_payload = decode_json_bytes(request_body)
     request_headers = _headers_to_dict(request.headers)
     query_string = request.url.query
+    endpoint = f"/v1/{path}"
 
     with _session(session_factory) as session:
+        model_routes = get_effective_model_routes(session, settings)
         routing_decision = select_model_route(
             request_payload,
             settings,
-            get_effective_model_routes(session, settings),
+            model_routes,
         )
+        default_fixes = get_default_compat_fixes(session, settings)
+        compat_fix_ids = routing_decision.fixes if routing_decision.route else default_fixes
         forward_body = build_forward_body(request_body, request_payload, routing_decision)
         forward_headers = build_forward_headers(
             request.headers,
@@ -88,7 +98,7 @@ async def proxy_openai(path: str, request: Request) -> Response:
             method=request.method,
             path=f"/v1/{path}",
             query_string=query_string,
-            endpoint=f"/v1/{path}",
+            endpoint=endpoint,
             model=extract_model(request_payload),
             upstream_model=routing_decision.upstream_model,
             model_route=routing_decision.model_route,
@@ -131,6 +141,9 @@ async def proxy_openai(path: str, request: Request) -> Response:
             ),
             provider_slug=routing_decision.provider_slug,
             upstream_base_url=upstream_base,
+            endpoint=endpoint,
+            request_payload=request_payload,
+            compat_fix_ids=compat_fix_ids,
         )
 
     try:
@@ -140,8 +153,16 @@ async def proxy_openai(path: str, request: Request) -> Response:
             content=forward_body,
             headers=forward_headers,
         )
-        response_body = upstream_response.content
+        upstream_response_body = upstream_response.content
         response_headers = _headers_to_dict(upstream_response.headers)
+        compat_result = apply_non_streaming_compatibility_fixes(
+            endpoint=endpoint,
+            request_payload=request_payload,
+            response_body=upstream_response_body,
+            content_type=upstream_response.headers.get("content-type"),
+            fix_ids=compat_fix_ids,
+        )
+        response_body = compat_result.body
         response_payload = decode_json_bytes(response_body)
         duration_ms = int((time.perf_counter() - started) * 1000)
 
@@ -168,6 +189,12 @@ async def proxy_openai(path: str, request: Request) -> Response:
                 record.response_status = upstream_response.status_code
                 record.response_headers_json = compact_json(response_headers)
                 record.response_body = response_body
+                _apply_compatibility_capture(
+                    record,
+                    compat_result,
+                    raw_upstream_body=upstream_response_body,
+                    configured_fix_ids=compat_fix_ids,
+                )
                 record.response_content_type = upstream_response.headers.get("content-type")
                 record.duration_ms = duration_ms
                 record.has_tool_calls = record.has_tool_calls or has_tool_payload(response_payload)
@@ -207,6 +234,9 @@ async def _proxy_streaming(
     billing_fallback_model: str | None,
     provider_slug: str | None,
     upstream_base_url: str,
+    endpoint: str,
+    request_payload: Any | None,
+    compat_fix_ids: tuple[str, ...],
 ) -> Response:
     try:
         upstream_request = client.build_request(
@@ -220,24 +250,47 @@ async def _proxy_streaming(
         return _capture_upstream_error(session_factory, record_id, started, exc)
 
     async def stream_and_capture() -> AsyncIterator[bytes]:
-        chunks: list[bytes] = []
+        raw_chunks: list[bytes] = []
+        client_chunks: list[bytes] = []
         error: str | None = None
+        transformer = StreamingCompatibilityTransformer(
+            endpoint=endpoint,
+            request_payload=request_payload,
+            fix_ids=compat_fix_ids,
+        )
         try:
             async for chunk in upstream_response.aiter_raw():
-                chunks.append(chunk)
-                yield chunk
+                raw_chunks.append(chunk)
+                for output in transformer.feed(chunk):
+                    client_chunks.append(output)
+                    yield output
+            for output in transformer.finish():
+                client_chunks.append(output)
+                yield output
         except httpx.StreamConsumed:
             chunk = upstream_response.content
             if chunk:
-                chunks.append(chunk)
-                yield chunk
+                raw_chunks.append(chunk)
+                for output in transformer.feed(chunk):
+                    client_chunks.append(output)
+                    yield output
+                for output in transformer.finish():
+                    client_chunks.append(output)
+                    yield output
         except httpx.HTTPError as exc:
             error = str(exc)
             raise
         finally:
-            response_body = b"".join(chunks)
+            raw_response_body = b"".join(raw_chunks)
+            response_body = b"".join(client_chunks) if client_chunks else raw_response_body
             duration_ms = int((time.perf_counter() - started) * 1000)
             stream_events = decode_sse_json_events(response_body)
+            compat_result = CompatibilityResult(
+                body=response_body,
+                rewritten=transformer.rewritten,
+                applied=tuple(transformer.applied),
+                warnings=tuple(transformer.warnings),
+            )
             with _session(session_factory) as session:
                 record = session.get(RequestRecord, record_id)
                 if record is not None:
@@ -259,6 +312,12 @@ async def _proxy_streaming(
                         _headers_to_dict(upstream_response.headers)
                     )
                     record.response_body = response_body
+                    _apply_compatibility_capture(
+                        record,
+                        compat_result,
+                        raw_upstream_body=raw_response_body,
+                        configured_fix_ids=compat_fix_ids,
+                    )
                     record.response_content_type = upstream_response.headers.get("content-type")
                     record.duration_ms = duration_ms
                     record.error = error
@@ -292,6 +351,29 @@ def _capture_upstream_error(
             record.duration_ms = duration_ms
             record.error = str(exc)
     return JSONResponse(error_body, status_code=502)
+
+
+def _apply_compatibility_capture(
+    record: RequestRecord,
+    result: CompatibilityResult,
+    *,
+    raw_upstream_body: bytes,
+    configured_fix_ids: tuple[str, ...],
+) -> None:
+    if not configured_fix_ids and not result.applied and not result.warnings:
+        return
+    record.response_was_rewritten = result.rewritten
+    if result.rewritten or result.warnings:
+        record.upstream_response_body_raw = raw_upstream_body
+    record.compat_fixes_json = compact_json(
+        {
+            "configured": list(configured_fix_ids),
+            "applied": list(result.applied),
+        }
+    )
+    record.compat_fix_errors_json = (
+        compact_json({"warnings": list(result.warnings)}) if result.warnings else None
+    )
 
 
 def _build_upstream_url(upstream_base: str, path: str, query_string: str = "") -> str:

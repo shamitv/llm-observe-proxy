@@ -1,30 +1,13 @@
-# ADR Draft: Response Compatibility Fix Pipeline
+# ADR: Response Compatibility Fix Pipeline
 
-Status: Proposed
+Status: Accepted
 Date: 2026-05-05
 
 ## Is An ADR Appropriate?
 
-An ADR is appropriate if the project is deciding whether `llm-observe-proxy`
-should remain strictly record-only or allow an opt-in response transformation
-mode. That is an architectural boundary decision because it changes the proxy's
-contract from "observe and pass through" to "observe, optionally normalize, and
-pass through."
-
-This document should stay in ADR form while that boundary is being decided. If
-the decision is accepted, a follow-up implementation plan should live under
-`docs/plans/features/response-compatibility-fixes/`. If the team wants to
-explore the feature without committing to the architectural change, better
-alternatives are:
-
-- A design RFC under `docs/design/response-compatibility-fixes.md`.
-- A feature plan under `docs/plans/features/response-compatibility-fixes/`.
-- A troubleshooting runbook under `docs/analysis/` if the feature remains only
-  an experiment.
-
-Recommendation: keep this as a draft ADR because the most important question is
-architectural: whether a record-only proxy may offer explicitly configured
-compatibility rewrites.
+This ADR records the accepted architectural boundary: `llm-observe-proxy`
+remains record-only by default, but may apply explicitly configured,
+auditable response compatibility rewrites for known upstream quirks.
 
 ## Context
 
@@ -56,7 +39,7 @@ model/provider quirks.
 
 ## Decision
 
-Introduce an opt-in **Response Compatibility Fix Pipeline**.
+Introduce an opt-in, experimental **Response Compatibility Fix Pipeline**.
 
 A compatibility fix is a small, named, deterministic transformation that can
 inspect and optionally rewrite request or response data for a specific
@@ -213,9 +196,12 @@ For `text/event-stream` responses:
    metadata to reconstruct what the client received.
 
 For streaming fixes that need to detect complete tool-call blocks, the proxy may
-need bounded buffering. The `qwen-tagged-tool-call-rewrite` fix should buffer
-only after it sees `<tool_call>` in a reasoning delta and should flush as soon
-as a complete `</tool_call>` is parsed or the fix decides the block is invalid.
+need bounded buffering. The `qwen-tagged-tool-call-rewrite` fix passes ordinary
+reasoning deltas through immediately until a reasoning delta contains the exact
+`<tool_call>` marker. It then buffers only the candidate tagged block. Once the
+block parses, the transformed candidate is staged until the assistant turn
+finishes so the proxy can reject and pass through the original upstream bytes if
+later assistant text makes the rewrite unsafe.
 
 ## Initial Fix: Qwen Tagged Tool-Call Rewrite
 
@@ -252,8 +238,10 @@ sync
 </tool_call>
 ```
 
-The fix should preserve the pre-tool reasoning text as reasoning, then emit
-structured tool-call deltas:
+The fix should preserve pre-tool text. Text that was already streamed before
+the `<tool_call>` marker remains in its upstream reasoning field; text in the
+same candidate block before the marker may be emitted as assistant content.
+When accepted, the fix emits structured tool-call deltas:
 
 ```json
 {
@@ -298,6 +286,8 @@ The fix must refuse to rewrite when:
 - A structured tool call has already been emitted upstream.
 - The response already has non-empty final assistant content after the tool
   block.
+- A non-streaming response has non-empty `message.content` alongside a tagged
+  reasoning block.
 - The parser would need to guess a schema type that is not represented in the
   generated tags.
 
@@ -315,7 +305,7 @@ distinguish:
 - Per-fix action summaries.
 - Per-fix warnings/errors.
 
-Potential database fields:
+Implemented database fields:
 
 ```text
 response_body                 # client-visible body, or keep current semantics
@@ -325,10 +315,9 @@ compat_fix_errors_json         # parse/rewrite warnings
 response_was_rewritten         # boolean
 ```
 
-If schema churn should be minimized, the first implementation can store only
-client-visible `response_body` plus `compat_fixes_json`, but that loses the
-current strong audit property. The preferred implementation stores both raw and
-transformed bodies.
+The implementation stores the client-visible body in `response_body`. When a fix
+rewrites or records warnings, it also stores the original upstream body in
+`upstream_response_body_raw`.
 
 ## Ordering Semantics
 
@@ -388,12 +377,16 @@ Add parser-level tests for `qwen-tagged-tool-call-rewrite`:
 
 Add SSE tests for:
 
+- Enabled fixes pass ordinary reasoning without `<tool_call>` through without
+  buffering the full stream.
 - Tool-call tags split across many chunks.
 - `<tool_call>` begins in one `reasoning_content` chunk and ends later.
 - Provider uses `delta.reasoning` instead of `delta.reasoning_content`.
 - Pre-tool reasoning is preserved.
 - Final `finish_reason: stop` becomes `tool_calls` only when a tool call was
   emitted.
+- Assistant content after a candidate tagged block rejects the rewrite and
+  preserves the original upstream stream.
 - Usage events survive unchanged.
 - `[DONE]` survives unchanged.
 - Existing structured `delta.tool_calls` are passed through unchanged.
@@ -408,6 +401,8 @@ Add JSON response tests for:
 - `message.tool_calls` is synthesized and `finish_reason` becomes
   `tool_calls`.
 - Existing valid `message.tool_calls` are not modified.
+- Responses with non-empty `message.content` alongside tagged reasoning are not
+  rewritten and record a warning.
 - Rejected rewrites preserve the original response.
 
 ### Routing And Configuration Tests
@@ -526,30 +521,39 @@ Negative:
 - The project must preserve raw upstream evidence to remain trustworthy.
 - Misconfigured fixes could change client behavior in surprising ways.
 
-## Open Questions
+## Resolved Implementation Defaults
 
-- Should transformed responses be stored in `response_body`, or should
-  `response_body` remain raw upstream and a new field store client-visible
-  output?
-- Should fix configuration live only in startup JSON at first, or should UI
-  management ship in the first version?
-- Should fixes be allowed to transform requests, responses, or both?
-- Should non-streaming support be implemented in the same milestone as
-  streaming support?
-- Should a fix be able to stop the chain after it rewrites a response?
-- Should rejected fix attempts set `has_tool_calls` when a tool-like block was
-  found but not promoted?
+- `response_body` stores the client-visible response.
+- `upstream_response_body_raw` stores the original upstream response when a fix
+  rewrites or records warnings.
+- Startup JSON, environment defaults, and UI-managed settings all support fix
+  configuration.
+- The initial pipeline transforms responses only.
+- Streaming and non-streaming support ship together for the Qwen tagged
+  tool-call rewrite.
+- Duplicate or unknown fix IDs are rejected during configuration.
+- Rejected attempts preserve the upstream response and record warnings; request
+  rows may still have `has_tool_calls` when the original request declared tools.
+
+## Deferred Questions
+
+- Should future fixes be allowed to transform requests as well as responses?
+- Should a future fix be able to explicitly terminate a configured chain?
+- Should the admin UI grow richer controls for reordering fixes beyond the
+  ordered text field?
 
 ## Proposed Initial Acceptance Criteria
 
 - With no configured fixes, all existing pass-through and capture tests continue
   to pass.
-- With `qwen-tagged-tool-call-rewrite` configured for a model route, a complete
-  well-formed Qwen tagged tool call inside reasoning is returned to the client
-  as structured OpenAI `tool_calls`.
+- With `qwen-tagged-tool-call-rewrite` configured for a model route, a safe,
+  complete, well-formed Qwen tagged tool call inside reasoning is returned to
+  the client as structured OpenAI `tool_calls`.
 - Malformed or incomplete Qwen tagged tool-call blocks pass through unchanged,
   remain available in the captured raw upstream body, and record a clear rewrite
   warning.
+- Assistant content after a streamed candidate, or alongside a non-streaming
+  tagged reasoning block, rejects the rewrite and preserves the upstream body.
 - The original upstream SSE body is still available in the captured record.
 - The client-visible transformed SSE body is available in the captured record.
 - The request detail page shows that the response was rewritten and lists the

@@ -352,6 +352,10 @@ def test_init_db_upgrades_existing_sqlite_request_records_with_route_metadata(tm
         "billing_total_tokens",
         "billing_total_cost_usd",
         "pricing_snapshot_json",
+        "upstream_response_body_raw",
+        "response_was_rewritten",
+        "compat_fixes_json",
+        "compat_fix_errors_json",
     }.issubset(columns)
     assert {
         "ix_request_records_task_run_id",
@@ -359,5 +363,6 @@ def test_init_db_upgrades_existing_sqlite_request_records_with_route_metadata(tm
         "ix_request_records_model_route",
         "ix_request_records_billing_provider_slug",
         "ix_request_records_billing_model",
+        "ix_request_records_response_was_rewritten",
     }.issubset(indexes)
     assert ids == [42]

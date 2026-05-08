@@ -19,6 +19,11 @@
     {% if record.task_run %}
     <span>Run <strong><a href="/admin/runs/{{ record.task_run.id }}">{{ record.task_run.name }}</a></strong></span>
     {% endif %}
+    {% if record.response_was_rewritten %}
+    <span>Compatibility <strong>rewritten</strong></span>
+    {% elif record.compat_fix_errors_json %}
+    <span>Compatibility <strong>warned</strong></span>
+    {% endif %}
   </div>
 </section>
 
@@ -60,6 +65,29 @@
     {% endif %}
   </article>
 </section>
+
+{% if record.compat_fixes_json or record.compat_fix_errors_json %}
+<section class="split">
+  <article class="panel">
+    <header><h2>Compatibility Fixes</h2></header>
+    <pre class="code compact-code">{{ record.compat_fixes_json | default('{}', true) }}</pre>
+  </article>
+  <article class="panel">
+    <header><h2>Compatibility Warnings</h2></header>
+    <pre class="code compact-code">{{ record.compat_fix_errors_json | default('{}', true) }}</pre>
+  </article>
+</section>
+{% endif %}
+
+{% if raw_response_render %}
+<section class="panel">
+  <header>
+    <h2>Raw Upstream Response</h2>
+    <span>Before compatibility fixes</span>
+  </header>
+  <pre class="code">{{ raw_response_render.text }}</pre>
+</section>
+{% endif %}
 
 {% if images %}
 <section class="panel">

@@ -35,6 +35,7 @@ from sqlalchemy.orm import (
     sessionmaker,
 )
 
+from llm_observe_proxy.compatibility import normalize_fix_ids
 from llm_observe_proxy.config import (
     EXPOSED_INCOMING_HOST,
     ModelRoute,
@@ -45,6 +46,7 @@ from llm_observe_proxy.config import (
 )
 
 MODEL_ROUTES_SETTING_KEY = "model_routes_json"
+DEFAULT_COMPAT_FIXES_SETTING_KEY = "default_compat_fixes_json"
 DEFAULT_PRICING_SOURCE = "Seeded from official standard paid text pricing checked on 2026-05-03."
 DEFAULT_MODEL_PROVIDERS = (
     {
@@ -136,6 +138,7 @@ class RequestRecord(Base):
     response_status: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
     response_headers_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     response_body: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    upstream_response_body_raw: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
     response_content_type: Mapped[str | None] = mapped_column(String(256), nullable=True)
     duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
     is_stream: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
@@ -165,6 +168,9 @@ class RequestRecord(Base):
         nullable=True,
     )
     pricing_snapshot_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    response_was_rewritten: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    compat_fixes_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    compat_fix_errors_json: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     images: Mapped[list[ImageAsset]] = relationship(
         back_populates="record",
@@ -339,6 +345,25 @@ def get_incoming_host(session: Session, settings: Settings) -> str:
 def set_incoming_server(session: Session, port: int, expose_all_ips: bool) -> None:
     set_setting(session, "incoming_port", str(port))
     set_setting(session, "expose_all_ips", "true" if expose_all_ips else "false")
+
+
+def get_default_compat_fixes(session: Session, settings: Settings) -> tuple[str, ...]:
+    value = get_setting(session, DEFAULT_COMPAT_FIXES_SETTING_KEY)
+    if value is None:
+        return settings.default_fixes
+    try:
+        return normalize_fix_ids(json.loads(value))
+    except (json.JSONDecodeError, ValueError):
+        return settings.default_fixes
+
+
+def set_default_compat_fixes(session: Session, fix_ids: object) -> None:
+    fixes = normalize_fix_ids(fix_ids)
+    set_setting(
+        session,
+        DEFAULT_COMPAT_FIXES_SETTING_KEY,
+        json.dumps(list(fixes), ensure_ascii=False, separators=(",", ":")),
+    )
 
 
 def list_model_providers(session: Session) -> list[ModelProvider]:
@@ -517,6 +542,7 @@ def get_ui_model_routes(session: Session) -> tuple[ModelRoute, ...]:
             upstream_model=route.upstream_model,
             provider_slug=route.provider_slug,
             api_key_env=route.api_key_env,
+            fixes=route.fixes,
         )
         for route in routes
     )
@@ -679,6 +705,25 @@ def _ensure_sqlite_request_record_schema(engine: Engine) -> None:
             connection.execute(
                 text("ALTER TABLE request_records ADD COLUMN pricing_snapshot_json TEXT")
             )
+        if "upstream_response_body_raw" not in columns:
+            connection.execute(
+                text("ALTER TABLE request_records ADD COLUMN upstream_response_body_raw BLOB")
+            )
+        if "response_was_rewritten" not in columns:
+            connection.execute(
+                text(
+                    "ALTER TABLE request_records ADD COLUMN "
+                    "response_was_rewritten BOOLEAN DEFAULT 0"
+                )
+            )
+        if "compat_fixes_json" not in columns:
+            connection.execute(
+                text("ALTER TABLE request_records ADD COLUMN compat_fixes_json TEXT")
+            )
+        if "compat_fix_errors_json" not in columns:
+            connection.execute(
+                text("ALTER TABLE request_records ADD COLUMN compat_fix_errors_json TEXT")
+            )
         connection.execute(
             text(
                 "CREATE INDEX IF NOT EXISTS "
@@ -710,6 +755,13 @@ def _ensure_sqlite_request_record_schema(engine: Engine) -> None:
                 "ix_request_records_billing_model ON request_records (billing_model)"
             )
         )
+        connection.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS "
+                "ix_request_records_response_was_rewritten "
+                "ON request_records (response_was_rewritten)"
+            )
+        )
 
 
 def _set_ui_model_routes(session: Session, routes: list[ModelRoute]) -> None:
@@ -720,6 +772,7 @@ def _set_ui_model_routes(session: Session, routes: list[ModelRoute]) -> None:
             **({"upstream_model": route.upstream_model} if route.upstream_model else {}),
             **({"provider_slug": route.provider_slug} if route.provider_slug else {}),
             **({"api_key_env": route.api_key_env} if route.api_key_env else {}),
+            **({"fixes": list(route.fixes)} if route.fixes else {}),
         }
         for route in routes
     ]

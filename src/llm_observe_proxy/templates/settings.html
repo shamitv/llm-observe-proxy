@@ -21,6 +21,8 @@
 {% set configured_model_routes = model_routes | default([], true) %}
 {% set configured_providers = providers | default([], true) %}
 {% set configured_model_prices = model_prices | default([], true) %}
+{% set configured_default_fixes_text = default_compat_fixes_text | default('', true) %}
+{% set known_compat_fixes = available_compat_fixes | default([], true) %}
 
 <section class="settings-grid">
   <form class="panel form-panel" method="post" action="/admin/settings/incoming">
@@ -51,6 +53,25 @@
     <button class="button primary" type="submit">Save Upstream</button>
   </form>
 
+  <form class="panel form-panel" method="post" action="/admin/settings/compat-fixes">
+    <header>
+      <h2>Default Compatibility Fixes</h2>
+      <span>{{ 'off' if not configured_default_fixes_text else 'configured' }}</span>
+    </header>
+    <label>
+      Ordered fix IDs
+      <textarea name="fixes" rows="4" placeholder="qwen-tagged-tool-call-rewrite">{{ configured_default_fixes_text }}</textarea>
+    </label>
+    <button class="button primary" type="submit">Save Fixes</button>
+    {% if known_compat_fixes %}
+    <div class="help-list">
+      {% for fix in known_compat_fixes %}
+      <p><code>{{ fix.id }}</code> {{ fix.description }} <span class="muted">{{ fix.risk_note }}</span></p>
+      {% endfor %}
+    </div>
+    {% endif %}
+  </form>
+
   <article class="panel model-routes-panel">
     <header>
       <h2>Model Routes</h2>
@@ -66,6 +87,7 @@
             <th>Upstream</th>
             <th>Upstream Model</th>
             <th>Provider</th>
+            <th>Fixes</th>
             <th>API Key</th>
             <th>Actions</th>
           </tr>
@@ -86,6 +108,13 @@
               <span class="source-pill">{{ route.provider_name | default(route.provider_slug, true) }}</span>
               {% else %}
               <span class="muted">Auto</span>
+              {% endif %}
+            </td>
+            <td>
+              {% if route.fixes %}
+              <code>{{ route.fixes | join(', ') }}</code>
+              {% else %}
+              <span class="muted">None</span>
               {% endif %}
             </td>
             <td>
@@ -141,6 +170,10 @@
       <label>
         API Key Env
         <input name="api_key_env" placeholder="OPENAI_API_KEY">
+      </label>
+      <label>
+        Compatibility Fixes
+        <textarea name="fixes" rows="3" placeholder="qwen-tagged-tool-call-rewrite"></textarea>
       </label>
       <button class="button primary" type="submit">Save Route</button>
     </form>

@@ -1,9 +1,9 @@
 # LLM Observe Proxy
 
-`llm-observe-proxy` is an OpenAI-compatible, record-only proxy for inspecting LLM
-traffic. It forwards requests to an upstream `/v1` API, stores requests and responses in
-SQLite, and provides a polished local admin UI for browsing, pretty-printing, trimming,
-grouping task runs, and changing runtime settings.
+`llm-observe-proxy` is an OpenAI-compatible, record-only-by-default proxy for inspecting
+LLM traffic. It forwards requests to an upstream `/v1` API, stores requests and responses
+in SQLite, and provides a polished local admin UI for browsing, pretty-printing,
+trimming, grouping task runs, and changing runtime settings.
 
 It is useful when you want LiteLLM-style observability without introducing a full gateway
 or external database.
@@ -25,10 +25,13 @@ Project repository: https://github.com/shamitv/llm-observe-proxy
   and raw SSE streams.
 - Request image gallery for data URL and remote image references.
 - Settings UI for upstream URL, model upstream routes, model provider/pricing config,
-  incoming host/port preferences, all-IPs exposure, and retention trimming.
+  response compatibility fixes, incoming host/port preferences, all-IPs exposure, and
+  retention trimming.
 - Config-driven model routes for sending selected proxy-facing model names to different
   upstream `/v1` endpoints with optional upstream model rewrites, provider selection,
   and API key injection.
+- Opt-in response compatibility fixes for known upstream quirks, with raw upstream
+  response audit storage when a rewrite or warning occurs.
 - No authentication by default, intended for local or trusted development networks.
 
 ## Install
@@ -114,8 +117,9 @@ Load model-specific upstream routes from a JSON file:
 llm-observe-proxy --models-file .\models.json
 ```
 
-You can also change the upstream URL, model upstream routes, model provider pricing,
-and next-start incoming host/port settings from `/admin/settings`.
+You can also change the upstream URL, model upstream routes, response compatibility
+fixes, model provider pricing, and next-start incoming host/port settings from
+`/admin/settings`.
 
 ## Model Routes
 
@@ -143,6 +147,23 @@ Example route file:
 ]
 ```
 
+The same file can use an object form when you want default-upstream fixes as well as
+route-specific fixes:
+
+```json
+{
+  "default_fixes": [],
+  "model_routes": [
+    {
+      "model": "local-qwen",
+      "upstream_url": "http://localhost:8000/v1",
+      "upstream_model": "qwen3-coder-30b",
+      "fixes": ["qwen-tagged-tool-call-rewrite"]
+    }
+  ]
+}
+```
+
 Run with the file:
 
 ```powershell
@@ -162,6 +183,24 @@ When a route has an API key, the proxy injects `Authorization: Bearer <key>` for
 upstream request. Captured request headers remain the original client headers; injected
 keys are not stored or shown in the admin UI. UI-managed routes store only `api_key_env`;
 prefer `api_key_env` for shared configs.
+
+## Response Compatibility Fixes
+
+Compatibility fixes are ordered, opt-in response transformations for known
+model/provider quirks. The first built-in fix is `qwen-tagged-tool-call-rewrite`, which
+can promote a complete Qwen-style `<tool_call>` block from Chat Completions
+`reasoning_content` or `reasoning` into structured OpenAI-compatible `tool_calls`.
+
+The Qwen fix runs only on `/v1/chat/completions` when the request declares tools. It
+does not execute tools. Malformed or ambiguous blocks pass through unchanged and are
+recorded as warnings. When a fix rewrites or warns, the request detail page stores and
+shows both the client-visible response and the raw upstream response.
+
+Configure fixes from `/admin/settings`, per model route, or with environment variables:
+
+```powershell
+$env:LLM_OBSERVE_DEFAULT_FIXES_JSON = '["qwen-tagged-tool-call-rewrite"]'
+```
 
 ## Cost Estimates
 
@@ -234,6 +273,7 @@ https://github.com/shamitv/llm-observe-proxy
 - `GET /admin/settings`: upstream settings and retention tools.
 - `POST /admin/settings/incoming`: update incoming host/port settings for next startup.
 - `POST /admin/settings/upstream`: update upstream URL.
+- `POST /admin/settings/compat-fixes`: update default-upstream compatibility fixes.
 - `POST /admin/settings/model-routes`: create or update a UI-managed model route.
 - `POST /admin/settings/model-routes/delete`: delete a UI-managed model route.
 - `POST /admin/settings/providers`: create or update a model provider.
@@ -254,8 +294,9 @@ Environment variables:
 | `LLM_OBSERVE_INCOMING_PORT` | `8080` | Bind port. |
 | `LLM_OBSERVE_EXPOSE_ALL_IPS` | `false` | Bind to `0.0.0.0` when true. |
 | `LLM_OBSERVE_UPSTREAM_URL` | `http://localhost:8000/v1` | Upstream OpenAI-compatible `/v1` base URL. |
-| `LLM_OBSERVE_MODELS_JSON` | unset | JSON array of model route objects. |
-| `LLM_OBSERVE_MODELS_FILE` | unset | Path to a JSON file containing model routes. Wins over `LLM_OBSERVE_MODELS_JSON`. |
+| `LLM_OBSERVE_MODELS_JSON` | unset | JSON array of model route objects, or an object with `default_fixes` and `model_routes`. |
+| `LLM_OBSERVE_MODELS_FILE` | unset | Path to a JSON file containing model routes or model config. Wins over `LLM_OBSERVE_MODELS_JSON`. |
+| `LLM_OBSERVE_DEFAULT_FIXES_JSON` | unset | JSON array of default-upstream compatibility fix IDs when no model config object supplies `default_fixes`. |
 | `LLM_OBSERVE_LOG_LEVEL` | `INFO` | Uvicorn log level. |
 
 Incoming host/port settings saved in the UI are used on the next process startup; they do
