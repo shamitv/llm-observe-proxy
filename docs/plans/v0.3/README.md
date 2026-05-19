@@ -207,6 +207,120 @@ Current behavior:
   data where appropriate, not just from visible rows.
 - Existing admin UI tests pass, with added pagination coverage.
 
+## Feature 3: Local Timezone Timestamps
+
+### Problem
+
+The admin UI currently renders timestamp objects directly from the database. In the
+request table this appears as raw ISO-like values such as:
+
+```text
+2026-05-10
+05:18:52.830265
+```
+
+That is hard to scan and does not make it clear whether the value is UTC, server
+local time, or the user's local timezone. Users looking at captured traffic should
+see times in their own browser timezone.
+
+Current timestamp surfaces include:
+
+- request table `Time` column in `_requests_table.html`
+- request detail metadata in `detail.html`
+- run detail started/ended badges in `run_detail.html`
+- runs list started time in `runs.html`
+- any future pagination range or activity timestamps
+
+### Desired UX
+
+- Timestamps should display in the user's browser timezone.
+- Timestamp text should be compact and scannable in tables.
+- The full absolute timestamp should remain available through the native tooltip or
+  accessible label.
+- Relative/duration values such as `2.42 s`, `10 days 3h open`, and wall-clock
+  durations should not change.
+- If JavaScript is disabled, the UI should still show a clear UTC fallback instead
+  of an ambiguous raw datetime.
+
+Suggested display shape:
+
+```text
+May 10, 2026
+10:48:52 AM
+```
+
+or a denser table variant:
+
+```text
+May 10
+10:48:52 AM
+```
+
+### Non-goals
+
+- Do not change how timestamps are stored in SQLite.
+- Do not change duration calculations.
+- Do not add a user account, settings table, or profile-level timezone preference
+  for the first version.
+- Do not add a frontend framework or heavy date library.
+
+### Implementation Plan
+
+1. Normalize timestamp output in `admin.py`.
+   - Add a Jinja filter/helper that turns `datetime` values into UTC ISO strings
+     for the `datetime` attribute.
+   - Treat naive datetimes returned from SQLite as UTC, matching the app's existing
+     write behavior.
+   - Add a compact UTC fallback formatter for no-JS rendering.
+
+2. Add a reusable timestamp partial or macro.
+   - Render timestamps as semantic `<time>` elements.
+   - Include the UTC ISO value in `datetime`.
+   - Include a class or data attribute such as `data-local-time`.
+   - Support table-friendly and badge-friendly display variants.
+
+3. Add lightweight local-time JavaScript.
+   - On page load, find all `[data-local-time]` elements.
+   - Use `Intl.DateTimeFormat` with the browser's default timezone.
+   - Replace fallback UTC text with local date/time text.
+   - Set `title` to include the full localized timestamp and UTC fallback.
+   - Handle invalid or missing timestamps without throwing.
+
+4. Update templates.
+   - Replace direct timestamp rendering in `_requests_table.html`, `detail.html`,
+     `run_detail.html`, and `runs.html`.
+   - Keep `active` fallback for open-ended runs.
+   - Keep compact table cells from growing too wide.
+
+5. Update CSS.
+   - Add table timestamp styling so date and time can stack cleanly in the Time
+     column.
+   - Ensure localized text does not overlap adjacent columns on narrow screens.
+
+6. Update tests.
+   - Add coverage that timestamp cells render semantic `<time>` elements with UTC
+     ISO `datetime` attributes.
+   - Add coverage for active run `Ended active` fallback.
+   - Add a small unit test for the UTC fallback formatter if it is implemented as a
+     Python helper.
+
+7. Run focused verification.
+   - `.\.venv\Scripts\pytest.exe -q tests\test_admin_ui.py`
+   - `.\.venv\Scripts\ruff.exe check src tests`
+   - `.\.venv\Scripts\python.exe -m compileall -q src tests`
+
+8. Run the full test suite before committing the implementation.
+   - `.\.venv\Scripts\pytest.exe -q`
+
+### Acceptance Criteria
+
+- Request table timestamps display in the browser's local timezone after page load.
+- The raw table timestamp format is replaced by a compact, readable local time.
+- Run list and run detail timestamps use the same local-time rendering path.
+- No-JS fallback text is explicitly UTC.
+- Tests cover the generated timestamp markup and existing admin UI behavior still
+  passes.
+
 ## Later v0.3 Features
 
 Add the next requested features here as they are defined. Each feature should include
