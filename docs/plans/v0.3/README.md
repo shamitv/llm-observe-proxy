@@ -1,7 +1,6 @@
 # v0.3 Feature Plan
 
 This plan tracks the user-facing work intended for the `0.3.0` release branch.
-The first requested feature is a density pass on the active run detail page.
 
 ## Release Goals
 
@@ -103,6 +102,110 @@ for `/admin/runs/{id}` shows the requested direction: condense the stats into th
   action.
 - The what-if cost panel appears immediately after the compact header.
 - Existing admin UI tests pass, with added coverage for the new header layout.
+
+## Feature 2: Paginated Request Tables
+
+### Problem
+
+The admin request tables should not load every matching request on initial page
+load. This is especially important for run detail pages, where a long-running task
+can contain hundreds or thousands of captured requests.
+
+Current behavior:
+
+- `GET /admin` applies a default `limit=100`, but has no page navigation and no
+  total/page context for the filtered result set.
+- `GET /admin/runs/{id}` loads every request in that run, then renders the same
+  `_requests_table.html` partial.
+- The run detail route also passes the full run request list into the what-if cost
+  calculation, so table pagination should be paired with aggregate cost queries
+  instead of simply hiding extra rows in the template.
+
+### Desired UX
+
+- Request tables should render one page of rows at a time.
+- The default first page should load quickly for large capture databases.
+- Pagination controls should be server-rendered and bookmarkable with query
+  parameters.
+- Filtering should preserve pagination context where it makes sense, and applying
+  a new filter should return to page 1.
+- The user should see enough context to know what slice they are viewing, such as
+  `Showing 1-50 of 1,249`.
+- The UI should include previous/next controls and page number context.
+- The same request table partial should support pagination on:
+  - `GET /admin`
+  - `GET /admin/runs/{id}`
+
+### Non-goals
+
+- Do not add infinite scroll for the first version.
+- Do not require JavaScript for pagination.
+- Do not change request capture behavior or retention settings.
+- Do not remove run-level stats, what-if cost totals, or request filters.
+
+### Implementation Plan
+
+1. Add a small pagination helper in `admin.py`.
+   - Parse `page` and `per_page` query parameters.
+   - Clamp `per_page` to a safe maximum, such as 200.
+   - Return offset, limit, total rows, total pages, previous/next page numbers, and
+     a query string builder that preserves existing filters.
+   - Use a default page size, such as 50.
+
+2. Update `GET /admin`.
+   - Replace the current `limit`-only behavior with `page`/`per_page`.
+   - Apply all existing filters to a base `select(RequestRecord)` query.
+   - Run a filtered `count(*)` query for pagination metadata.
+   - Load only the current page of records with `order_by(created_at desc)`,
+     `offset`, and `limit`.
+   - Keep model, endpoint, run options, and summary counters working as they do
+     now.
+
+3. Update `GET /admin/runs/{id}`.
+   - Load only the current page of requests for the `Run traffic` table.
+   - Keep `get_task_run_stats` or equivalent aggregate SQL for header metrics.
+   - Replace the what-if cost dependency on full ORM records with an aggregate
+     token-usage query or a lightweight helper that selects only the fields needed
+     for cost totals.
+   - Avoid loading request/response body columns for rows that are not visible.
+
+4. Update `_requests_table.html`.
+   - Render pagination controls when a `pagination` context object is present.
+   - Show range text, total count, page size, and previous/next links.
+   - Preserve filters and repeated query parameters, including `what_if` on run
+     detail pages.
+   - Keep the empty state clear when a filter returns no rows.
+
+5. Update templates that include `_requests_table.html`.
+   - Pass pagination context from `index.html` and `run_detail.html`.
+   - Keep the filter form on `/admin` aligned with the new query parameters.
+   - Do not expose an unbounded `all` option.
+
+6. Update tests in `tests/test_admin_ui.py`.
+   - Add coverage that `/admin` only renders the requested page of records.
+   - Add coverage that `/admin?page=2` shows later records and preserves filters.
+   - Add coverage that `/admin/runs/{id}` paginates run traffic.
+   - Add coverage that run-level what-if totals still include the full run, not
+     only the visible request page.
+
+7. Run focused verification.
+   - `.\.venv\Scripts\pytest.exe -q tests\test_admin_ui.py`
+   - `.\.venv\Scripts\ruff.exe check src tests`
+   - `.\.venv\Scripts\python.exe -m compileall -q src tests`
+
+8. Run the full test suite before committing the implementation.
+   - `.\.venv\Scripts\pytest.exe -q`
+
+### Acceptance Criteria
+
+- `/admin` loads only the current request page, with a bounded page size.
+- `/admin/runs/{id}` loads only the current run traffic page, even for large runs.
+- Pagination controls show the current range, total matching rows, and previous/next
+  navigation.
+- Existing filters keep working with pagination.
+- Run summary stats and what-if cost totals are computed from the full filtered run
+  data where appropriate, not just from visible rows.
+- Existing admin UI tests pass, with added pagination coverage.
 
 ## Later v0.3 Features
 
