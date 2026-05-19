@@ -202,52 +202,63 @@ h2 {
 }
 
 .run-summary-header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 18px;
-  margin-bottom: 18px;
-  padding: 16px;
-}
-
-.run-summary-main {
   display: grid;
-  gap: 14px;
-  min-width: 0;
-  flex: 1;
+  gap: 16px;
+  margin-bottom: 18px;
+  padding: 18px;
 }
 
 .run-summary-topline {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: flex-start;
-  justify-content: space-between;
   gap: 18px;
 }
 
-.run-summary-topline h1,
-.run-summary-topline p {
+.run-summary-title {
+  min-width: 0;
+}
+
+.run-summary-title h1 {
+  overflow-wrap: anywhere;
+}
+
+.run-summary-title h1,
+.run-summary-title p {
   margin-bottom: 0;
 }
 
-.run-summary-action {
-  flex: 0 0 auto;
-  margin-top: 4px;
+.run-summary-side {
+  display: grid;
+  justify-items: end;
+  gap: 10px;
+}
+
+.run-summary-side .detail-meta {
+  justify-content: flex-end;
+}
+
+.run-summary-action,
+.run-summary-action .button {
+  width: fit-content;
 }
 
 .run-stat-strip {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(136px, 1fr));
   gap: 8px;
 }
 
 .run-stat-strip span {
   display: grid;
-  gap: 2px;
-  min-width: 118px;
+  align-content: center;
+  gap: 4px;
+  min-height: 64px;
+  min-width: 0;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--surface-2);
-  padding: 7px 10px;
+  padding: 9px 11px;
 }
 
 .run-stat-strip small {
@@ -261,6 +272,9 @@ h2 {
 .run-stat-strip strong {
   font-size: 15px;
   line-height: 1.2;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .run-start-form {
@@ -929,15 +943,19 @@ figcaption {
 
   .page-heading,
   .run-control,
-  .run-summary-header,
-  .run-summary-topline,
   .topbar {
     align-items: start;
     flex-direction: column;
   }
 
-  .run-summary-action {
-    margin-top: 0;
+  .run-summary-topline {
+    grid-template-columns: 1fr;
+  }
+
+  .run-summary-side,
+  .run-summary-side .detail-meta {
+    justify-items: start;
+    justify-content: flex-start;
   }
 
   .pagination-bar {
