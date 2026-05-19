@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -417,6 +418,7 @@ def test_settings_manages_model_providers_and_prices(
             "display_name": "Custom Large",
             "aliases": "custom-alias",
             "input_usd_per_million": "1.25",
+            "cached_input_usd_per_million": "0.25",
             "output_usd_per_million": "5",
             "active": "yes",
             "notes": "Local contract",
@@ -431,6 +433,7 @@ def test_settings_manages_model_providers_and_prices(
     assert "custom-large" in updated.text
     assert "custom-alias" in updated.text
     assert "$1.25" in updated.text
+    assert "$0.2500" in updated.text
     assert "$5.00" in updated.text
 
     with proxy_app.state.session_factory() as session:
@@ -443,6 +446,7 @@ def test_settings_manages_model_providers_and_prices(
         ).one()
         assert provider.upstream_url == "http://localhost:9000/v1"
         assert price.active is True
+        assert price.cached_input_usd_per_million == Decimal("0.250000")
 
     response = proxy_client.post(
         "/admin/settings/model-prices/delete",
@@ -693,6 +697,7 @@ def test_run_detail_paginates_traffic_without_limiting_what_if_totals(
             model="custom-full-run",
             display_name="Custom Full Run",
             input_usd_per_million="1",
+            cached_input_usd_per_million="0.1",
             output_usd_per_million="2",
         )
         task_run = TaskRun(name="Large run", started_at=datetime(2026, 5, 1, tzinfo=UTC))
@@ -706,6 +711,7 @@ def test_run_detail_paginates_traffic_without_limiting_what_if_totals(
                 model=price.model,
                 task_run_id=task_run.id,
                 input_tokens=1000,
+                cached_input_tokens=800,
                 output_tokens=500,
             )
         session.commit()
@@ -722,7 +728,8 @@ def test_run_detail_paginates_traffic_without_limiting_what_if_totals(
     assert "#46" in detail.text
     assert "#45" not in detail.text
     assert "Custom Full Run" in detail.text
-    assert "$0.11" in detail.text
+    assert "$0.0704" in detail.text
+    assert "44k" in detail.text
     assert "<td>55</td>" in detail.text
 
 
@@ -1066,6 +1073,7 @@ def _add_request_record(
     model: str = "gpt-test",
     task_run_id: int | None = None,
     input_tokens: int | None = 6,
+    cached_input_tokens: int | None = None,
     output_tokens: int | None = 3,
     completed: bool = True,
 ) -> RequestRecord:
@@ -1096,6 +1104,7 @@ def _add_request_record(
         billing_provider_name="OpenAI",
         billing_model=model,
         billing_input_tokens=input_tokens,
+        billing_cached_input_tokens=cached_input_tokens,
         billing_output_tokens=output_tokens,
         billing_total_tokens=total_tokens,
     )

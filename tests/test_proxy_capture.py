@@ -79,6 +79,39 @@ def test_non_streaming_chat_completion_snapshots_estimated_cost(
     assert "$0.000012" in browser.text
 
 
+def test_non_streaming_chat_completion_accounts_for_cached_input_tokens(
+    proxy_client: TestClient,
+    proxy_app: FastAPI,
+) -> None:
+    _configure_fake_pricing(
+        proxy_app,
+        model="gpt-test",
+        cached_input_usd_per_million="0.1",
+    )
+
+    response = proxy_client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "gpt-test",
+            "metadata": {"cached_usage": True},
+            "messages": [{"role": "user", "content": "cached"}],
+        },
+    )
+
+    assert response.status_code == 200
+    with proxy_app.state.session_factory() as session:
+        record = session.scalars(select(RequestRecord)).one()
+        assert record.billing_input_tokens == 1000
+        assert record.billing_cached_input_tokens == 800
+        assert record.billing_output_tokens == 25
+        assert record.billing_input_cost_usd == Decimal("0.00028000")
+        assert record.billing_total_cost_usd == Decimal("0.00033000")
+        snapshot = json.loads(record.pricing_snapshot_json)
+        assert snapshot["cached_input_tokens"] == 800
+        assert snapshot["uncached_input_tokens"] == 200
+        assert snapshot["cached_input_pricing"] == "cached_input_rate"
+
+
 def test_configured_model_route_rewrites_injects_key_and_records_metadata(
     tmp_path: Path,
     fake_upstream,
@@ -852,7 +885,12 @@ def _create_routed_app(tmp_path: Path, *routes: ModelRoute) -> FastAPI:
     )
 
 
-def _configure_fake_pricing(app: FastAPI, *, model: str) -> None:
+def _configure_fake_pricing(
+    app: FastAPI,
+    *,
+    model: str,
+    cached_input_usd_per_million: str = "",
+) -> None:
     with session_scope(app.state.session_factory) as session:
         upsert_model_provider(
             session,
@@ -865,6 +903,7 @@ def _configure_fake_pricing(app: FastAPI, *, model: str) -> None:
             provider_slug="fake",
             model=model,
             input_usd_per_million="1",
+            cached_input_usd_per_million=cached_input_usd_per_million,
             output_usd_per_million="2",
         )
 

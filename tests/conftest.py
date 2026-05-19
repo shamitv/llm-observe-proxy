@@ -150,12 +150,20 @@ async def _streaming_chunks(path: str, payload: dict[str, Any]):
             {"id": "chat_stream", "model": model, "choices": [{"delta": {"content": "stream"}}]},
         ]
         if payload.get("stream_options", {}).get("include_usage"):
+            usage = {"prompt_tokens": 6, "completion_tokens": 3, "total_tokens": 9}
+            if payload.get("metadata", {}).get("cached_usage"):
+                usage = {
+                    "prompt_tokens": 1000,
+                    "completion_tokens": 25,
+                    "total_tokens": 1025,
+                    "prompt_tokens_details": {"cached_tokens": 800},
+                }
             chunks.append(
                 {
                     "id": "chat_stream",
                     "model": model,
                     "choices": [],
-                    "usage": {"prompt_tokens": 6, "completion_tokens": 3, "total_tokens": 9},
+                    "usage": usage,
                 }
             )
     for chunk in chunks:
@@ -249,6 +257,14 @@ def _chat_payload(payload: Any) -> dict[str, Any]:
         content = "# Run Report\n\n- captured\n- rendered"
     else:
         content = "Plain chat response"
+    usage = {"prompt_tokens": 6, "completion_tokens": 3, "total_tokens": 9}
+    if isinstance(payload, dict) and payload.get("metadata", {}).get("cached_usage"):
+        usage = {
+            "prompt_tokens": 1000,
+            "completion_tokens": 25,
+            "total_tokens": 1025,
+            "prompt_tokens_details": {"cached_tokens": 800},
+        }
     return {
         "id": "chat_plain",
         "object": "chat.completion",
@@ -256,7 +272,7 @@ def _chat_payload(payload: Any) -> dict[str, Any]:
         "choices": [
             {"message": {"role": "assistant", "content": content}, "finish_reason": "stop"}
         ],
-        "usage": {"prompt_tokens": 6, "completion_tokens": 3, "total_tokens": 9},
+        "usage": usage,
     }
 
 

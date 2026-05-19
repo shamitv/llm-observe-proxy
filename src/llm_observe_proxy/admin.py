@@ -655,6 +655,7 @@ async def upsert_price(
     display_name: str = Form(""),
     aliases: str = Form(""),
     input_usd_per_million: str = Form(...),
+    cached_input_usd_per_million: str = Form(""),
     output_usd_per_million: str = Form(...),
     active: str | None = Form(None),
     notes: str = Form(""),
@@ -669,6 +670,7 @@ async def upsert_price(
                 display_name=display_name,
                 aliases=aliases,
                 input_usd_per_million=input_usd_per_million,
+                cached_input_usd_per_million=cached_input_usd_per_million,
                 output_usd_per_million=output_usd_per_million,
                 active=active == "yes",
                 notes=notes,
@@ -946,6 +948,7 @@ def _model_price_row(price) -> dict[str, object]:
         "display_name": price.display_name,
         "aliases": ", ".join(aliases),
         "input_usd_per_million": price.input_usd_per_million,
+        "cached_input_usd_per_million": price.cached_input_usd_per_million,
         "output_usd_per_million": price.output_usd_per_million,
         "active": price.active,
         "notes": price.notes,
@@ -1020,11 +1023,14 @@ def _run_cost_estimate_row(estimate: RunCostEstimate) -> dict[str, object]:
         "display_name": estimate.display_name,
         "label": estimate.display_name or estimate.model,
         "input_usd_per_million": estimate.input_usd_per_million,
+        "cached_input_usd_per_million": estimate.cached_input_usd_per_million,
         "output_usd_per_million": estimate.output_usd_per_million,
         "input_tokens": estimate.input_tokens,
+        "cached_input_tokens": estimate.cached_input_tokens,
         "output_tokens": estimate.output_tokens,
         "total_tokens": estimate.total_tokens,
         "input_cost_usd": estimate.input_cost_usd,
+        "cached_input_cost_usd": estimate.cached_input_cost_usd,
         "output_cost_usd": estimate.output_cost_usd,
         "total_cost_usd": estimate.total_cost_usd,
         "included_request_count": estimate.included_request_count,
@@ -1098,6 +1104,7 @@ def _run_billing_usages(session, run_id: int) -> list[ExtractedTokenUsage]:
     rows = session.execute(
         select(
             RequestRecord.billing_input_tokens,
+            RequestRecord.billing_cached_input_tokens,
             RequestRecord.billing_output_tokens,
             RequestRecord.billing_total_tokens,
         ).where(RequestRecord.task_run_id == run_id)
@@ -1105,8 +1112,9 @@ def _run_billing_usages(session, run_id: int) -> list[ExtractedTokenUsage]:
     return [
         ExtractedTokenUsage(
             input_tokens=row[0],
-            output_tokens=row[1],
-            total_tokens=row[2],
+            cached_input_tokens=row[1],
+            output_tokens=row[2],
+            total_tokens=row[3],
         )
         for row in rows
     ]
@@ -1190,6 +1198,9 @@ def _record_list_item(record: RequestRecord, *, now: datetime | None = None) -> 
         "task_run": _task_run_summary(record.task_run, session=None),
         "tokens": {
             "input": input_tokens,
+            "cached_input": record.billing_cached_input_tokens
+            if record.billing_cached_input_tokens is not None
+            else token_usage.cached_input_tokens,
             "output": output_tokens,
             "total": total_tokens,
         },
@@ -1217,6 +1228,11 @@ def _record_effective_token_usage(record: RequestRecord) -> ExtractedTokenUsage:
         if record.billing_input_tokens is not None
         else token_usage.input_tokens
     )
+    cached_input_tokens = (
+        record.billing_cached_input_tokens
+        if record.billing_cached_input_tokens is not None
+        else token_usage.cached_input_tokens
+    )
     output_tokens = (
         record.billing_output_tokens
         if record.billing_output_tokens is not None
@@ -1229,6 +1245,7 @@ def _record_effective_token_usage(record: RequestRecord) -> ExtractedTokenUsage:
     )
     return ExtractedTokenUsage(
         input_tokens=input_tokens,
+        cached_input_tokens=cached_input_tokens,
         output_tokens=output_tokens,
         total_tokens=total_tokens,
     )
@@ -1270,6 +1287,7 @@ def _record_detail(record: RequestRecord, *, now: datetime | None = None) -> dic
         "billing_provider_name": record.billing_provider_name,
         "billing_model": record.billing_model,
         "billing_input_tokens": record.billing_input_tokens,
+        "billing_cached_input_tokens": record.billing_cached_input_tokens,
         "billing_output_tokens": record.billing_output_tokens,
         "billing_total_tokens": record.billing_total_tokens,
         "billing_input_cost_usd": record.billing_input_cost_usd,

@@ -250,6 +250,7 @@
             <th>Model</th>
             <th>Display Name</th>
             <th>Input / 1M</th>
+            <th>Cached Input / 1M</th>
             <th>Output / 1M</th>
             <th>Aliases</th>
             <th>Active</th>
@@ -263,6 +264,7 @@
             <td><code>{{ price.model }}</code></td>
             <td>{{ price.display_name | default('-', true) }}</td>
             <td>{{ price.input_usd_per_million | usd }}</td>
+            <td>{{ price.cached_input_usd_per_million | usd }}</td>
             <td>{{ price.output_usd_per_million | usd }}</td>
             <td>{{ price.aliases | default('-', true) }}</td>
             <td><span class="pill">{{ 'yes' if price.active else 'no' }}</span></td>
@@ -303,6 +305,10 @@
       <label>
         Output USD / 1M
         <input name="output_usd_per_million" placeholder="4.50" type="number" min="0" step="0.000001" required>
+      </label>
+      <label>
+        Cached Input USD / 1M
+        <input name="cached_input_usd_per_million" placeholder="0.075" type="number" min="0" step="0.000001">
       </label>
       <label>
         Aliases

@@ -121,16 +121,35 @@ def test_renderer_ignores_non_string_type_fields_in_nested_json() -> None:
 
 def test_extract_token_usage_supports_chat_responses_and_responses_api() -> None:
     chat_usage = extract_token_usage(
-        {"usage": {"prompt_tokens": 6, "completion_tokens": 3, "total_tokens": 9}}
+        {
+            "usage": {
+                "prompt_tokens": 6,
+                "completion_tokens": 3,
+                "total_tokens": 9,
+                "prompt_tokens_details": {"cached_tokens": 4},
+            }
+        }
     )
     assert chat_usage.input_tokens == 6
+    assert chat_usage.cached_input_tokens == 4
     assert chat_usage.output_tokens == 3
     assert chat_usage.total_tokens == 9
 
     responses_usage = extract_token_usage(
-        [{"response": {"usage": {"input_tokens": 8, "output_tokens": 4}}}]
+        [
+            {
+                "response": {
+                    "usage": {
+                        "input_tokens": 8,
+                        "output_tokens": 4,
+                        "input_tokens_details": {"cache_read_tokens": 3},
+                    }
+                }
+            }
+        ]
     )
     assert responses_usage.input_tokens == 8
+    assert responses_usage.cached_input_tokens == 3
     assert responses_usage.output_tokens == 4
     assert responses_usage.total_tokens == 12
 
@@ -144,7 +163,8 @@ def test_stream_token_usage_reads_final_sse_usage_event(monkeypatch: pytest.Monk
         [
             b'data: {"choices":[{"delta":{"content":"hello"}}]}\n\n',
             b'data: {"choices":[],"usage":{"prompt_tokens":1000,'
-            b'"completion_tokens":25,"total_tokens":1025}}\n\n',
+            b'"completion_tokens":25,"total_tokens":1025,'
+            b'"prompt_tokens_details":{"cached_tokens":900}}}\n\n',
             b"data: [DONE]\n\n",
         ]
     )
@@ -152,6 +172,7 @@ def test_stream_token_usage_reads_final_sse_usage_event(monkeypatch: pytest.Monk
     usage = _stream_token_usage(body)
 
     assert usage.input_tokens == 1000
+    assert usage.cached_input_tokens == 900
     assert usage.output_tokens == 25
     assert usage.total_tokens == 1025
 
@@ -281,6 +302,36 @@ def test_cost_estimator_handles_rates_aliases_unknowns_and_missing_usage(tmp_pat
             billing_model="gpt-5.4-mini",
             provider_slug="openai",
         )
+        cached = upsert_model_price(
+            session,
+            provider_slug="openai",
+            model="cached-model",
+            input_usd_per_million="1",
+            cached_input_usd_per_million="0.1",
+            output_usd_per_million="2",
+        )
+        cached_estimate = estimate_cost(
+            session,
+            usage=ExtractedTokenUsage(
+                input_tokens=1000,
+                cached_input_tokens=800,
+                output_tokens=500,
+                total_tokens=1500,
+            ),
+            billing_model=cached.model,
+            provider_slug="openai",
+        )
+        cached_fallback = estimate_cost(
+            session,
+            usage=ExtractedTokenUsage(
+                input_tokens=1000,
+                cached_input_tokens=800,
+                output_tokens=500,
+                total_tokens=1500,
+            ),
+            billing_model="gpt-5.4-mini",
+            provider_slug="openai",
+        )
     engine.dispose()
 
     assert known.total_cost_usd == Decimal("0.003000")
@@ -288,6 +339,12 @@ def test_cost_estimator_handles_rates_aliases_unknowns_and_missing_usage(tmp_pat
     assert aliased.snapshot["matched_model"] == "alias-root"
     assert unknown.total_cost_usd is None
     assert missing_usage.total_cost_usd is None
+    assert cached_estimate.input_cost_usd == Decimal("0.00028")
+    assert cached_estimate.cached_input_cost_usd == Decimal("0.00008")
+    assert cached_estimate.total_cost_usd == Decimal("0.00128")
+    assert cached_estimate.snapshot["cached_input_pricing"] == "cached_input_rate"
+    assert cached_fallback.input_cost_usd == Decimal("0.000750")
+    assert cached_fallback.snapshot["cached_input_pricing"] == "standard_input_rate"
 
 
 def test_run_cost_estimator_sums_usage_and_counts_missing_requests(tmp_path) -> None:
@@ -308,13 +365,19 @@ def test_run_cost_estimator_sums_usage_and_counts_missing_requests(tmp_path) -> 
             [
                 ExtractedTokenUsage(input_tokens=1000, output_tokens=500, total_tokens=1500),
                 ExtractedTokenUsage(input_tokens=None, output_tokens=10, total_tokens=None),
-                ExtractedTokenUsage(input_tokens=200, output_tokens=100, total_tokens=None),
+                ExtractedTokenUsage(
+                    input_tokens=200,
+                    cached_input_tokens=50,
+                    output_tokens=100,
+                    total_tokens=None,
+                ),
             ],
             price,
         )
     engine.dispose()
 
     assert estimate.input_tokens == 1200
+    assert estimate.cached_input_tokens == 50
     assert estimate.output_tokens == 600
     assert estimate.total_tokens == 1800
     assert estimate.input_cost_usd == Decimal("0.000900")
@@ -336,6 +399,7 @@ def test_init_db_upgrades_existing_sqlite_request_records_with_route_metadata(tm
 
     inspector = inspect(engine)
     columns = {column["name"] for column in inspector.get_columns("request_records")}
+    price_columns = {column["name"] for column in inspector.get_columns("model_prices")}
     indexes = {index["name"] for index in inspector.get_indexes("request_records")}
     with engine.connect() as connection:
         ids = connection.execute(text("SELECT id FROM request_records")).scalars().all()
@@ -348,6 +412,7 @@ def test_init_db_upgrades_existing_sqlite_request_records_with_route_metadata(tm
         "billing_provider_slug",
         "billing_model",
         "billing_input_tokens",
+        "billing_cached_input_tokens",
         "billing_output_tokens",
         "billing_total_tokens",
         "billing_total_cost_usd",
@@ -357,6 +422,7 @@ def test_init_db_upgrades_existing_sqlite_request_records_with_route_metadata(tm
         "compat_fixes_json",
         "compat_fix_errors_json",
     }.issubset(columns)
+    assert "cached_input_usd_per_million" in price_columns
     assert {
         "ix_request_records_task_run_id",
         "ix_request_records_upstream_model",

@@ -155,6 +155,7 @@ class RequestRecord(Base):
     billing_provider_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
     billing_model: Mapped[str | None] = mapped_column(String(256), nullable=True, index=True)
     billing_input_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    billing_cached_input_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
     billing_output_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
     billing_total_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
     billing_input_cost_usd: Mapped[Decimal | None] = mapped_column(
@@ -232,6 +233,10 @@ class ModelPrice(Base):
     aliases_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     display_name: Mapped[str | None] = mapped_column(String(256), nullable=True)
     input_usd_per_million: Mapped[Decimal] = mapped_column(Numeric(18, 6))
+    cached_input_usd_per_million: Mapped[Decimal | None] = mapped_column(
+        Numeric(18, 6),
+        nullable=True,
+    )
     output_usd_per_million: Mapped[Decimal] = mapped_column(Numeric(18, 6))
     active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -283,6 +288,7 @@ def create_session_factory(engine: Engine) -> SessionFactory:
 def init_db(engine: Engine) -> None:
     Base.metadata.create_all(engine)
     _ensure_sqlite_request_record_schema(engine)
+    _ensure_sqlite_model_price_schema(engine)
     seed_default_model_pricing(engine)
 
 
@@ -441,6 +447,7 @@ def upsert_model_price(
     model: str,
     input_usd_per_million: object,
     output_usd_per_million: object,
+    cached_input_usd_per_million: object = "",
     aliases: str | list[str] | tuple[str, ...] = "",
     display_name: str = "",
     active: bool = True,
@@ -458,6 +465,10 @@ def upsert_model_price(
         raise ValueError("Model is required.")
 
     input_rate = _decimal_rate(input_usd_per_million, "Input price")
+    cached_input_rate = _optional_decimal_rate(
+        cached_input_usd_per_million,
+        "Cached input price",
+    )
     output_rate = _decimal_rate(output_usd_per_million, "Output price")
     price = session.scalar(
         select(ModelPrice).where(
@@ -472,6 +483,7 @@ def upsert_model_price(
     price.display_name = display_name.strip() or None
     price.aliases_json = _aliases_json(aliases)
     price.input_usd_per_million = input_rate
+    price.cached_input_usd_per_million = cached_input_rate
     price.output_usd_per_million = output_rate
     price.active = active
     price.notes = notes.strip() or None
@@ -693,6 +705,10 @@ def _ensure_sqlite_request_record_schema(engine: Engine) -> None:
             connection.execute(
                 text("ALTER TABLE request_records ADD COLUMN billing_input_tokens INTEGER")
             )
+        if "billing_cached_input_tokens" not in columns:
+            connection.execute(
+                text("ALTER TABLE request_records ADD COLUMN billing_cached_input_tokens INTEGER")
+            )
         if "billing_output_tokens" not in columns:
             connection.execute(
                 text("ALTER TABLE request_records ADD COLUMN billing_output_tokens INTEGER")
@@ -776,6 +792,20 @@ def _ensure_sqlite_request_record_schema(engine: Engine) -> None:
         )
 
 
+def _ensure_sqlite_model_price_schema(engine: Engine) -> None:
+    if engine.dialect.name != "sqlite":
+        return
+    inspector = inspect(engine)
+    if "model_prices" not in inspector.get_table_names():
+        return
+    columns = {column["name"] for column in inspector.get_columns("model_prices")}
+    with engine.begin() as connection:
+        if "cached_input_usd_per_million" not in columns:
+            connection.execute(
+                text("ALTER TABLE model_prices ADD COLUMN cached_input_usd_per_million NUMERIC")
+            )
+
+
 def _set_ui_model_routes(session: Session, routes: list[ModelRoute]) -> None:
     payload = [
         {
@@ -799,6 +829,14 @@ def _decimal_rate(value: object, label: str) -> Decimal:
     if rate < 0:
         raise ValueError(f"{label} must be zero or greater.")
     return rate
+
+
+def _optional_decimal_rate(value: object, label: str) -> Decimal | None:
+    if value is None:
+        return None
+    if isinstance(value, str) and not value.strip():
+        return None
+    return _decimal_rate(value, label)
 
 
 def _aliases_json(value: str | list[str] | tuple[str, ...]) -> str | None:

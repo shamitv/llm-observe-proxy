@@ -585,7 +585,7 @@ td:first-child a {
 }
 
 .price-form {
-  grid-template-columns: minmax(150px, 1fr) minmax(170px, 1fr) minmax(170px, 1fr) minmax(120px, 0.8fr) minmax(120px, 0.8fr) minmax(160px, 1fr) minmax(190px, 1.1fr) auto auto;
+  grid-template-columns: minmax(150px, 1fr) minmax(170px, 1fr) minmax(170px, 1fr) repeat(3, minmax(120px, 0.8fr)) minmax(160px, 1fr) minmax(190px, 1.1fr) auto auto;
 }
 
 .compact-table {
@@ -648,7 +648,7 @@ td:first-child a {
 }
 
 .what-if-table {
-  min-width: 1120px;
+  min-width: 1280px;
 }
 
 .what-if-table td:first-child {

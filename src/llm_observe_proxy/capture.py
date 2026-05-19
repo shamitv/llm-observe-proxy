@@ -23,12 +23,17 @@ class ExtractedTokenUsage:
     input_tokens: int | None = None
     output_tokens: int | None = None
     total_tokens: int | None = None
+    cached_input_tokens: int | None = None
 
 
 STREAM_USAGE_MARKERS = (
     b'"usage"',
+    b'"input_tokens_details"',
     b'"input_tokens"',
+    b'"prompt_tokens_details"',
     b'"prompt_tokens"',
+    b'"cached_tokens"',
+    b'"cache_read_tokens"',
     b'"output_tokens"',
     b'"completion_tokens"',
     b'"total_tokens"',
@@ -102,11 +107,19 @@ def extract_token_usage(payload: Any | None) -> ExtractedTokenUsage:
     total_tokens = _first_int(usage, "total_tokens")
     if total_tokens is None and input_tokens is not None and output_tokens is not None:
         total_tokens = input_tokens + output_tokens
+    cached_input_tokens = _cached_input_tokens(usage)
+    if (
+        cached_input_tokens is not None
+        and input_tokens is not None
+        and cached_input_tokens > input_tokens
+    ):
+        cached_input_tokens = input_tokens
 
     return ExtractedTokenUsage(
         input_tokens=input_tokens,
         output_tokens=output_tokens,
         total_tokens=total_tokens,
+        cached_input_tokens=cached_input_tokens,
     )
 
 
@@ -267,6 +280,16 @@ def _first_int(value: dict[str, Any], *keys: str) -> int | None:
         if candidate is not None:
             return candidate
     return None
+
+
+def _cached_input_tokens(usage: dict[str, Any]) -> int | None:
+    for details_key in ("input_tokens_details", "prompt_tokens_details"):
+        details = usage.get(details_key)
+        if isinstance(details, dict):
+            value = _first_int(details, "cached_tokens", "cache_read_tokens")
+            if value is not None:
+                return value
+    return _first_int(usage, "cached_input_tokens")
 
 
 def _int_or_none(value: Any) -> int | None:

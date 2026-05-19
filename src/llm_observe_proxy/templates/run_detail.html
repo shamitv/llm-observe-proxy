@@ -62,8 +62,10 @@
         <tr>
           <th>Scenario</th>
           <th>Input Tokens</th>
+          <th>Cached Input</th>
           <th>Output Tokens</th>
           <th>Input / 1M</th>
+          <th>Cached / 1M</th>
           <th>Output / 1M</th>
           <th>Input Cost</th>
           <th>Output Cost</th>
@@ -80,8 +82,10 @@
             <span class="muted">{{ scenario.provider_name }} / {{ scenario.model }}</span>
           </td>
           <td>{{ scenario.input_tokens | compact_number }}</td>
+          <td>{{ scenario.cached_input_tokens | compact_number }}</td>
           <td>{{ scenario.output_tokens | compact_number }}</td>
           <td>{{ scenario.input_usd_per_million | usd }}</td>
+          <td>{{ scenario.cached_input_usd_per_million | usd }}</td>
           <td>{{ scenario.output_usd_per_million | usd }}</td>
           <td>{{ scenario.input_cost_usd | usd }}</td>
           <td>{{ scenario.output_cost_usd | usd }}</td>

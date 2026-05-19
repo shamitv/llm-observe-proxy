@@ -118,6 +118,7 @@
     </header>
     <div class="breakdown-list">
       <span><strong>{{ record.billing_input_tokens | compact_number }}</strong>Input tokens</span>
+      <span><strong>{{ record.billing_cached_input_tokens | compact_number }}</strong>Cached input tokens</span>
       <span><strong>{{ record.billing_output_tokens | compact_number }}</strong>Output tokens</span>
       <span><strong>{{ record.billing_total_tokens | compact_number }}</strong>Total tokens</span>
       <span><strong>{{ record.billing_total_cost_usd | usd }}</strong>Estimated cost</span>
