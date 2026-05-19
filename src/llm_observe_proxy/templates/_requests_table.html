@@ -52,7 +52,13 @@
         </td>
         {% endif %}
         <td><span class="pill status-{{ record.status | default('pending', true) }}">{{ record.status | default('pending', true) }}</span></td>
-        <td class="numeric">{{ record.duration_ms | duration_ms }}</td>
+        <td class="numeric">
+          {% if record.duration_is_elapsed %}
+          <span class="elapsed-duration" data-pending-start="{{ record.created_at | utc_iso }}">{{ record.duration_display_ms | duration_ms }} so far</span>
+          {% else %}
+          {{ record.duration_display_ms | duration_ms }}
+          {% endif %}
+        </td>
         <td class="numeric">{{ record.tokens_per_second | compact_rate }}</td>
         <td>
           <div class="token-triplet">

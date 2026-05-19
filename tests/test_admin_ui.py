@@ -113,6 +113,44 @@ def test_request_browser_pagination_preserves_filters(
     assert "<span>other-model</span>" not in page.text
 
 
+def test_pending_requests_show_elapsed_duration(
+    proxy_client: TestClient,
+    proxy_app: FastAPI,
+) -> None:
+    with proxy_app.state.session_factory() as session:
+        pending = _add_request_record(
+            session,
+            created_at=datetime.now(UTC) - timedelta(minutes=5),
+            model="slow-model",
+            completed=False,
+            input_tokens=None,
+            output_tokens=None,
+        )
+        completed = _add_request_record(
+            session,
+            created_at=datetime.now(UTC) - timedelta(minutes=1),
+            model="done-model",
+        )
+        session.commit()
+        pending_id = pending.id
+        completed_id = completed.id
+
+    browser = proxy_client.get("/admin")
+
+    assert browser.status_code == 200
+    assert 'class="elapsed-duration" data-pending-start="' in browser.text
+    assert "so far</span>" in browser.text
+    assert "pending" in browser.text
+    assert f'href="/admin/requests/{completed_id}">#{completed_id}</a>' in browser.text
+    assert "1 s" in browser.text
+
+    detail = proxy_client.get(f"/admin/requests/{pending_id}")
+    assert detail.status_code == 200
+    assert "Duration <strong><span class=\"elapsed-duration\"" in detail.text
+    assert "so far</span>" in detail.text
+    assert "Status <strong>pending</strong>" in detail.text
+
+
 def test_settings_updates_upstream_url(proxy_client: TestClient, proxy_app: FastAPI) -> None:
     response = proxy_client.post(
         "/admin/settings/upstream",
@@ -1029,6 +1067,7 @@ def _add_request_record(
     task_run_id: int | None = None,
     input_tokens: int | None = 6,
     output_tokens: int | None = 3,
+    completed: bool = True,
 ) -> RequestRecord:
     total_tokens = (
         input_tokens + output_tokens
@@ -1038,7 +1077,7 @@ def _add_request_record(
     record = RequestRecord(
         task_run_id=task_run_id,
         created_at=created_at,
-        completed_at=created_at + timedelta(seconds=1),
+        completed_at=created_at + timedelta(seconds=1) if completed else None,
         method="POST",
         path="/v1/chat/completions",
         query_string="",
@@ -1048,11 +1087,11 @@ def _add_request_record(
         request_headers_json="{}",
         request_body=b"{}",
         request_content_type="application/json",
-        response_status=200,
-        response_headers_json="{}",
-        response_body=b"{}",
-        response_content_type="application/json",
-        duration_ms=1000,
+        response_status=200 if completed else None,
+        response_headers_json="{}" if completed else None,
+        response_body=b"{}" if completed else None,
+        response_content_type="application/json" if completed else None,
+        duration_ms=1000 if completed else None,
         billing_provider_slug="openai",
         billing_provider_name="OpenAI",
         billing_model=model,

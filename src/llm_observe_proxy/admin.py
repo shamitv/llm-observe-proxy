@@ -273,8 +273,9 @@ async def index(
             page=page,
             per_page=per_page,
         )
+        rendered_at = datetime.now(UTC)
         records = [
-            _record_list_item(record)
+            _record_list_item(record, now=rendered_at)
             for record in session.scalars(
                 stmt.order_by(desc(RequestRecord.created_at))
                 .offset(pagination["offset"])
@@ -356,7 +357,7 @@ async def detail(request: Request, record_id: int, mode: str = "auto") -> HTMLRe
             }
             for image in record.images
         ]
-        detail_record = _record_detail(record)
+        detail_record = _record_detail(record, now=datetime.now(UTC))
         upstream_url = get_upstream_url(session, request.app.state.settings)
         active_run = _task_run_summary(get_active_task_run(session), session)
 
@@ -450,7 +451,8 @@ async def run_detail(
             .offset(pagination["offset"])
             .limit(pagination["per_page"])
         ).all()
-        records = [_record_list_item(record) for record in request_records]
+        rendered_at = datetime.now(UTC)
+        records = [_record_list_item(record, now=rendered_at) for record in request_records]
         stats = _task_run_stats_detail(task_run, session)
         what_if_costs = _run_what_if_context(
             _run_billing_usages(session, run_id),
@@ -1153,7 +1155,7 @@ async def _runs_with_error(request: Request, error: str) -> HTMLResponse:
     )
 
 
-def _record_list_item(record: RequestRecord) -> dict[str, object]:
+def _record_list_item(record: RequestRecord, *, now: datetime | None = None) -> dict[str, object]:
     response_render = render_payload(
         record.response_body,
         record.response_content_type,
@@ -1169,6 +1171,7 @@ def _record_list_item(record: RequestRecord) -> dict[str, object]:
     total_tokens = record.billing_total_tokens
     if total_tokens is None:
         total_tokens = token_usage.total_tokens
+    duration = _record_duration(record, now=now)
     return {
         "id": record.id,
         "created_at": record.created_at,
@@ -1179,6 +1182,8 @@ def _record_list_item(record: RequestRecord) -> dict[str, object]:
         "model_route": record.model_route,
         "status": record.response_status,
         "duration_ms": record.duration_ms,
+        "duration_display_ms": duration["duration_display_ms"],
+        "duration_is_elapsed": duration["duration_is_elapsed"],
         "is_stream": record.is_stream,
         "has_images": record.has_images,
         "has_tool_calls": record.has_tool_calls,
@@ -1233,7 +1238,8 @@ def _stream_token_usage(body: bytes | None) -> ExtractedTokenUsage:
     return extract_stream_token_usage(body)
 
 
-def _record_detail(record: RequestRecord) -> dict[str, object]:
+def _record_detail(record: RequestRecord, *, now: datetime | None = None) -> dict[str, object]:
+    duration = _record_duration(record, now=now)
     return {
         "id": record.id,
         "created_at": record.created_at,
@@ -1255,6 +1261,8 @@ def _record_detail(record: RequestRecord) -> dict[str, object]:
         "upstream_response_body_raw": record.upstream_response_body_raw,
         "response_content_type": record.response_content_type,
         "duration_ms": record.duration_ms,
+        "duration_display_ms": duration["duration_display_ms"],
+        "duration_is_elapsed": duration["duration_is_elapsed"],
         "is_stream": record.is_stream,
         "has_images": record.has_images,
         "has_tool_calls": record.has_tool_calls,
@@ -1274,6 +1282,15 @@ def _record_detail(record: RequestRecord) -> dict[str, object]:
         "task_run": _task_run_summary(record.task_run, session=None),
         "error": record.error,
     }
+
+
+def _record_duration(record: RequestRecord, *, now: datetime | None) -> dict[str, object]:
+    if record.duration_ms is not None:
+        return {"duration_display_ms": record.duration_ms, "duration_is_elapsed": False}
+    if record.completed_at is None:
+        elapsed_ms = _duration_ms(record.created_at, now or datetime.now(UTC))
+        return {"duration_display_ms": elapsed_ms, "duration_is_elapsed": elapsed_ms is not None}
+    return {"duration_display_ms": None, "duration_is_elapsed": False}
 
 
 def _task_run_summary(task_run: TaskRun | None, session=None) -> dict[str, object] | None:

@@ -483,6 +483,11 @@ td:first-child a {
   white-space: nowrap;
 }
 
+.elapsed-duration {
+  color: var(--warning);
+  font-weight: 700;
+}
+
 .token-triplet {
   display: grid;
   grid-template-columns: repeat(3, minmax(50px, 1fr));
