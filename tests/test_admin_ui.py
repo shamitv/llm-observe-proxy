@@ -126,11 +126,13 @@ def test_pending_requests_show_elapsed_duration(
             completed=False,
             input_tokens=None,
             output_tokens=None,
+            estimated_input_tokens=50_100,
         )
         completed = _add_request_record(
             session,
             created_at=datetime.now(UTC) - timedelta(minutes=1),
             model="done-model",
+            estimated_input_tokens=100_000,
         )
         session.commit()
         pending_id = pending.id
@@ -141,8 +143,13 @@ def test_pending_requests_show_elapsed_duration(
     assert browser.status_code == 200
     assert 'class="elapsed-duration" data-pending-start="' in browser.text
     assert "so far</span>" in browser.text
+    assert (
+        '<span class="estimated-token"><strong>~50.1k</strong>'
+        "<small>Est. input</small></span>"
+    ) in browser.text
     assert "pending" in browser.text
     assert f'href="/admin/requests/{completed_id}">#{completed_id}</a>' in browser.text
+    assert "~100k" not in browser.text
     assert "1 s" in browser.text
 
     detail = proxy_client.get(f"/admin/requests/{pending_id}")
@@ -150,6 +157,8 @@ def test_pending_requests_show_elapsed_duration(
     assert "Duration <strong><span class=\"elapsed-duration\"" in detail.text
     assert "so far</span>" in detail.text
     assert "Status <strong>pending</strong>" in detail.text
+    assert "~50.1k" in detail.text
+    assert "Estimate tokenizer" in detail.text
 
 
 def test_settings_updates_upstream_url(proxy_client: TestClient, proxy_app: FastAPI) -> None:
@@ -899,6 +908,41 @@ def test_admin_formats_large_numbers_and_durations(
     assert 'data-local-time="full">2026-05-01 00:00:00 UTC</time>' in request_detail.text
 
 
+def test_admin_reads_timings_usage_for_existing_stream_records(
+    proxy_client: TestClient,
+    proxy_app: FastAPI,
+) -> None:
+    with proxy_app.state.session_factory() as session:
+        record = _add_request_record(
+            session,
+            created_at=datetime.now(UTC),
+            input_tokens=None,
+            output_tokens=None,
+        )
+        record.is_stream = True
+        record.response_content_type = "text/event-stream"
+        record.response_body = (
+            b'data: {"choices":[{"delta":{"content":"hello"}}]}\n\n'
+            b'data: {"choices":[{"finish_reason":"stop","index":0,"delta":{}}],'
+            b'"timings":{"cache_n":0,"prompt_n":1185,"predicted_n":40}}\n\n'
+            b"data: [DONE]\n\n"
+        )
+        session.commit()
+        record_id = record.id
+
+    browser = proxy_client.get("/admin")
+    assert browser.status_code == 200
+    assert "<strong>1.19k</strong><small>Input</small>" in browser.text
+    assert "<strong>40</strong><small>Output</small>" in browser.text
+    assert "<strong>1.23k</strong><small>Total</small>" in browser.text
+
+    detail = proxy_client.get(f"/admin/requests/{record_id}")
+    assert detail.status_code == 200
+    assert "<strong>1.19k</strong>Input tokens" in detail.text
+    assert "<strong>40</strong>Output tokens" in detail.text
+    assert "<strong>1.23k</strong>Total tokens" in detail.text
+
+
 def test_settings_updates_incoming_server(proxy_client: TestClient) -> None:
     settings = proxy_client.get("/admin/settings")
     assert settings.status_code == 200
@@ -1076,6 +1120,7 @@ def _add_request_record(
     cached_input_tokens: int | None = None,
     output_tokens: int | None = 3,
     completed: bool = True,
+    estimated_input_tokens: int | None = None,
 ) -> RequestRecord:
     total_tokens = (
         input_tokens + output_tokens
@@ -1107,6 +1152,9 @@ def _add_request_record(
         billing_cached_input_tokens=cached_input_tokens,
         billing_output_tokens=output_tokens,
         billing_total_tokens=total_tokens,
+        estimated_input_tokens=estimated_input_tokens,
+        estimated_input_tokenizer="o200k_base" if estimated_input_tokens is not None else None,
+        estimated_input_model=model if estimated_input_tokens is not None else None,
     )
     session.add(record)
     return record

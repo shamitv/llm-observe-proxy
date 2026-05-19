@@ -31,6 +31,7 @@ from llm_observe_proxy.database import (
     upsert_model_price,
 )
 from llm_observe_proxy.rendering import render_payload
+from llm_observe_proxy.token_estimation import estimate_input_tokens
 
 
 def test_app_factory_exposes_health_route() -> None:
@@ -153,6 +154,17 @@ def test_extract_token_usage_supports_chat_responses_and_responses_api() -> None
     assert responses_usage.output_tokens == 4
     assert responses_usage.total_tokens == 12
 
+    timings_usage = extract_token_usage(
+        {
+            "choices": [{"finish_reason": "stop", "index": 0, "delta": {}}],
+            "timings": {"cache_n": 0, "prompt_n": 1185, "predicted_n": 40},
+        }
+    )
+    assert timings_usage.input_tokens == 1185
+    assert timings_usage.cached_input_tokens == 0
+    assert timings_usage.output_tokens == 40
+    assert timings_usage.total_tokens == 1225
+
 
 def test_stream_token_usage_reads_final_sse_usage_event(monkeypatch: pytest.MonkeyPatch) -> None:
     def fail_decode(_body: bytes | None):
@@ -177,6 +189,30 @@ def test_stream_token_usage_reads_final_sse_usage_event(monkeypatch: pytest.Monk
     assert usage.total_tokens == 1025
 
 
+def test_stream_token_usage_reads_final_sse_timings_event(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail_decode(_body: bytes | None):
+        raise AssertionError("stream timings should use targeted final-event parsing")
+
+    monkeypatch.setattr("llm_observe_proxy.capture.decode_sse_json_events", fail_decode)
+    body = b"".join(
+        [
+            b'data: {"choices":[{"delta":{"content":"hello"}}]}\n\n',
+            b'data: {"choices":[{"finish_reason":"stop","index":0,"delta":{}}],'
+            b'"timings":{"cache_n":0,"prompt_n":1185,"predicted_n":40}}\n\n',
+            b"data: [DONE]\n\n",
+        ]
+    )
+
+    usage = _stream_token_usage(body)
+
+    assert usage.input_tokens == 1185
+    assert usage.cached_input_tokens == 0
+    assert usage.output_tokens == 40
+    assert usage.total_tokens == 1225
+
+
 def test_tool_detector_ignores_non_string_type_fields() -> None:
     payload = {
         "tools": [
@@ -194,6 +230,32 @@ def test_tool_detector_ignores_non_string_type_fields() -> None:
     }
 
     assert has_tool_payload(payload) is True
+
+
+def test_estimate_input_tokens_supports_openai_request_shapes() -> None:
+    chat_estimate = estimate_input_tokens(
+        {
+            "model": "gpt-test",
+            "messages": [{"role": "user", "content": "hello world"}],
+            "tools": [{"type": "function", "function": {"name": "lookup"}}],
+        },
+        endpoint="/v1/chat/completions",
+        model="gpt-test",
+    )
+    responses_estimate = estimate_input_tokens(
+        {"input": "summarize this", "tools": [{"type": "web_search_preview"}]},
+        endpoint="/v1/responses",
+        model=None,
+    )
+    unknown = estimate_input_tokens({"temperature": 0}, endpoint="/v1/models", model=None)
+
+    assert chat_estimate is not None
+    assert chat_estimate.tokens > 0
+    assert chat_estimate.model == "gpt-test"
+    assert responses_estimate is not None
+    assert responses_estimate.tokens > 0
+    assert responses_estimate.tokenizer == "o200k_base"
+    assert unknown is None
 
 
 def test_module_cli_help_smoke() -> None:
@@ -421,6 +483,9 @@ def test_init_db_upgrades_existing_sqlite_request_records_with_route_metadata(tm
         "response_was_rewritten",
         "compat_fixes_json",
         "compat_fix_errors_json",
+        "estimated_input_tokens",
+        "estimated_input_tokenizer",
+        "estimated_input_model",
     }.issubset(columns)
     assert "cached_input_usd_per_million" in price_columns
     assert {

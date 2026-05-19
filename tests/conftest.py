@@ -166,6 +166,15 @@ async def _streaming_chunks(path: str, payload: dict[str, Any]):
                     "usage": usage,
                 }
             )
+        if payload.get("metadata", {}).get("llama_timings_usage"):
+            chunks.append(
+                {
+                    "id": "chat_stream",
+                    "model": model,
+                    "choices": [{"finish_reason": "stop", "index": 0, "delta": {}}],
+                    "timings": {"cache_n": 0, "prompt_n": 1185, "predicted_n": 40},
+                }
+            )
     for chunk in chunks:
         yield f"data: {json.dumps(chunk)}\n\n".encode()
     yield b"data: [DONE]\n\n"
