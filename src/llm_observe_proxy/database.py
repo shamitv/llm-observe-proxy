@@ -174,6 +174,9 @@ class RequestRecord(Base):
     response_was_rewritten: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     compat_fixes_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     compat_fix_errors_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    estimated_input_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    estimated_input_tokenizer: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    estimated_input_model: Mapped[str | None] = mapped_column(String(256), nullable=True)
 
     images: Mapped[list[ImageAsset]] = relationship(
         back_populates="record",
@@ -751,6 +754,21 @@ def _ensure_sqlite_request_record_schema(engine: Engine) -> None:
         if "compat_fix_errors_json" not in columns:
             connection.execute(
                 text("ALTER TABLE request_records ADD COLUMN compat_fix_errors_json TEXT")
+            )
+        if "estimated_input_tokens" not in columns:
+            connection.execute(
+                text("ALTER TABLE request_records ADD COLUMN estimated_input_tokens INTEGER")
+            )
+        if "estimated_input_tokenizer" not in columns:
+            connection.execute(
+                text(
+                    "ALTER TABLE request_records ADD COLUMN "
+                    "estimated_input_tokenizer VARCHAR(128)"
+                )
+            )
+        if "estimated_input_model" not in columns:
+            connection.execute(
+                text("ALTER TABLE request_records ADD COLUMN estimated_input_model VARCHAR(256)")
             )
         connection.execute(
             text(

@@ -1180,6 +1180,13 @@ def _record_list_item(record: RequestRecord, *, now: datetime | None = None) -> 
     if total_tokens is None:
         total_tokens = token_usage.total_tokens
     duration = _record_duration(record, now=now)
+    input_is_estimated = (
+        input_tokens is None
+        and record.completed_at is None
+        and record.estimated_input_tokens is not None
+    )
+    if input_is_estimated:
+        input_tokens = record.estimated_input_tokens
     return {
         "id": record.id,
         "created_at": record.created_at,
@@ -1198,6 +1205,7 @@ def _record_list_item(record: RequestRecord, *, now: datetime | None = None) -> 
         "task_run": _task_run_summary(record.task_run, session=None),
         "tokens": {
             "input": input_tokens,
+            "input_estimated": input_is_estimated,
             "cached_input": record.billing_cached_input_tokens
             if record.billing_cached_input_tokens is not None
             else token_usage.cached_input_tokens,
@@ -1257,6 +1265,7 @@ def _stream_token_usage(body: bytes | None) -> ExtractedTokenUsage:
 
 def _record_detail(record: RequestRecord, *, now: datetime | None = None) -> dict[str, object]:
     duration = _record_duration(record, now=now)
+    token_usage = _record_effective_token_usage(record)
     return {
         "id": record.id,
         "created_at": record.created_at,
@@ -1290,10 +1299,17 @@ def _record_detail(record: RequestRecord, *, now: datetime | None = None) -> dic
         "billing_cached_input_tokens": record.billing_cached_input_tokens,
         "billing_output_tokens": record.billing_output_tokens,
         "billing_total_tokens": record.billing_total_tokens,
+        "display_input_tokens": token_usage.input_tokens,
+        "display_cached_input_tokens": token_usage.cached_input_tokens,
+        "display_output_tokens": token_usage.output_tokens,
+        "display_total_tokens": token_usage.total_tokens,
         "billing_input_cost_usd": record.billing_input_cost_usd,
         "billing_output_cost_usd": record.billing_output_cost_usd,
         "billing_total_cost_usd": record.billing_total_cost_usd,
         "pricing_snapshot_json": record.pricing_snapshot_json,
+        "estimated_input_tokens": record.estimated_input_tokens,
+        "estimated_input_tokenizer": record.estimated_input_tokenizer,
+        "estimated_input_model": record.estimated_input_model,
         "response_was_rewritten": record.response_was_rewritten,
         "compat_fixes_json": record.compat_fixes_json,
         "compat_fix_errors_json": record.compat_fix_errors_json,

@@ -117,12 +117,18 @@
       <span>{{ record.billing_provider_name or record.billing_provider_slug or 'no provider' }}</span>
     </header>
     <div class="breakdown-list">
-      <span><strong>{{ record.billing_input_tokens | compact_number }}</strong>Input tokens</span>
-      <span><strong>{{ record.billing_cached_input_tokens | compact_number }}</strong>Cached input tokens</span>
-      <span><strong>{{ record.billing_output_tokens | compact_number }}</strong>Output tokens</span>
-      <span><strong>{{ record.billing_total_tokens | compact_number }}</strong>Total tokens</span>
+      <span><strong>{{ record.display_input_tokens | compact_number }}</strong>Input tokens</span>
+      {% if record.completed_at is none and record.display_input_tokens is none and record.estimated_input_tokens %}
+      <span class="estimated-token"><strong>~{{ record.estimated_input_tokens | compact_number }}</strong>Est. input tokens</span>
+      {% endif %}
+      <span><strong>{{ record.display_cached_input_tokens | compact_number }}</strong>Cached input tokens</span>
+      <span><strong>{{ record.display_output_tokens | compact_number }}</strong>Output tokens</span>
+      <span><strong>{{ record.display_total_tokens | compact_number }}</strong>Total tokens</span>
       <span><strong>{{ record.billing_total_cost_usd | usd }}</strong>Estimated cost</span>
       <span><strong>{{ record.billing_model | default('-', true) }}</strong>Billing model</span>
+      {% if record.estimated_input_tokenizer %}
+      <span><strong>{{ record.estimated_input_tokenizer }}</strong>Estimate tokenizer</span>
+      {% endif %}
     </div>
   </article>
 

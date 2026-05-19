@@ -515,6 +515,17 @@ td:first-child a {
   white-space: nowrap;
 }
 
+.estimated-token {
+  border-radius: 6px;
+  background: #f3f6fa;
+  color: var(--muted);
+  padding: 2px 4px;
+}
+
+.estimated-token strong {
+  color: #46586d;
+}
+
 .request-preview span {
   display: -webkit-box;
   overflow: hidden;
