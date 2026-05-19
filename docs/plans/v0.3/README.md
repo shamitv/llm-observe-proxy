@@ -420,6 +420,151 @@ Current behavior:
 - Pending elapsed values are not persisted into `duration_ms`.
 - Tests cover pending and completed duration rendering.
 
+## Feature 5: Cached Token Cost Accounting
+
+### Problem
+
+Cost estimates currently treat all input tokens as the same price class. Some
+upstreams expose cached input token counts in response usage metadata, and cached
+tokens can be billed differently from ordinary input tokens. When those cached
+tokens are visible in the captured response, cost calculation should use them
+instead of charging the entire input total at the standard input rate.
+
+Current behavior:
+
+- `ExtractedTokenUsage` contains only input, output, and total token counts.
+- `estimate_cost` calculates:
+
+```text
+input cost = input_tokens * input_usd_per_million / 1,000,000
+output cost = output_tokens * output_usd_per_million / 1,000,000
+```
+
+- `ModelPrice` stores only standard input and output rates.
+- Pricing snapshots do not explain whether cached tokens were present or ignored.
+
+### Desired Behavior
+
+- If the response usage includes cached input tokens, extract and preserve that
+  count.
+- If a model price has a configured cached-input rate, calculate input cost as:
+
+```text
+uncached_input_tokens = max(input_tokens - cached_input_tokens, 0)
+input cost =
+  uncached_input_tokens * input_usd_per_million / 1,000,000
+  + cached_input_tokens * cached_input_usd_per_million / 1,000,000
+```
+
+- If cached tokens are present but no cached-input rate is configured, fall back to
+  the standard input rate for all input tokens and make that clear in the pricing
+  snapshot.
+- If cached tokens cannot be determined from the response, keep the current cost
+  calculation.
+- Run-level what-if cost should use cached-token accounting when both run usage and
+  the selected model price support it.
+
+### Usage Shapes To Recognize
+
+Initial extraction should support common OpenAI-compatible response shapes:
+
+- Chat completions:
+  - `usage.prompt_tokens_details.cached_tokens`
+  - `usage.prompt_tokens_details.cache_read_tokens` if present
+- Responses API:
+  - `usage.input_tokens_details.cached_tokens`
+  - `usage.input_tokens_details.cache_read_tokens` if present
+- Streaming final usage events with the same nested shapes.
+
+Future provider-specific cache-write fields, such as cache creation/write tokens,
+should be captured separately only after their billing semantics are clear.
+
+### Non-goals
+
+- Do not invent cached-token counts when the upstream does not report them.
+- Do not assume provider cache discounts without a configured cached-input rate.
+- Do not recalculate historical request cost snapshots automatically.
+- Do not add image/audio/tool-specific pricing in this feature.
+
+### Implementation Plan
+
+1. Extend token usage extraction in `capture.py`.
+   - Add `cached_input_tokens` to `ExtractedTokenUsage`.
+   - Extract cached counts from known nested usage detail fields.
+   - Clamp impossible values conservatively when cached tokens exceed total input
+     tokens, and preserve raw response bodies for debugging as today.
+   - Update streaming usage marker detection so final SSE usage events containing
+     cache detail fields are found efficiently.
+
+2. Extend persistence in `database.py`.
+   - Add nullable `billing_cached_input_tokens` to `request_records`.
+   - Add nullable `cached_input_usd_per_million` to `model_prices`.
+   - Add SQLite upgrade statements for existing databases.
+   - Update seed rows only when reliable cached-token prices are deliberately
+     provided; otherwise leave cached rates null so the fallback is explicit.
+
+3. Update settings pricing management.
+   - Add an optional `Cached input / 1M` field to the model pricing form/table.
+   - Validate it with the same decimal-rate rules when provided.
+   - Keep existing model price rows valid when the cached rate is blank.
+
+4. Update cost calculation in `costing.py`.
+   - Include cached input tokens and cached input cost in `CostEstimate`.
+   - Split standard input cost and cached input cost when a cached rate exists.
+   - Keep total token counts unchanged; cached input tokens are a subset of input
+     tokens, not additional tokens.
+   - Add snapshot fields for:
+     - cached input tokens
+     - cached input rate
+     - uncached input tokens
+     - whether cached tokens used a special rate or fell back to standard input
+       pricing
+
+5. Update run what-if estimates.
+   - Include cached input tokens in `RunCostEstimate`.
+   - Sum cached input tokens across included requests.
+   - Apply the selected model price's cached-input rate when present.
+   - Add optional cached-token columns or compact detail text in the what-if table
+     so users can see why totals changed.
+
+6. Update admin UI request displays.
+   - Show cached input token counts in request detail cost estimates.
+   - Keep the request table compact; add cached-token detail only if it can fit
+     cleanly without making the token column noisy.
+   - Include cached-token information in pricing snapshots.
+
+7. Update tests.
+   - Add extraction tests for non-streaming Chat Completions and Responses API
+     usage detail shapes.
+   - Add streaming final-usage extraction coverage for cached tokens.
+   - Add cost estimator tests for:
+     - cached rate configured
+     - cached tokens present but cached rate missing
+     - cached tokens absent
+   - Add persistence/UI tests for `billing_cached_input_tokens` and the settings
+     pricing field.
+   - Add run what-if cost coverage that proves cached tokens affect the full-run
+     estimate.
+
+8. Run focused verification.
+   - `.\.venv\Scripts\pytest.exe -q tests\test_rendering_and_cli.py tests\test_proxy_capture.py tests\test_admin_ui.py`
+   - `.\.venv\Scripts\ruff.exe check src tests`
+   - `.\.venv\Scripts\python.exe -m compileall -q src tests`
+
+9. Run the full test suite before committing the implementation.
+   - `.\.venv\Scripts\pytest.exe -q`
+
+### Acceptance Criteria
+
+- Cached input tokens are extracted when present in recognized usage metadata.
+- Request cost snapshots store cached input token counts.
+- Cost estimates use a cached-input rate only when one is configured.
+- Missing cached-input rates fall back to current standard input pricing and are
+  disclosed in the pricing snapshot.
+- Run what-if estimates account for cached input tokens when supported.
+- Existing capture, rendering, and admin UI tests pass with new cached-token
+  coverage.
+
 ## Later v0.3 Features
 
 Add the next requested features here as they are defined. Each feature should include
