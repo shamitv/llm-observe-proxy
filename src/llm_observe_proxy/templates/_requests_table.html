@@ -77,4 +77,28 @@
       {% endfor %}
     </tbody>
   </table>
+  {% if pagination %}
+  <div class="pagination-bar">
+    <span>
+      Showing <strong>{{ pagination.start | compact_number }}-{{ pagination.end | compact_number }}</strong>
+      of <strong>{{ pagination.total | compact_number }}</strong>
+      <small>{{ pagination.per_page }} per page</small>
+    </span>
+    <nav class="pagination-links" aria-label="Request table pages">
+      {% if pagination.has_previous %}
+      <a class="button ghost compact-button" href="{{ pagination.previous_url }}">Previous</a>
+      {% else %}
+      <span class="button ghost compact-button disabled">Previous</span>
+      {% endif %}
+      {% for page_item in pagination.pages %}
+      <a class="button ghost compact-button {{ 'active' if page_item.current else '' }}" href="{{ page_item.url }}">{{ page_item.number }}</a>
+      {% endfor %}
+      {% if pagination.has_next %}
+      <a class="button ghost compact-button" href="{{ pagination.next_url }}">Next</a>
+      {% else %}
+      <span class="button ghost compact-button disabled">Next</span>
+      {% endif %}
+    </nav>
+  </div>
+  {% endif %}
 </section>

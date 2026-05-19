@@ -54,6 +54,65 @@ def test_request_browser_filters_and_markdown_renderer(proxy_client: TestClient)
     assert "<li>captured</li>" in detail.text
 
 
+def test_request_browser_paginates_records(
+    proxy_client: TestClient,
+    proxy_app: FastAPI,
+) -> None:
+    with proxy_app.state.session_factory() as session:
+        started = datetime(2026, 5, 1, tzinfo=UTC)
+        for index in range(55):
+            _add_request_record(
+                session,
+                created_at=started + timedelta(minutes=index),
+                model="page-model",
+            )
+        session.commit()
+
+    first_page = proxy_client.get("/admin")
+    assert first_page.status_code == 200
+    assert "Showing <strong>1-50</strong>" in first_page.text
+    assert "of <strong>55</strong>" in first_page.text
+    assert 'href="/admin/requests/55">#55</a>' in first_page.text
+    assert 'href="/admin/requests/6">#6</a>' in first_page.text
+    assert 'href="/admin/requests/5">#5</a>' not in first_page.text
+    assert "Next" in first_page.text
+
+    second_page = proxy_client.get("/admin?page=2")
+    assert second_page.status_code == 200
+    assert "Showing <strong>51-55</strong>" in second_page.text
+    assert "of <strong>55</strong>" in second_page.text
+    assert 'href="/admin/requests/5">#5</a>' in second_page.text
+    assert 'href="/admin/requests/1">#1</a>' in second_page.text
+    assert 'href="/admin/requests/6">#6</a>' not in second_page.text
+    assert "Previous" in second_page.text
+
+
+def test_request_browser_pagination_preserves_filters(
+    proxy_client: TestClient,
+    proxy_app: FastAPI,
+) -> None:
+    with proxy_app.state.session_factory() as session:
+        started = datetime(2026, 5, 1, tzinfo=UTC)
+        for index in range(3):
+            _add_request_record(
+                session,
+                created_at=started + timedelta(minutes=index),
+                model="target-model",
+            )
+        _add_request_record(session, created_at=started, model="other-model")
+        session.commit()
+
+    page = proxy_client.get("/admin?model=target-model&per_page=1")
+
+    assert page.status_code == 200
+    assert "Showing <strong>1-1</strong>" in page.text
+    assert "of <strong>3</strong>" in page.text
+    assert "model=target-model" in page.text
+    assert "per_page=1" in page.text
+    assert "page=2" in page.text
+    assert "<span>other-model</span>" not in page.text
+
+
 def test_settings_updates_upstream_url(proxy_client: TestClient, proxy_app: FastAPI) -> None:
     response = proxy_client.post(
         "/admin/settings/upstream",
@@ -585,6 +644,50 @@ def test_run_filter_detail_and_badges_show_associated_requests(
     )
 
 
+def test_run_detail_paginates_traffic_without_limiting_what_if_totals(
+    proxy_client: TestClient,
+    proxy_app: FastAPI,
+) -> None:
+    with proxy_app.state.session_factory() as session:
+        price = upsert_model_price(
+            session,
+            provider_slug="openai",
+            model="custom-full-run",
+            display_name="Custom Full Run",
+            input_usd_per_million="1",
+            output_usd_per_million="2",
+        )
+        task_run = TaskRun(name="Large run", started_at=datetime(2026, 5, 1, tzinfo=UTC))
+        session.add(task_run)
+        session.flush()
+        started = task_run.started_at
+        for index in range(55):
+            _add_request_record(
+                session,
+                created_at=started + timedelta(minutes=index),
+                model=price.model,
+                task_run_id=task_run.id,
+                input_tokens=1000,
+                output_tokens=500,
+            )
+        session.commit()
+        run_id = task_run.id
+
+    detail = proxy_client.get(
+        f"/admin/runs/{run_id}?what_if=openai:custom-full-run&per_page=10"
+    )
+
+    assert detail.status_code == 200
+    assert "Showing <strong>1-10</strong>" in detail.text
+    assert "of <strong>55</strong>" in detail.text
+    assert "#55" in detail.text
+    assert "#46" in detail.text
+    assert "#45" not in detail.text
+    assert "Custom Full Run" in detail.text
+    assert "$0.11" in detail.text
+    assert "<td>55</td>" in detail.text
+
+
 def test_run_detail_shows_default_what_if_costs_without_mutating_snapshots(
     proxy_client: TestClient,
     proxy_app: FastAPI,
@@ -907,3 +1010,46 @@ def _create_model_route_app(tmp_path: Path, *routes: ModelRoute) -> FastAPI:
             model_routes=routes,
         )
     )
+
+
+def _add_request_record(
+    session,
+    *,
+    created_at: datetime,
+    model: str = "gpt-test",
+    task_run_id: int | None = None,
+    input_tokens: int | None = 6,
+    output_tokens: int | None = 3,
+) -> RequestRecord:
+    total_tokens = (
+        input_tokens + output_tokens
+        if input_tokens is not None and output_tokens is not None
+        else None
+    )
+    record = RequestRecord(
+        task_run_id=task_run_id,
+        created_at=created_at,
+        completed_at=created_at + timedelta(seconds=1),
+        method="POST",
+        path="/v1/chat/completions",
+        query_string="",
+        endpoint="/v1/chat/completions",
+        model=model,
+        upstream_url=f"{GLOBAL_UPSTREAM_URL}/chat/completions",
+        request_headers_json="{}",
+        request_body=b"{}",
+        request_content_type="application/json",
+        response_status=200,
+        response_headers_json="{}",
+        response_body=b"{}",
+        response_content_type="application/json",
+        duration_ms=1000,
+        billing_provider_slug="openai",
+        billing_provider_name="OpenAI",
+        billing_model=model,
+        billing_input_tokens=input_tokens,
+        billing_output_tokens=output_tokens,
+        billing_total_tokens=total_tokens,
+    )
+    session.add(record)
+    return record

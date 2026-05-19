@@ -666,6 +666,41 @@ td:first-child a {
   padding: 5px 9px;
 }
 
+.pagination-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border-top: 1px solid var(--line);
+  padding: 12px 14px;
+}
+
+.pagination-bar > span {
+  color: var(--muted);
+}
+
+.pagination-bar small {
+  margin-left: 8px;
+  color: var(--muted);
+}
+
+.pagination-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
+.pagination-links .active {
+  border-color: var(--brand);
+  color: var(--brand-strong);
+}
+
+.pagination-links .disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
 .key-state-missing {
   color: var(--danger);
 }
@@ -859,6 +894,7 @@ figcaption {
   .provider-form,
   .price-form,
   .what-if-form,
+  .pagination-bar,
   .run-start-form,
   .split,
   .settings-grid {
@@ -876,6 +912,15 @@ figcaption {
 
   .run-summary-action {
     margin-top: 0;
+  }
+
+  .pagination-bar {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .pagination-links {
+    justify-content: flex-start;
   }
 
   .kpi-grid {

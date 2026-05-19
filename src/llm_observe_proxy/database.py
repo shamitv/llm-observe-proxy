@@ -18,8 +18,10 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    case,
     create_engine,
     event,
+    func,
     inspect,
     select,
     text,
@@ -605,25 +607,35 @@ def end_active_task_run(session: Session) -> TaskRun | None:
 
 
 def get_task_run_stats(session: Session, task_run_id: int) -> dict[str, object]:
-    records = session.scalars(
-        select(RequestRecord)
-        .where(RequestRecord.task_run_id == task_run_id)
-        .order_by(RequestRecord.created_at)
-    ).all()
-    completed_times = [record.completed_at for record in records if record.completed_at is not None]
-    first_request_at = records[0].created_at if records else None
-    last_completed_at = max(completed_times) if completed_times else None
-    total_request_duration_ms = sum(record.duration_ms or 0 for record in records)
+    stats = session.execute(
+        select(
+            func.count(RequestRecord.id),
+            func.min(RequestRecord.created_at),
+            func.max(RequestRecord.completed_at),
+            func.coalesce(func.sum(RequestRecord.duration_ms), 0),
+            func.coalesce(func.sum(case((RequestRecord.is_stream.is_(True), 1), else_=0)), 0),
+            func.coalesce(func.sum(case((RequestRecord.has_images.is_(True), 1), else_=0)), 0),
+            func.coalesce(
+                func.sum(case((RequestRecord.has_tool_calls.is_(True), 1), else_=0)),
+                0,
+            ),
+            func.coalesce(func.sum(case((RequestRecord.error.is_not(None), 1), else_=0)), 0),
+        ).where(RequestRecord.task_run_id == task_run_id)
+    ).one()
+    request_count = int(stats[0] or 0)
+    first_request_at = stats[1]
+    last_completed_at = stats[2]
+    total_request_duration_ms = int(stats[3] or 0)
     return {
-        "request_count": len(records),
+        "request_count": request_count,
         "first_request_at": first_request_at,
         "last_completed_at": last_completed_at,
         "llm_wall_time_ms": _duration_ms(first_request_at, last_completed_at),
         "total_request_duration_ms": total_request_duration_ms,
-        "streams": sum(1 for record in records if record.is_stream),
-        "images": sum(1 for record in records if record.has_images),
-        "tools": sum(1 for record in records if record.has_tool_calls),
-        "errors": sum(1 for record in records if record.error),
+        "streams": int(stats[4] or 0),
+        "images": int(stats[5] or 0),
+        "tools": int(stats[6] or 0),
+        "errors": int(stats[7] or 0),
     }
 
 

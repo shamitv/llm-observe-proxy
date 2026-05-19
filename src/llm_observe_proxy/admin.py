@@ -7,6 +7,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlencode
 
 import httpx
 from fastapi import APIRouter, Form, Query, Request
@@ -218,11 +219,12 @@ async def index(
     stream: str | None = None,
     image: str | None = None,
     tool: str | None = None,
-    limit: int = Query(100, ge=1, le=500),
+    page: int = Query(1, ge=1),
+    per_page: int = Query(50, ge=1, le=200),
 ) -> HTMLResponse:
     session_factory: SessionFactory = request.app.state.session_factory
     with session_scope(session_factory) as session:
-        stmt = select(RequestRecord).order_by(desc(RequestRecord.created_at)).limit(limit)
+        stmt = select(RequestRecord)
         if endpoint:
             stmt = stmt.where(RequestRecord.endpoint.like(f"%{endpoint}%"))
         if model:
@@ -238,7 +240,21 @@ async def index(
         if tool == "1":
             stmt = stmt.where(RequestRecord.has_tool_calls.is_(True))
 
-        records = [_record_list_item(record) for record in session.scalars(stmt).all()]
+        total_records = _count_records(session, stmt)
+        pagination = _pagination_context(
+            request,
+            total=total_records,
+            page=page,
+            per_page=per_page,
+        )
+        records = [
+            _record_list_item(record)
+            for record in session.scalars(
+                stmt.order_by(desc(RequestRecord.created_at))
+                .offset(pagination["offset"])
+                .limit(pagination["per_page"])
+            ).all()
+        ]
         models = [
             row[0]
             for row in session.execute(
@@ -280,11 +296,13 @@ async def index(
                 "stream": stream == "1",
                 "image": image == "1",
                 "tool": tool == "1",
-                "limit": limit,
+                "page": pagination["page"],
+                "per_page": pagination["per_page"],
             },
             "run_options": [_task_run_summary(task_run, session=None) for task_run in run_options],
             "active_run": active_run,
             "stats": stats,
+            "pagination": pagination,
             "upstream_url": upstream_url,
             "page_title": "Request Browser",
         },
@@ -379,6 +397,8 @@ async def runs(request: Request) -> HTMLResponse:
 async def run_detail(
     request: Request,
     run_id: int,
+    page: int = Query(1, ge=1),
+    per_page: int = Query(50, ge=1, le=200),
 ) -> HTMLResponse:
     session_factory: SessionFactory = request.app.state.session_factory
     what_if = request.query_params.getlist("what_if") or None
@@ -391,15 +411,23 @@ async def run_detail(
                 {"record_id": run_id, "page_title": "Run Not Found"},
                 status_code=404,
             )
+        request_stmt = select(RequestRecord).where(RequestRecord.task_run_id == run_id)
+        total_records = _count_records(session, request_stmt)
+        pagination = _pagination_context(
+            request,
+            total=total_records,
+            page=page,
+            per_page=per_page,
+        )
         request_records = session.scalars(
-            select(RequestRecord)
-            .where(RequestRecord.task_run_id == run_id)
-            .order_by(desc(RequestRecord.created_at))
+            request_stmt.order_by(desc(RequestRecord.created_at))
+            .offset(pagination["offset"])
+            .limit(pagination["per_page"])
         ).all()
         records = [_record_list_item(record) for record in request_records]
         stats = _task_run_stats_detail(task_run, session)
         what_if_costs = _run_what_if_context(
-            request_records,
+            _run_billing_usages(session, run_id),
             session,
             requested_keys=what_if,
         )
@@ -414,6 +442,7 @@ async def run_detail(
             "records": records,
             "stats": stats,
             "what_if": what_if_costs,
+            "pagination": pagination,
             "active_run": active_run,
             "upstream_url": upstream_url,
             "page_title": f"Run: {task_run.name}",
@@ -896,7 +925,7 @@ def _model_price_row(price) -> dict[str, object]:
 
 
 def _run_what_if_context(
-    records: list[RequestRecord],
+    usages: list[ExtractedTokenUsage],
     session,
     *,
     requested_keys: list[str] | None,
@@ -905,7 +934,6 @@ def _run_what_if_context(
     price_by_key = {_model_price_key(price): price for price in active_prices}
     selected_keys = _selected_run_what_if_keys(requested_keys, price_by_key)
     selected_key_set = set(selected_keys)
-    usages = [_record_effective_token_usage(record) for record in records]
     scenarios = [
         _run_cost_estimate_row(estimate_run_cost(usages, price_by_key[key]))
         for key in selected_keys
@@ -979,6 +1007,81 @@ def _run_cost_estimate_row(estimate: RunCostEstimate) -> dict[str, object]:
 
 def _model_price_key(price: ModelPrice) -> str:
     return f"{price.provider_slug}:{price.model}"
+
+
+def _count_records(session, stmt) -> int:
+    count_stmt = select(func.count()).select_from(stmt.order_by(None).subquery())
+    return int(session.scalar(count_stmt) or 0)
+
+
+def _pagination_context(
+    request: Request,
+    *,
+    total: int,
+    page: int,
+    per_page: int,
+) -> dict[str, object]:
+    page_size = max(1, min(per_page, 200))
+    total_pages = max(1, math.ceil(total / page_size))
+    current_page = min(max(page, 1), total_pages)
+    offset = (current_page - 1) * page_size
+    start = offset + 1 if total else 0
+    end = min(total, offset + page_size)
+    page_start = max(1, current_page - 2)
+    page_end = min(total_pages, current_page + 2)
+    return {
+        "page": current_page,
+        "per_page": page_size,
+        "offset": offset,
+        "total": total,
+        "total_pages": total_pages,
+        "start": start,
+        "end": end,
+        "has_previous": current_page > 1,
+        "has_next": current_page < total_pages,
+        "previous_url": _page_url(request, current_page - 1, page_size)
+        if current_page > 1
+        else None,
+        "next_url": _page_url(request, current_page + 1, page_size)
+        if current_page < total_pages
+        else None,
+        "pages": [
+            {
+                "number": page_number,
+                "url": _page_url(request, page_number, page_size),
+                "current": page_number == current_page,
+            }
+            for page_number in range(page_start, page_end + 1)
+        ],
+    }
+
+
+def _page_url(request: Request, page: int, per_page: int) -> str:
+    query_items = [
+        (key, value)
+        for key, value in request.query_params.multi_items()
+        if key not in {"page", "per_page"}
+    ]
+    query_items.extend((("per_page", str(per_page)), ("page", str(page))))
+    return f"{request.url.path}?{urlencode(query_items)}"
+
+
+def _run_billing_usages(session, run_id: int) -> list[ExtractedTokenUsage]:
+    rows = session.execute(
+        select(
+            RequestRecord.billing_input_tokens,
+            RequestRecord.billing_output_tokens,
+            RequestRecord.billing_total_tokens,
+        ).where(RequestRecord.task_run_id == run_id)
+    )
+    return [
+        ExtractedTokenUsage(
+            input_tokens=row[0],
+            output_tokens=row[1],
+            total_tokens=row[2],
+        )
+        for row in rows
+    ]
 
 
 async def _settings_with_error(request: Request, error: str) -> HTMLResponse:
@@ -1191,31 +1294,24 @@ def _task_run_list_item(
 
 
 def _task_run_stats_detail(task_run: TaskRun, session) -> dict[str, object]:
-    records = session.scalars(
-        select(RequestRecord)
-        .where(RequestRecord.task_run_id == task_run.id)
-        .order_by(RequestRecord.created_at)
-    ).all()
     base_stats = get_task_run_stats(session, task_run.id)
     run_open_duration_ms = _duration_ms(
         task_run.started_at,
         task_run.ended_at or datetime.now(UTC),
     )
-    input_tokens: list[int | None] = []
-    output_tokens: list[int | None] = []
-    total_tokens: list[int | None] = []
-    total_costs: list[Decimal | None] = []
-    for record in records:
-        token_usage = _record_effective_token_usage(record)
-        input_tokens.append(token_usage.input_tokens)
-        output_tokens.append(token_usage.output_tokens)
-        total_tokens.append(token_usage.total_tokens)
-        total_costs.append(record.billing_total_cost_usd)
+    token_row = session.execute(
+        select(
+            func.sum(RequestRecord.billing_input_tokens),
+            func.sum(RequestRecord.billing_output_tokens),
+            func.sum(RequestRecord.billing_total_tokens),
+            func.sum(RequestRecord.billing_total_cost_usd),
+        ).where(RequestRecord.task_run_id == task_run.id)
+    ).one()
 
     token_totals = {
-        "input": _sum_known(input_tokens),
-        "output": _sum_known(output_tokens),
-        "total": _sum_known(total_tokens),
+        "input": _coerce_int_or_none(token_row[0]),
+        "output": _coerce_int_or_none(token_row[1]),
+        "total": _coerce_int_or_none(token_row[2]),
     }
     llm_wall_time_ms = base_stats["llm_wall_time_ms"]
     total_request_duration_ms = base_stats["total_request_duration_ms"]
@@ -1223,7 +1319,7 @@ def _task_run_stats_detail(task_run: TaskRun, session) -> dict[str, object]:
         **base_stats,
         "run_open_duration_ms": run_open_duration_ms,
         "tokens": token_totals,
-        "cost_usd": _sum_decimal_known(total_costs),
+        "cost_usd": token_row[3],
         "throughput": {
             "output_wall": _tokens_per_second(token_totals["output"], llm_wall_time_ms),
             "total_wall": _tokens_per_second(token_totals["total"], llm_wall_time_ms),
@@ -1232,11 +1328,18 @@ def _task_run_stats_detail(task_run: TaskRun, session) -> dict[str, object]:
                 total_request_duration_ms,
             ),
         },
-        "models": _counter_rows(record.model or "unknown" for record in records),
-        "endpoints": _counter_rows(record.endpoint for record in records),
-        "statuses": _counter_rows(
-            str(record.response_status) if record.response_status is not None else "pending"
-            for record in records
+        "models": _grouped_count_rows(
+            session,
+            RequestRecord.model,
+            task_run.id,
+            none_label="unknown",
+        ),
+        "endpoints": _grouped_count_rows(session, RequestRecord.endpoint, task_run.id),
+        "statuses": _grouped_count_rows(
+            session,
+            RequestRecord.response_status,
+            task_run.id,
+            none_label="pending",
         ),
         "signals": {
             "streams": base_stats["streams"],
@@ -1245,6 +1348,34 @@ def _task_run_stats_detail(task_run: TaskRun, session) -> dict[str, object]:
             "errors": base_stats["errors"],
         },
     }
+
+
+def _coerce_int_or_none(value: object) -> int | None:
+    if value is None:
+        return None
+    return int(value)
+
+
+def _grouped_count_rows(
+    session,
+    column,
+    task_run_id: int,
+    *,
+    none_label: str | None = None,
+) -> list[dict[str, object]]:
+    rows = session.execute(
+        select(column, func.count())
+        .where(RequestRecord.task_run_id == task_run_id)
+        .group_by(column)
+        .order_by(desc(func.count()))
+    )
+    return [
+        {
+            "label": str(value) if value is not None else (none_label or "-"),
+            "count": count,
+        }
+        for value, count in rows
+    ]
 
 
 def _sum_known(values: list[int | None]) -> int | None:
