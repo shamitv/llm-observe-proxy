@@ -28,14 +28,18 @@ class ExtractedTokenUsage:
 
 STREAM_USAGE_MARKERS = (
     b'"usage"',
+    b'"timings"',
     b'"input_tokens_details"',
     b'"input_tokens"',
     b'"prompt_tokens_details"',
     b'"prompt_tokens"',
+    b'"prompt_n"',
     b'"cached_tokens"',
     b'"cache_read_tokens"',
+    b'"cache_n"',
     b'"output_tokens"',
     b'"completion_tokens"',
+    b'"predicted_n"',
     b'"total_tokens"',
 )
 
@@ -102,8 +106,8 @@ def extract_token_usage(payload: Any | None) -> ExtractedTokenUsage:
     if usage is None:
         return ExtractedTokenUsage()
 
-    input_tokens = _first_int(usage, "input_tokens", "prompt_tokens")
-    output_tokens = _first_int(usage, "output_tokens", "completion_tokens")
+    input_tokens = _first_int(usage, "input_tokens", "prompt_tokens", "prompt_n")
+    output_tokens = _first_int(usage, "output_tokens", "completion_tokens", "predicted_n")
     total_tokens = _first_int(usage, "total_tokens")
     if total_tokens is None and input_tokens is not None and output_tokens is not None:
         total_tokens = input_tokens + output_tokens
@@ -142,7 +146,9 @@ def extract_stream_token_usage(body: bytes | None) -> ExtractedTokenUsage:
                 if line.startswith("data:")
             )
             if data and data != "[DONE]":
-                return extract_token_usage(json.loads(data))
+                usage = extract_token_usage(json.loads(data))
+                if _has_token_usage(usage):
+                    return usage
         except (UnicodeDecodeError, json.JSONDecodeError):
             pass
 
@@ -267,8 +273,10 @@ def _looks_like_usage(value: dict[str, Any]) -> bool:
         for key in (
             "input_tokens",
             "prompt_tokens",
+            "prompt_n",
             "output_tokens",
             "completion_tokens",
+            "predicted_n",
             "total_tokens",
         )
     )
@@ -289,7 +297,19 @@ def _cached_input_tokens(usage: dict[str, Any]) -> int | None:
             value = _first_int(details, "cached_tokens", "cache_read_tokens")
             if value is not None:
                 return value
-    return _first_int(usage, "cached_input_tokens")
+    return _first_int(usage, "cached_input_tokens", "cache_n")
+
+
+def _has_token_usage(usage: ExtractedTokenUsage) -> bool:
+    return any(
+        value is not None
+        for value in (
+            usage.input_tokens,
+            usage.cached_input_tokens,
+            usage.output_tokens,
+            usage.total_tokens,
+        )
+    )
 
 
 def _int_or_none(value: Any) -> int | None:
