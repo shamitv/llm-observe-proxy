@@ -512,6 +512,32 @@ def test_runs_require_name_and_manage_active_state(
         assert active == []
 
 
+def test_run_detail_uses_compact_header_for_active_run(proxy_client: TestClient) -> None:
+    response = proxy_client.post(
+        "/admin/runs/start",
+        data={"name": "Live compact task", "notes": "watching a local model"},
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+
+    detail = proxy_client.get("/admin/runs/1")
+
+    assert detail.status_code == 200
+    assert 'class="run-summary-header"' in detail.text
+    assert 'class="run-control"' not in detail.text
+    assert 'class="kpi-grid"' not in detail.text
+    assert "Run in progress" in detail.text
+    assert "Run: Live compact task" in detail.text
+    assert "watching a local model" in detail.text
+    assert "Started <strong>" in detail.text
+    assert "Ended <strong>active</strong>" in detail.text
+    assert "Requests" in detail.text
+    assert "LLM wall time" in detail.text
+    assert "Output tok/s" in detail.text
+    assert "End run" in detail.text
+    assert detail.text.index("run-summary-header") < detail.text.index("What-if cost")
+
+
 def test_run_filter_detail_and_badges_show_associated_requests(
     proxy_client: TestClient,
     proxy_app: FastAPI,
@@ -541,10 +567,14 @@ def test_run_filter_detail_and_badges_show_associated_requests(
 
     detail = proxy_client.get(f"/admin/runs/{task_run.id}")
     assert detail.status_code == 200
+    assert 'class="run-summary-header"' in detail.text
+    assert 'class="run-control"' not in detail.text
+    assert 'class="kpi-grid"' not in detail.text
     assert "LLM wall time" in detail.text
     assert "Total tokens" in detail.text
     assert ">9<" in detail.text
     assert "Run traffic" in detail.text
+    assert "End run" not in detail.text
     assert "#1" in detail.text
     assert "#2" not in detail.text
 

@@ -170,6 +170,7 @@ h2 {
 .panel,
 .table-shell,
 .run-control,
+.run-summary-header,
 .kpi {
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -198,6 +199,68 @@ h2 {
 .run-control h2,
 .run-control p {
   margin-bottom: 0;
+}
+
+.run-summary-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+  margin-bottom: 18px;
+  padding: 16px;
+}
+
+.run-summary-main {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+  flex: 1;
+}
+
+.run-summary-topline {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.run-summary-topline h1,
+.run-summary-topline p {
+  margin-bottom: 0;
+}
+
+.run-summary-action {
+  flex: 0 0 auto;
+  margin-top: 4px;
+}
+
+.run-stat-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.run-stat-strip span {
+  display: grid;
+  gap: 2px;
+  min-width: 118px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-2);
+  padding: 7px 10px;
+}
+
+.run-stat-strip small {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 800;
+  line-height: 1.1;
+  text-transform: uppercase;
+}
+
+.run-stat-strip strong {
+  font-size: 15px;
+  line-height: 1.2;
 }
 
 .run-start-form {
@@ -804,9 +867,15 @@ figcaption {
 
   .page-heading,
   .run-control,
+  .run-summary-header,
+  .run-summary-topline,
   .topbar {
     align-items: start;
     flex-direction: column;
+  }
+
+  .run-summary-action {
+    margin-top: 0;
   }
 
   .kpi-grid {
