@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import json
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -34,12 +35,14 @@ STREAM_USAGE_MARKERS = (
     b'"prompt_tokens_details"',
     b'"prompt_tokens"',
     b'"prompt_n"',
+    b'"prompt_eval_count"',
     b'"cached_tokens"',
     b'"cache_read_tokens"',
     b'"cache_n"',
     b'"output_tokens"',
     b'"completion_tokens"',
     b'"predicted_n"',
+    b'"eval_count"',
     b'"total_tokens"',
 )
 
@@ -102,29 +105,7 @@ def extract_model(payload: Any | None) -> str | None:
 
 
 def extract_token_usage(payload: Any | None) -> ExtractedTokenUsage:
-    usage = _find_usage(payload)
-    if usage is None:
-        return ExtractedTokenUsage()
-
-    input_tokens = _first_int(usage, "input_tokens", "prompt_tokens", "prompt_n")
-    output_tokens = _first_int(usage, "output_tokens", "completion_tokens", "predicted_n")
-    total_tokens = _first_int(usage, "total_tokens")
-    if total_tokens is None and input_tokens is not None and output_tokens is not None:
-        total_tokens = input_tokens + output_tokens
-    cached_input_tokens = _cached_input_tokens(usage)
-    if (
-        cached_input_tokens is not None
-        and input_tokens is not None
-        and cached_input_tokens > input_tokens
-    ):
-        cached_input_tokens = input_tokens
-
-    return ExtractedTokenUsage(
-        input_tokens=input_tokens,
-        output_tokens=output_tokens,
-        total_tokens=total_tokens,
-        cached_input_tokens=cached_input_tokens,
-    )
+    return _find_token_usage(payload) or ExtractedTokenUsage()
 
 
 def extract_stream_token_usage(body: bytes | None) -> ExtractedTokenUsage:
@@ -242,20 +223,28 @@ def _dict_has_tool_signal(value: dict[str, Any]) -> bool:
     return False
 
 
-def _find_usage(value: Any) -> dict[str, Any] | None:
+TokenUsageParser = Callable[[dict[str, Any]], ExtractedTokenUsage | None]
+
+
+def _find_token_usage(value: Any) -> ExtractedTokenUsage | None:
     if isinstance(value, dict):
-        if _looks_like_usage(value):
-            return value
         usage = value.get("usage")
-        if isinstance(usage, dict) and _looks_like_usage(usage):
-            return usage
+        if isinstance(usage, dict):
+            parsed_usage = _parse_openai_usage(usage)
+            if _has_token_usage(parsed_usage):
+                return parsed_usage
+
+        parsed = _parse_token_usage_candidate(value)
+        if parsed is not None:
+            return parsed
+
         for child in value.values():
-            found = _find_usage(child)
+            found = _find_token_usage(child)
             if found is not None:
                 return found
     elif isinstance(value, list):
         for child in value:
-            found = _find_usage(child)
+            found = _find_token_usage(child)
             if found is not None:
                 return found
     return None
@@ -267,19 +256,103 @@ def _body_may_contain_usage(body: bytes | None) -> bool:
     return any(marker in body for marker in STREAM_USAGE_MARKERS)
 
 
-def _looks_like_usage(value: dict[str, Any]) -> bool:
-    return any(
-        _int_or_none(value.get(key)) is not None
-        for key in (
+def _parse_token_usage_candidate(value: dict[str, Any]) -> ExtractedTokenUsage | None:
+    for parser in TOKEN_USAGE_PARSERS:
+        parsed = parser(value)
+        if _has_token_usage(parsed):
+            return parsed
+    return None
+
+
+def _parse_openai_usage(value: dict[str, Any]) -> ExtractedTokenUsage | None:
+    if not _has_any_int(
+        value,
+        (
             "input_tokens",
             "prompt_tokens",
-            "prompt_n",
             "output_tokens",
             "completion_tokens",
-            "predicted_n",
             "total_tokens",
-        )
+        ),
+    ):
+        return None
+
+    return _build_token_usage(
+        input_tokens=_first_int(value, "input_tokens", "prompt_tokens"),
+        output_tokens=_first_int(value, "output_tokens", "completion_tokens"),
+        total_tokens=_first_int(value, "total_tokens"),
+        cached_input_tokens=_cached_input_tokens(value),
     )
+
+
+def _parse_llama_timings(value: dict[str, Any]) -> ExtractedTokenUsage | None:
+    timings = value.get("timings")
+    if not isinstance(timings, dict):
+        if not _has_any_int(value, ("prompt_n", "cache_n", "predicted_n")):
+            return None
+        timings = value
+
+    prompt_tokens = _first_int(timings, "prompt_n")
+    cached_input_tokens = _first_int(timings, "cache_n")
+    input_tokens = _sum_known(prompt_tokens, cached_input_tokens)
+    output_tokens = _first_int(timings, "predicted_n")
+
+    return _build_token_usage(
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        cached_input_tokens=cached_input_tokens,
+    )
+
+
+def _parse_ollama_usage(value: dict[str, Any]) -> ExtractedTokenUsage | None:
+    if not _has_any_int(value, ("prompt_eval_count", "eval_count")):
+        return None
+
+    return _build_token_usage(
+        input_tokens=_first_int(value, "prompt_eval_count"),
+        output_tokens=_first_int(value, "eval_count"),
+    )
+
+
+TOKEN_USAGE_PARSERS: tuple[TokenUsageParser, ...] = (
+    _parse_openai_usage,
+    _parse_llama_timings,
+    _parse_ollama_usage,
+)
+
+
+def _build_token_usage(
+    *,
+    input_tokens: int | None,
+    output_tokens: int | None,
+    total_tokens: int | None = None,
+    cached_input_tokens: int | None = None,
+) -> ExtractedTokenUsage:
+    if total_tokens is None and input_tokens is not None and output_tokens is not None:
+        total_tokens = input_tokens + output_tokens
+    if (
+        cached_input_tokens is not None
+        and input_tokens is not None
+        and cached_input_tokens > input_tokens
+    ):
+        cached_input_tokens = input_tokens
+    return ExtractedTokenUsage(
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        total_tokens=total_tokens,
+        cached_input_tokens=cached_input_tokens,
+    )
+
+
+def _has_any_int(value: dict[str, Any], keys: tuple[str, ...]) -> bool:
+    return any(_int_or_none(value.get(key)) is not None for key in keys)
+
+
+def _sum_known(*values: int | None) -> int | None:
+    known = [value for value in values if value is not None]
+    if not known:
+        return None
+    return sum(known)
 
 
 def _first_int(value: dict[str, Any], *keys: str) -> int | None:
@@ -297,11 +370,11 @@ def _cached_input_tokens(usage: dict[str, Any]) -> int | None:
             value = _first_int(details, "cached_tokens", "cache_read_tokens")
             if value is not None:
                 return value
-    return _first_int(usage, "cached_input_tokens", "cache_n")
+    return _first_int(usage, "cached_input_tokens")
 
 
-def _has_token_usage(usage: ExtractedTokenUsage) -> bool:
-    return any(
+def _has_token_usage(usage: ExtractedTokenUsage | None) -> bool:
+    return usage is not None and any(
         value is not None
         for value in (
             usage.input_tokens,

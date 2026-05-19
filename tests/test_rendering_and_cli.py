@@ -154,16 +154,84 @@ def test_extract_token_usage_supports_chat_responses_and_responses_api() -> None
     assert responses_usage.output_tokens == 4
     assert responses_usage.total_tokens == 12
 
+    input_cached_usage = extract_token_usage(
+        {
+            "usage": {
+                "input_tokens": 20,
+                "output_tokens": 5,
+                "input_tokens_details": {"cached_tokens": 7},
+            }
+        }
+    )
+    assert input_cached_usage.input_tokens == 20
+    assert input_cached_usage.cached_input_tokens == 7
+    assert input_cached_usage.output_tokens == 5
+    assert input_cached_usage.total_tokens == 25
+
+
+def test_extract_token_usage_prefers_openai_usage_over_provider_fallbacks() -> None:
+    usage = extract_token_usage(
+        {
+            "usage": {
+                "prompt_tokens": 6,
+                "completion_tokens": 3,
+                "total_tokens": 9,
+            },
+            "timings": {"cache_n": 15, "prompt_n": 1185, "predicted_n": 40},
+        }
+    )
+
+    assert usage.input_tokens == 6
+    assert usage.cached_input_tokens is None
+    assert usage.output_tokens == 3
+    assert usage.total_tokens == 9
+
+
+def test_extract_token_usage_supports_provider_fallback_shapes() -> None:
     timings_usage = extract_token_usage(
         {
             "choices": [{"finish_reason": "stop", "index": 0, "delta": {}}],
-            "timings": {"cache_n": 0, "prompt_n": 1185, "predicted_n": 40},
+            "timings": {"cache_n": 15, "prompt_n": 1185, "predicted_n": 40},
         }
     )
-    assert timings_usage.input_tokens == 1185
-    assert timings_usage.cached_input_tokens == 0
+    assert timings_usage.input_tokens == 1200
+    assert timings_usage.cached_input_tokens == 15
     assert timings_usage.output_tokens == 40
-    assert timings_usage.total_tokens == 1225
+    assert timings_usage.total_tokens == 1240
+
+    ollama_usage = extract_token_usage(
+        {
+            "model": "llama3.2",
+            "done": True,
+            "prompt_eval_count": 11,
+            "eval_count": 18,
+        }
+    )
+    assert ollama_usage.input_tokens == 11
+    assert ollama_usage.cached_input_tokens is None
+    assert ollama_usage.output_tokens == 18
+    assert ollama_usage.total_tokens == 29
+
+
+def test_extract_token_usage_handles_partial_provider_metrics() -> None:
+    partial_usage = extract_token_usage(
+        {
+            "prompt_eval_count": 11,
+            "eval_count": "not-counted",
+        }
+    )
+    malformed_usage = extract_token_usage(
+        {
+            "timings": {"prompt_n": False, "predicted_n": "40"},
+        }
+    )
+
+    assert partial_usage.input_tokens == 11
+    assert partial_usage.output_tokens is None
+    assert partial_usage.total_tokens is None
+    assert malformed_usage.input_tokens is None
+    assert malformed_usage.output_tokens is None
+    assert malformed_usage.total_tokens is None
 
 
 def test_stream_token_usage_reads_final_sse_usage_event(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -211,6 +279,28 @@ def test_stream_token_usage_reads_final_sse_timings_event(
     assert usage.cached_input_tokens == 0
     assert usage.output_tokens == 40
     assert usage.total_tokens == 1225
+
+
+def test_stream_token_usage_reads_final_sse_ollama_metric_event(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail_decode(_body: bytes | None):
+        raise AssertionError("stream metrics should use targeted final-event parsing")
+
+    monkeypatch.setattr("llm_observe_proxy.capture.decode_sse_json_events", fail_decode)
+    body = b"".join(
+        [
+            b'data: {"choices":[{"delta":{"content":"hello"}}]}\n\n',
+            b'data: {"done":true,"prompt_eval_count":11,"eval_count":18}\n\n',
+            b"data: [DONE]\n\n",
+        ]
+    )
+
+    usage = _stream_token_usage(body)
+
+    assert usage.input_tokens == 11
+    assert usage.output_tokens == 18
+    assert usage.total_tokens == 29
 
 
 def test_tool_detector_ignores_non_string_type_fields() -> None:
