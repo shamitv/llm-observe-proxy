@@ -9,8 +9,8 @@
         {% if run.notes %}<p class="muted">{{ run.notes }}</p>{% endif %}
       </div>
       <div class="detail-meta">
-        <span>Started <strong>{{ run.started_at }}</strong></span>
-        <span>Ended <strong>{{ run.ended_at | default('active', true) }}</strong></span>
+        <span>Started <strong><time class="local-time" datetime="{{ run.started_at | utc_iso }}" data-local-time="full">{{ run.started_at | utc_fallback }}</time></strong></span>
+        <span>Ended <strong>{% if run.ended_at %}<time class="local-time" datetime="{{ run.ended_at | utc_iso }}" data-local-time="full">{{ run.ended_at | utc_fallback }}</time>{% else %}active{% endif %}</strong></span>
       </div>
     </div>
     <div class="run-stat-strip">

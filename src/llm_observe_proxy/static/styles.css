@@ -421,6 +421,16 @@ td:first-child a {
   font-weight: 800;
 }
 
+.local-time {
+  font: inherit;
+}
+
+.table-time {
+  display: grid;
+  gap: 1px;
+  line-height: 1.35;
+}
+
 .request-endpoint,
 .request-model,
 .run-badge,

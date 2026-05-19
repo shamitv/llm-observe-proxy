@@ -8,6 +8,10 @@
   <div class="detail-meta">
     <span>Status <strong>{{ record.response_status | default('pending', true) }}</strong></span>
     <span>Duration <strong>{{ record.duration_ms | duration_ms }}</strong></span>
+    <span>Created <strong><time class="local-time" datetime="{{ record.created_at | utc_iso }}" data-local-time="full">{{ record.created_at | utc_fallback }}</time></strong></span>
+    {% if record.completed_at %}
+    <span>Completed <strong><time class="local-time" datetime="{{ record.completed_at | utc_iso }}" data-local-time="full">{{ record.completed_at | utc_fallback }}</time></strong></span>
+    {% endif %}
     <span>Cost <strong>{{ record.billing_total_cost_usd | usd }}</strong></span>
     <span>Model <strong>{{ record.model | default('unknown', true) }}</strong></span>
     {% if record.upstream_model %}

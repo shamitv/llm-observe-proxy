@@ -31,7 +31,10 @@
     <tbody>
       {% for record in records %}
       <tr>
-        <td><a href="/admin/requests/{{ record.id }}">#{{ record.id }}</a><span class="muted">{{ record.created_at }}</span></td>
+        <td>
+          <a href="/admin/requests/{{ record.id }}">#{{ record.id }}</a>
+          <time class="local-time table-time muted" datetime="{{ record.created_at | utc_iso }}" data-local-time="table">{{ record.created_at | utc_fallback('table') }}</time>
+        </td>
         <td class="request-endpoint"><span class="method">{{ record.method }}</span><code>{{ record.endpoint }}</code></td>
         <td class="request-model">
           <span>{{ record.model }}</span>

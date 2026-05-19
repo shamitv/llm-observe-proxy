@@ -138,6 +138,22 @@ def format_duration_ms(value: object) -> str:
     return f"{days} {day_label} {hours}h" if hours else f"{days} {day_label}"
 
 
+def format_utc_iso(value: object) -> str:
+    timestamp = _coerce_datetime_utc(value)
+    if timestamp is None:
+        return ""
+    return timestamp.isoformat(timespec="microseconds").replace("+00:00", "Z")
+
+
+def format_utc_fallback(value: object, variant: str = "full") -> str:
+    timestamp = _coerce_datetime_utc(value)
+    if timestamp is None:
+        return "-"
+    if variant == "table":
+        return timestamp.strftime("%Y-%m-%d %H:%M:%S UTC")
+    return timestamp.strftime("%Y-%m-%d %H:%M:%S UTC")
+
+
 def format_usd(value: object) -> str:
     number = _coerce_number(value)
     if number is None:
@@ -177,6 +193,14 @@ def _coerce_number(value: object) -> float | None:
     return number
 
 
+def _coerce_datetime_utc(value: object) -> datetime | None:
+    if not isinstance(value, datetime):
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
+
+
 def _format_decimal(value: float, *, max_decimals: int) -> str:
     text = f"{value:.{max_decimals}f}"
     if "." in text:
@@ -196,6 +220,8 @@ def _compact_decimals(value: float) -> int:
 templates.env.filters["compact_number"] = format_compact_number
 templates.env.filters["compact_rate"] = format_compact_rate
 templates.env.filters["duration_ms"] = format_duration_ms
+templates.env.filters["utc_fallback"] = format_utc_fallback
+templates.env.filters["utc_iso"] = format_utc_iso
 templates.env.filters["usd"] = format_usd
 
 router = APIRouter(prefix="/admin", include_in_schema=False)

@@ -59,7 +59,7 @@
       <tr>
         <td>
           <a href="/admin/runs/{{ run.id }}"><strong>{{ run.name }}</strong></a>
-          <span class="muted">{{ run.started_at }}</span>
+          <time class="local-time table-time muted" datetime="{{ run.started_at | utc_iso }}" data-local-time="table">{{ run.started_at | utc_fallback('table') }}</time>
         </td>
         <td><span class="pill">{{ 'active' if run.is_active else 'complete' }}</span></td>
         <td>{{ run.request_count | compact_number }}</td>

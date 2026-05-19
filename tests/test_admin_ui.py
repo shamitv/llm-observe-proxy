@@ -833,6 +833,8 @@ def test_admin_formats_large_numbers_and_durations(
     assert "42m 59s" in detail.text
     assert "44m 13s" in detail.text
     assert "26m 45s" in detail.text
+    assert 'datetime="2026-05-01T00:00:00.000000Z" data-local-time="full"' in detail.text
+    assert "2026-05-01 00:00:00 UTC" in detail.text
     assert ">5.06M<" in detail.text
     assert ">56.7k<" in detail.text
     assert ">5.12M<" in detail.text
@@ -840,9 +842,16 @@ def test_admin_formats_large_numbers_and_durations(
 
     runs = proxy_client.get("/admin/runs")
     assert ">35.35<" in runs.text
+    assert 'data-local-time="table">2026-05-01 00:00:00 UTC</time>' in runs.text
     browser = proxy_client.get("/admin")
     assert "<strong>5.06M</strong><small>Input</small>" in browser.text
     assert "26m 45s" in browser.text
+    assert 'data-local-time="table">2026-05-01 00:00:00 UTC</time>' in browser.text
+
+    request_detail = proxy_client.get("/admin/requests/1")
+    assert "Created <strong><time" in request_detail.text
+    assert "Completed <strong><time" in request_detail.text
+    assert 'data-local-time="full">2026-05-01 00:00:00 UTC</time>' in request_detail.text
 
 
 def test_settings_updates_incoming_server(proxy_client: TestClient) -> None:
