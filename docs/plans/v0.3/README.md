@@ -565,6 +565,127 @@ should be captured separately only after their billing semantics are clear.
 - Existing capture, rendering, and admin UI tests pass with new cached-token
   coverage.
 
+## Feature 6: Estimated Input Tokens For Pending Requests
+
+### Problem
+
+Pending requests currently have no response usage metadata yet, so the request table
+shows `-` for input, output, and total tokens. For slow or long-running requests,
+users still need a rough sense of how large the prompt is while the request is in
+flight.
+
+The estimate must be visibly different from actual usage because tokenizer counts
+can vary by model, provider, request shape, and hidden upstream formatting.
+
+### Desired UX
+
+- Pending request rows should show an estimated input token count when it can be
+  derived from the captured request body.
+- Estimated values should be visually shaded or muted so they are not confused with
+  response-reported usage.
+- The label should make the uncertainty clear, for example:
+
+```text
+~50.1k
+Est. input
+```
+
+- Output and total tokens should remain `-` for pending rows unless there is actual
+  upstream usage data.
+- Completed rows should continue to prefer response-reported or billing snapshot
+  token counts.
+- Request detail pages should also show the estimated pending input token count
+  with the same visual treatment.
+
+### Non-goals
+
+- Do not use estimated input tokens for final billing snapshots.
+- Do not include estimated pending tokens in run cost totals or what-if cost totals.
+- Do not mutate response-reported token usage.
+- Do not promise exact provider billing parity from a local tokenizer estimate.
+
+### Implementation Plan
+
+1. Add a token estimation module.
+   - Create a focused helper such as `token_estimation.py`.
+   - Prefer `tiktoken` or a similar maintained tokenizer when available.
+   - Verify Python 3.13 install support before deciding whether the tokenizer is a
+     normal dependency, an optional extra, or a guarded best-effort import.
+   - Keep tokenizer-specific logic behind a small adapter so a fallback can be
+     swapped in later.
+
+2. Estimate from OpenAI-compatible request bodies.
+   - Decode captured JSON request bodies.
+   - Support `/v1/chat/completions` by estimating message content, tool/function
+     definitions, system/developer messages, and other prompt-bearing fields.
+   - Support `/v1/responses` by estimating `input`, messages, and tool definitions.
+   - For generic `/v1/*` requests, either estimate obvious string/list/dict prompt
+     fields or return no estimate if the shape is unclear.
+   - Pick the tokenizer from the requested model, routed upstream model, or billing
+     model when possible; otherwise use a documented fallback encoding.
+
+3. Decide where to compute and store estimates.
+   - Prefer computing at request-record creation time so list pages do not need to
+     load and parse large request bodies for every pending row.
+   - Add nullable fields such as:
+     - `estimated_input_tokens`
+     - `estimated_input_tokenizer`
+     - `estimated_input_model`
+   - Keep these fields separate from `billing_input_tokens`.
+   - Do not overwrite them when the request completes; actual usage should simply
+     take precedence in the UI.
+
+4. Update row and detail shaping in `admin.py`.
+   - For pending records with no actual input usage, expose the estimate and an
+     `is_estimated` flag.
+   - For completed records, continue to prefer billing snapshot usage, then
+     response-extracted usage.
+   - Keep run stats and cost calculations on actual usage only.
+
+5. Update `_requests_table.html`.
+   - Render the estimated input value in the token triplet for pending rows.
+   - Use muted/shaded styling for the number and label.
+   - Keep output and total as `-` unless actual usage exists.
+   - Avoid widening the token column or making completed rows noisier.
+
+6. Update request detail UI.
+   - Add estimated input tokens to the Cost Estimate or metadata area for pending
+     records.
+   - Show tokenizer/model source when available.
+   - Keep pricing/cost fields empty unless actual usage and pricing are available.
+
+7. Update CSS.
+   - Add a clear visual treatment for estimated values, such as a tinted background,
+     lighter text, or dashed underline.
+   - Ensure contrast remains readable and the table stays compact.
+
+8. Update tests.
+   - Add tokenizer helper tests for chat completions, responses, tools, and unknown
+     shapes.
+   - Add admin UI tests proving pending rows show shaded estimated input tokens.
+   - Add tests proving completed rows prefer actual usage over estimates.
+   - Add tests proving run stats and cost totals do not count estimated pending
+     input tokens.
+   - Add dependency-fallback coverage if the tokenizer import is optional.
+
+9. Run focused verification.
+   - `.\.venv\Scripts\pytest.exe -q tests\test_rendering_and_cli.py tests\test_proxy_capture.py tests\test_admin_ui.py`
+   - `.\.venv\Scripts\ruff.exe check src tests`
+   - `.\.venv\Scripts\python.exe -m compileall -q src tests`
+
+10. Run the full test suite before committing the implementation.
+    - `.\.venv\Scripts\pytest.exe -q`
+
+### Acceptance Criteria
+
+- Pending request rows show an estimated input token count when the request body can
+  be tokenized.
+- Estimated input token values are visually shaded/muted and labeled as estimates.
+- Completed request rows still show actual token usage when available.
+- Estimated tokens are not used for billing snapshots, run stats, or what-if cost
+  totals.
+- Tests cover estimation, UI rendering, and actual-usage precedence.
+
 ## Later v0.3 Features
 
 Add the next requested features here as they are defined. Each feature should include
