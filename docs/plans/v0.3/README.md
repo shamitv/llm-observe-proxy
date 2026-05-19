@@ -321,6 +321,105 @@ May 10
 - Tests cover the generated timestamp markup and existing admin UI behavior still
   passes.
 
+## Feature 4: Pending Request Elapsed Time
+
+### Problem
+
+Pending requests currently show `pending` in the Status column and `-` in the
+Duration column. For long-running streaming requests, stuck upstream calls, or slow
+local models, that hides the most important operational signal: how long the
+request has been running so far.
+
+Current behavior:
+
+- `RequestRecord.response_status` is `NULL` while the request is pending.
+- `RequestRecord.completed_at` is `NULL` while the request is pending.
+- `RequestRecord.duration_ms` is `NULL` until the proxy records completion or an
+  error.
+- `_requests_table.html` renders `{{ record.duration_ms | duration_ms }}`, so
+  pending rows display `-`.
+
+### Desired UX
+
+- Pending request rows should show elapsed time in the Duration column.
+- The value should read as in-progress, for example:
+
+```text
+3m 12s so far
+```
+
+- Completed request rows should continue showing their final captured duration.
+- TPS should remain `-` for pending rows unless output token usage and a meaningful
+  elapsed denominator are both available in a future feature.
+- The request detail page should also show elapsed time for pending requests.
+- If the page remains open, elapsed pending durations should update without a full
+  refresh when feasible.
+
+### Non-goals
+
+- Do not mutate `duration_ms` in SQLite until the request completes.
+- Do not mark pending requests as failed just because they have been pending for a
+  long time.
+- Do not change timeout behavior or upstream forwarding behavior.
+- Do not infer final token usage or cost for pending requests.
+
+### Implementation Plan
+
+1. Add pending elapsed fields in `admin.py` row/detail shaping.
+   - Capture a single `now = datetime.now(UTC)` per page render.
+   - For records with `duration_ms is None` and `completed_at is None`, compute
+     `elapsed_ms = now - created_at`.
+   - Add fields such as `duration_display_ms`, `is_pending`, and
+     `duration_is_elapsed` to `_record_list_item` and `_record_detail`.
+   - Treat naive datetimes from SQLite as UTC for the elapsed calculation.
+
+2. Update request table rendering.
+   - Render final durations exactly as today for completed rows.
+   - Render pending elapsed durations with a compact qualifier such as `so far`.
+   - Add a data attribute with the pending request start time so JavaScript can
+     update the value while the page is open.
+
+3. Update request detail rendering.
+   - Show elapsed time in the Duration metadata pill for pending requests.
+   - Keep status displayed as `pending`.
+
+4. Add lightweight live elapsed JavaScript.
+   - Reuse the local-time JavaScript file if Feature 3 has already introduced one,
+     or add a small admin UI script if not.
+   - Find elements with a pending elapsed data attribute.
+   - Update the text every second or every few seconds using the same duration
+     formatting rules as the server where practical.
+   - Stop cleanly if the timestamp is invalid.
+
+5. Update CSS.
+   - Add a subtle style for elapsed pending duration text if needed.
+   - Keep the Duration column width stable so values like `10m 4s so far` do not
+     shift the table layout.
+
+6. Update tests.
+   - Add a pending `RequestRecord` directly in a test database and assert the
+     request browser shows an elapsed duration instead of `-`.
+   - Assert completed rows still show the stored `duration_ms`.
+   - Assert request detail shows elapsed duration for a pending record.
+   - Avoid tests that depend on exact wall-clock seconds; use broad text markers
+     such as `so far` and deterministic old `created_at` values.
+
+7. Run focused verification.
+   - `.\.venv\Scripts\pytest.exe -q tests\test_admin_ui.py`
+   - `.\.venv\Scripts\ruff.exe check src tests`
+   - `.\.venv\Scripts\python.exe -m compileall -q src tests`
+
+8. Run the full test suite before committing the implementation.
+   - `.\.venv\Scripts\pytest.exe -q`
+
+### Acceptance Criteria
+
+- Pending rows in request tables show elapsed duration instead of `-`.
+- Completed rows still show their final recorded duration.
+- Request detail pages show elapsed duration for pending requests.
+- Pending elapsed values are not persisted into `duration_ms`.
+- Tests cover pending and completed duration rendering.
+
 ## Later v0.3 Features
 
 Add the next requested features here as they are defined. Each feature should include
