@@ -10,6 +10,9 @@ or external database.
 
 Published package: https://pypi.org/project/llm-observe-proxy/
 
+Current release: `0.3.0`, with editable model pricing, cost snapshots, run what-if
+comparisons, and a refined run detail summary layout.
+
 ## Features
 
 - OpenAI-compatible passthrough route: `ANY /v1/{path:path}`.

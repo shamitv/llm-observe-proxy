@@ -7,6 +7,8 @@ and this project uses semantic versioning.
 
 ## Unreleased
 
+## [0.3.0] - 2026-05-19
+
 ### Added
 
 - DB-backed model providers and editable per-model input/output token pricing.
@@ -16,6 +18,11 @@ and this project uses semantic versioning.
   snapshot, and estimated USD cost for non-streaming and usage-reporting streaming calls.
 - Admin UI provider/pricing management plus per-request and per-run estimated cost views.
 - Optional `provider_slug` on model routes for route-aware billing identity.
+
+### Changed
+
+- Refined the run detail summary header so active run controls, timestamps, and metric
+  chips remain readable on desktop and mobile layouts.
 
 ## [0.2.0] - 2026-05-03
 
