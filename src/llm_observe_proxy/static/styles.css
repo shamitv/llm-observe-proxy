@@ -203,16 +203,20 @@ h2 {
 
 .run-summary-header {
   display: grid;
-  gap: 16px;
+  gap: 18px;
   margin-bottom: 18px;
-  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: var(--shadow);
+  padding: 18px 20px;
 }
 
 .run-summary-topline {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) max-content;
   align-items: flex-start;
-  gap: 18px;
+  gap: 24px;
 }
 
 .run-summary-title {
@@ -230,6 +234,7 @@ h2 {
 
 .run-summary-side {
   display: grid;
+  justify-self: end;
   justify-items: end;
   gap: 10px;
 }
@@ -240,28 +245,30 @@ h2 {
 
 .run-summary-action,
 .run-summary-action .button {
+  justify-self: end;
   width: fit-content;
 }
 
 .run-stat-strip {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(136px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(144px, 1fr));
   gap: 8px;
 }
 
 .run-stat-strip span {
   display: grid;
   align-content: center;
-  gap: 4px;
+  gap: 5px;
   min-height: 64px;
   min-width: 0;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--surface-2);
-  padding: 9px 11px;
+  padding: 10px 12px;
 }
 
 .run-stat-strip small {
+  display: block;
   color: var(--muted);
   font-size: 10px;
   font-weight: 800;
@@ -270,6 +277,7 @@ h2 {
 }
 
 .run-stat-strip strong {
+  display: block;
   font-size: 15px;
   line-height: 1.2;
   overflow: hidden;
@@ -948,16 +956,6 @@ figcaption {
     flex-direction: column;
   }
 
-  .run-summary-topline {
-    grid-template-columns: 1fr;
-  }
-
-  .run-summary-side,
-  .run-summary-side .detail-meta {
-    justify-items: start;
-    justify-content: flex-start;
-  }
-
   .pagination-bar {
     align-items: flex-start;
     flex-direction: column;
@@ -969,6 +967,28 @@ figcaption {
 
   .kpi-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 760px) {
+  .run-summary-header {
+    padding: 14px;
+  }
+
+  .run-summary-topline {
+    grid-template-columns: 1fr;
+  }
+
+  .run-summary-side,
+  .run-summary-side .detail-meta {
+    justify-self: start;
+    justify-items: start;
+    justify-content: flex-start;
+  }
+
+  .run-summary-action,
+  .run-summary-action .button {
+    width: 100%;
   }
 }
 
