@@ -31,7 +31,10 @@
     <tbody>
       {% for record in records %}
       <tr>
-        <td><a href="/admin/requests/{{ record.id }}">#{{ record.id }}</a><span class="muted">{{ record.created_at }}</span></td>
+        <td>
+          <a href="/admin/requests/{{ record.id }}">#{{ record.id }}</a>
+          <time class="local-time table-time muted" datetime="{{ record.created_at | utc_iso }}" data-local-time="table">{{ record.created_at | utc_fallback('table') }}</time>
+        </td>
         <td class="request-endpoint"><span class="method">{{ record.method }}</span><code>{{ record.endpoint }}</code></td>
         <td class="request-model">
           <span>{{ record.model }}</span>
@@ -49,11 +52,17 @@
         </td>
         {% endif %}
         <td><span class="pill status-{{ record.status | default('pending', true) }}">{{ record.status | default('pending', true) }}</span></td>
-        <td class="numeric">{{ record.duration_ms | duration_ms }}</td>
+        <td class="numeric">
+          {% if record.duration_is_elapsed %}
+          <span class="elapsed-duration" data-pending-start="{{ record.created_at | utc_iso }}">{{ record.duration_display_ms | duration_ms }} so far</span>
+          {% else %}
+          {{ record.duration_display_ms | duration_ms }}
+          {% endif %}
+        </td>
         <td class="numeric">{{ record.tokens_per_second | compact_rate }}</td>
         <td>
           <div class="token-triplet">
-            <span><strong>{{ record.tokens.input | compact_number }}</strong><small>Input</small></span>
+            <span class="{{ 'estimated-token' if record.tokens.input_estimated else '' }}"><strong>{{ '~' if record.tokens.input_estimated else '' }}{{ record.tokens.input | compact_number }}</strong><small>{{ 'Est. input' if record.tokens.input_estimated else 'Input' }}</small></span>
             <span><strong>{{ record.tokens.output | compact_number }}</strong><small>Output</small></span>
             <span><strong>{{ record.tokens.total | compact_number }}</strong><small>Total</small></span>
           </div>
@@ -77,4 +86,28 @@
       {% endfor %}
     </tbody>
   </table>
+  {% if pagination %}
+  <div class="pagination-bar">
+    <span>
+      Showing <strong>{{ pagination.start | compact_number }}-{{ pagination.end | compact_number }}</strong>
+      of <strong>{{ pagination.total | compact_number }}</strong>
+      <small>{{ pagination.per_page }} per page</small>
+    </span>
+    <nav class="pagination-links" aria-label="Request table pages">
+      {% if pagination.has_previous %}
+      <a class="button ghost compact-button" href="{{ pagination.previous_url }}">Previous</a>
+      {% else %}
+      <span class="button ghost compact-button disabled">Previous</span>
+      {% endif %}
+      {% for page_item in pagination.pages %}
+      <a class="button ghost compact-button {{ 'active' if page_item.current else '' }}" href="{{ page_item.url }}">{{ page_item.number }}</a>
+      {% endfor %}
+      {% if pagination.has_next %}
+      <a class="button ghost compact-button" href="{{ pagination.next_url }}">Next</a>
+      {% else %}
+      <span class="button ghost compact-button disabled">Next</span>
+      {% endif %}
+    </nav>
+  </div>
+  {% endif %}
 </section>

@@ -10,11 +10,15 @@ or external database.
 
 Project repository: https://github.com/shamitv/llm-observe-proxy
 
+Current release: `0.3.0`, with editable model pricing, cost snapshots, run what-if
+comparisons, and a refined run detail summary layout.
+
 ## Features
 
 - OpenAI-compatible passthrough route: `ANY /v1/{path:path}`.
 - SQLite capture for request/response headers, bodies, status, timing, model, endpoint,
-  streaming state, tool-call signals, image assets, cost snapshots, and errors.
+  streaming state, tool-call signals, image assets, provider token usage, cost snapshots,
+  and errors.
 - Admin UI for searching and browsing captured traffic, including per-request output TPS
   and estimated cost.
 - Runs for grouping all requests made during a task, benchmark, or repro workflow.
@@ -207,6 +211,11 @@ $env:LLM_OBSERVE_DEFAULT_FIXES_JSON = '["qwen-tagged-tool-call-rewrite"]'
 Cost estimates are snapshotted when a response is captured. The proxy stores the billing
 provider, billing model, token counts, input/output rate snapshot, and estimated USD cost
 on the request row. Historical rows are not recalculated when pricing changes.
+
+Token counts are extracted from OpenAI-compatible `usage` objects, including the shapes
+used by OpenAI, vLLM, SGLang, and LM Studio. When standard usage is absent, the proxy can
+also read llama.cpp `timings` and Ollama-style `prompt_eval_count` / `eval_count` fields
+if those metrics are present in captured `/v1` responses or stream events.
 
 The estimator uses separate input and output token rates per 1M tokens:
 

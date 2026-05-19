@@ -42,6 +42,7 @@ from llm_observe_proxy.routing import (
     build_forward_headers,
     select_model_route,
 )
+from llm_observe_proxy.token_estimation import estimate_input_tokens
 
 HOP_BY_HOP_HEADERS = {
     "connection",
@@ -93,6 +94,11 @@ async def proxy_openai(path: str, request: Request) -> Response:
         upstream_url = _build_upstream_url(upstream_base, path, query_string)
         images = extract_images(request_payload)
         active_run = get_active_task_run(session)
+        estimated_usage = estimate_input_tokens(
+            request_payload,
+            endpoint=endpoint,
+            model=routing_decision.upstream_model or extract_model(request_payload),
+        )
         record = RequestRecord(
             task_run_id=active_run.id if active_run else None,
             method=request.method,
@@ -109,6 +115,9 @@ async def proxy_openai(path: str, request: Request) -> Response:
             is_stream=_is_stream_request(request_payload, request.headers),
             has_images=bool(images),
             has_tool_calls=has_tool_payload(request_payload),
+            estimated_input_tokens=estimated_usage.tokens if estimated_usage else None,
+            estimated_input_tokenizer=estimated_usage.tokenizer if estimated_usage else None,
+            estimated_input_model=estimated_usage.model if estimated_usage else None,
         )
         record.images = [
             ImageAsset(

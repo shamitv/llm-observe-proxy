@@ -31,6 +31,7 @@ from llm_observe_proxy.database import (
     upsert_model_price,
 )
 from llm_observe_proxy.rendering import render_payload
+from llm_observe_proxy.token_estimation import estimate_input_tokens
 
 
 def test_app_factory_exposes_health_route() -> None:
@@ -121,18 +122,116 @@ def test_renderer_ignores_non_string_type_fields_in_nested_json() -> None:
 
 def test_extract_token_usage_supports_chat_responses_and_responses_api() -> None:
     chat_usage = extract_token_usage(
-        {"usage": {"prompt_tokens": 6, "completion_tokens": 3, "total_tokens": 9}}
+        {
+            "usage": {
+                "prompt_tokens": 6,
+                "completion_tokens": 3,
+                "total_tokens": 9,
+                "prompt_tokens_details": {"cached_tokens": 4},
+            }
+        }
     )
     assert chat_usage.input_tokens == 6
+    assert chat_usage.cached_input_tokens == 4
     assert chat_usage.output_tokens == 3
     assert chat_usage.total_tokens == 9
 
     responses_usage = extract_token_usage(
-        [{"response": {"usage": {"input_tokens": 8, "output_tokens": 4}}}]
+        [
+            {
+                "response": {
+                    "usage": {
+                        "input_tokens": 8,
+                        "output_tokens": 4,
+                        "input_tokens_details": {"cache_read_tokens": 3},
+                    }
+                }
+            }
+        ]
     )
     assert responses_usage.input_tokens == 8
+    assert responses_usage.cached_input_tokens == 3
     assert responses_usage.output_tokens == 4
     assert responses_usage.total_tokens == 12
+
+    input_cached_usage = extract_token_usage(
+        {
+            "usage": {
+                "input_tokens": 20,
+                "output_tokens": 5,
+                "input_tokens_details": {"cached_tokens": 7},
+            }
+        }
+    )
+    assert input_cached_usage.input_tokens == 20
+    assert input_cached_usage.cached_input_tokens == 7
+    assert input_cached_usage.output_tokens == 5
+    assert input_cached_usage.total_tokens == 25
+
+
+def test_extract_token_usage_prefers_openai_usage_over_provider_fallbacks() -> None:
+    usage = extract_token_usage(
+        {
+            "usage": {
+                "prompt_tokens": 6,
+                "completion_tokens": 3,
+                "total_tokens": 9,
+            },
+            "timings": {"cache_n": 15, "prompt_n": 1185, "predicted_n": 40},
+        }
+    )
+
+    assert usage.input_tokens == 6
+    assert usage.cached_input_tokens is None
+    assert usage.output_tokens == 3
+    assert usage.total_tokens == 9
+
+
+def test_extract_token_usage_supports_provider_fallback_shapes() -> None:
+    timings_usage = extract_token_usage(
+        {
+            "choices": [{"finish_reason": "stop", "index": 0, "delta": {}}],
+            "timings": {"cache_n": 15, "prompt_n": 1185, "predicted_n": 40},
+        }
+    )
+    assert timings_usage.input_tokens == 1200
+    assert timings_usage.cached_input_tokens == 15
+    assert timings_usage.output_tokens == 40
+    assert timings_usage.total_tokens == 1240
+
+    ollama_usage = extract_token_usage(
+        {
+            "model": "llama3.2",
+            "done": True,
+            "prompt_eval_count": 11,
+            "eval_count": 18,
+        }
+    )
+    assert ollama_usage.input_tokens == 11
+    assert ollama_usage.cached_input_tokens is None
+    assert ollama_usage.output_tokens == 18
+    assert ollama_usage.total_tokens == 29
+
+
+def test_extract_token_usage_handles_partial_provider_metrics() -> None:
+    partial_usage = extract_token_usage(
+        {
+            "prompt_eval_count": 11,
+            "eval_count": "not-counted",
+        }
+    )
+    malformed_usage = extract_token_usage(
+        {
+            "timings": {"prompt_n": False, "predicted_n": "40"},
+        }
+    )
+
+    assert partial_usage.input_tokens == 11
+    assert partial_usage.output_tokens is None
+    assert partial_usage.total_tokens is None
+    assert malformed_usage.input_tokens is None
+    assert malformed_usage.output_tokens is None
+    assert malformed_usage.total_tokens is None
 
 
 def test_stream_token_usage_reads_final_sse_usage_event(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -144,7 +243,8 @@ def test_stream_token_usage_reads_final_sse_usage_event(monkeypatch: pytest.Monk
         [
             b'data: {"choices":[{"delta":{"content":"hello"}}]}\n\n',
             b'data: {"choices":[],"usage":{"prompt_tokens":1000,'
-            b'"completion_tokens":25,"total_tokens":1025}}\n\n',
+            b'"completion_tokens":25,"total_tokens":1025,'
+            b'"prompt_tokens_details":{"cached_tokens":900}}}\n\n',
             b"data: [DONE]\n\n",
         ]
     )
@@ -152,8 +252,55 @@ def test_stream_token_usage_reads_final_sse_usage_event(monkeypatch: pytest.Monk
     usage = _stream_token_usage(body)
 
     assert usage.input_tokens == 1000
+    assert usage.cached_input_tokens == 900
     assert usage.output_tokens == 25
     assert usage.total_tokens == 1025
+
+
+def test_stream_token_usage_reads_final_sse_timings_event(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail_decode(_body: bytes | None):
+        raise AssertionError("stream timings should use targeted final-event parsing")
+
+    monkeypatch.setattr("llm_observe_proxy.capture.decode_sse_json_events", fail_decode)
+    body = b"".join(
+        [
+            b'data: {"choices":[{"delta":{"content":"hello"}}]}\n\n',
+            b'data: {"choices":[{"finish_reason":"stop","index":0,"delta":{}}],'
+            b'"timings":{"cache_n":0,"prompt_n":1185,"predicted_n":40}}\n\n',
+            b"data: [DONE]\n\n",
+        ]
+    )
+
+    usage = _stream_token_usage(body)
+
+    assert usage.input_tokens == 1185
+    assert usage.cached_input_tokens == 0
+    assert usage.output_tokens == 40
+    assert usage.total_tokens == 1225
+
+
+def test_stream_token_usage_reads_final_sse_ollama_metric_event(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail_decode(_body: bytes | None):
+        raise AssertionError("stream metrics should use targeted final-event parsing")
+
+    monkeypatch.setattr("llm_observe_proxy.capture.decode_sse_json_events", fail_decode)
+    body = b"".join(
+        [
+            b'data: {"choices":[{"delta":{"content":"hello"}}]}\n\n',
+            b'data: {"done":true,"prompt_eval_count":11,"eval_count":18}\n\n',
+            b"data: [DONE]\n\n",
+        ]
+    )
+
+    usage = _stream_token_usage(body)
+
+    assert usage.input_tokens == 11
+    assert usage.output_tokens == 18
+    assert usage.total_tokens == 29
 
 
 def test_tool_detector_ignores_non_string_type_fields() -> None:
@@ -173,6 +320,32 @@ def test_tool_detector_ignores_non_string_type_fields() -> None:
     }
 
     assert has_tool_payload(payload) is True
+
+
+def test_estimate_input_tokens_supports_openai_request_shapes() -> None:
+    chat_estimate = estimate_input_tokens(
+        {
+            "model": "gpt-test",
+            "messages": [{"role": "user", "content": "hello world"}],
+            "tools": [{"type": "function", "function": {"name": "lookup"}}],
+        },
+        endpoint="/v1/chat/completions",
+        model="gpt-test",
+    )
+    responses_estimate = estimate_input_tokens(
+        {"input": "summarize this", "tools": [{"type": "web_search_preview"}]},
+        endpoint="/v1/responses",
+        model=None,
+    )
+    unknown = estimate_input_tokens({"temperature": 0}, endpoint="/v1/models", model=None)
+
+    assert chat_estimate is not None
+    assert chat_estimate.tokens > 0
+    assert chat_estimate.model == "gpt-test"
+    assert responses_estimate is not None
+    assert responses_estimate.tokens > 0
+    assert responses_estimate.tokenizer == "o200k_base"
+    assert unknown is None
 
 
 def test_module_cli_help_smoke() -> None:
@@ -281,6 +454,36 @@ def test_cost_estimator_handles_rates_aliases_unknowns_and_missing_usage(tmp_pat
             billing_model="gpt-5.4-mini",
             provider_slug="openai",
         )
+        cached = upsert_model_price(
+            session,
+            provider_slug="openai",
+            model="cached-model",
+            input_usd_per_million="1",
+            cached_input_usd_per_million="0.1",
+            output_usd_per_million="2",
+        )
+        cached_estimate = estimate_cost(
+            session,
+            usage=ExtractedTokenUsage(
+                input_tokens=1000,
+                cached_input_tokens=800,
+                output_tokens=500,
+                total_tokens=1500,
+            ),
+            billing_model=cached.model,
+            provider_slug="openai",
+        )
+        cached_fallback = estimate_cost(
+            session,
+            usage=ExtractedTokenUsage(
+                input_tokens=1000,
+                cached_input_tokens=800,
+                output_tokens=500,
+                total_tokens=1500,
+            ),
+            billing_model="gpt-5.4-mini",
+            provider_slug="openai",
+        )
     engine.dispose()
 
     assert known.total_cost_usd == Decimal("0.003000")
@@ -288,6 +491,12 @@ def test_cost_estimator_handles_rates_aliases_unknowns_and_missing_usage(tmp_pat
     assert aliased.snapshot["matched_model"] == "alias-root"
     assert unknown.total_cost_usd is None
     assert missing_usage.total_cost_usd is None
+    assert cached_estimate.input_cost_usd == Decimal("0.00028")
+    assert cached_estimate.cached_input_cost_usd == Decimal("0.00008")
+    assert cached_estimate.total_cost_usd == Decimal("0.00128")
+    assert cached_estimate.snapshot["cached_input_pricing"] == "cached_input_rate"
+    assert cached_fallback.input_cost_usd == Decimal("0.000750")
+    assert cached_fallback.snapshot["cached_input_pricing"] == "standard_input_rate"
 
 
 def test_run_cost_estimator_sums_usage_and_counts_missing_requests(tmp_path) -> None:
@@ -308,13 +517,19 @@ def test_run_cost_estimator_sums_usage_and_counts_missing_requests(tmp_path) -> 
             [
                 ExtractedTokenUsage(input_tokens=1000, output_tokens=500, total_tokens=1500),
                 ExtractedTokenUsage(input_tokens=None, output_tokens=10, total_tokens=None),
-                ExtractedTokenUsage(input_tokens=200, output_tokens=100, total_tokens=None),
+                ExtractedTokenUsage(
+                    input_tokens=200,
+                    cached_input_tokens=50,
+                    output_tokens=100,
+                    total_tokens=None,
+                ),
             ],
             price,
         )
     engine.dispose()
 
     assert estimate.input_tokens == 1200
+    assert estimate.cached_input_tokens == 50
     assert estimate.output_tokens == 600
     assert estimate.total_tokens == 1800
     assert estimate.input_cost_usd == Decimal("0.000900")
@@ -336,6 +551,7 @@ def test_init_db_upgrades_existing_sqlite_request_records_with_route_metadata(tm
 
     inspector = inspect(engine)
     columns = {column["name"] for column in inspector.get_columns("request_records")}
+    price_columns = {column["name"] for column in inspector.get_columns("model_prices")}
     indexes = {index["name"] for index in inspector.get_indexes("request_records")}
     with engine.connect() as connection:
         ids = connection.execute(text("SELECT id FROM request_records")).scalars().all()
@@ -348,6 +564,7 @@ def test_init_db_upgrades_existing_sqlite_request_records_with_route_metadata(tm
         "billing_provider_slug",
         "billing_model",
         "billing_input_tokens",
+        "billing_cached_input_tokens",
         "billing_output_tokens",
         "billing_total_tokens",
         "billing_total_cost_usd",
@@ -356,7 +573,11 @@ def test_init_db_upgrades_existing_sqlite_request_records_with_route_metadata(tm
         "response_was_rewritten",
         "compat_fixes_json",
         "compat_fix_errors_json",
+        "estimated_input_tokens",
+        "estimated_input_tokenizer",
+        "estimated_input_model",
     }.issubset(columns)
+    assert "cached_input_usd_per_million" in price_columns
     assert {
         "ix_request_records_task_run_id",
         "ix_request_records_upstream_model",

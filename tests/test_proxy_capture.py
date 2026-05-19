@@ -50,6 +50,10 @@ def test_non_streaming_chat_completion_records_and_forwards_headers(
         assert record.is_stream is False
         assert record.has_images is False
         assert record.has_tool_calls is False
+        assert record.estimated_input_tokens is not None
+        assert record.estimated_input_tokens > 0
+        assert record.estimated_input_tokenizer
+        assert record.estimated_input_model == "gpt-test"
         assert b"Plain chat response" in record.response_body
 
 
@@ -77,6 +81,39 @@ def test_non_streaming_chat_completion_snapshots_estimated_cost(
 
     browser = proxy_client.get("/admin")
     assert "$0.000012" in browser.text
+
+
+def test_non_streaming_chat_completion_accounts_for_cached_input_tokens(
+    proxy_client: TestClient,
+    proxy_app: FastAPI,
+) -> None:
+    _configure_fake_pricing(
+        proxy_app,
+        model="gpt-test",
+        cached_input_usd_per_million="0.1",
+    )
+
+    response = proxy_client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "gpt-test",
+            "metadata": {"cached_usage": True},
+            "messages": [{"role": "user", "content": "cached"}],
+        },
+    )
+
+    assert response.status_code == 200
+    with proxy_app.state.session_factory() as session:
+        record = session.scalars(select(RequestRecord)).one()
+        assert record.billing_input_tokens == 1000
+        assert record.billing_cached_input_tokens == 800
+        assert record.billing_output_tokens == 25
+        assert record.billing_input_cost_usd == Decimal("0.00028000")
+        assert record.billing_total_cost_usd == Decimal("0.00033000")
+        snapshot = json.loads(record.pricing_snapshot_json)
+        assert snapshot["cached_input_tokens"] == 800
+        assert snapshot["uncached_input_tokens"] == 200
+        assert snapshot["cached_input_pricing"] == "cached_input_rate"
 
 
 def test_configured_model_route_rewrites_injects_key_and_records_metadata(
@@ -314,6 +351,38 @@ def test_streaming_request_snapshots_cost_when_usage_event_is_present(
         assert record.billing_input_tokens == 6
         assert record.billing_output_tokens == 3
         assert record.billing_total_cost_usd == Decimal("0.00001200")
+
+
+def test_streaming_request_snapshots_cost_from_timings_event(
+    proxy_client: TestClient,
+    proxy_app: FastAPI,
+) -> None:
+    _configure_fake_pricing(proxy_app, model="gpt-test")
+
+    with proxy_client.stream(
+        "POST",
+        "/v1/chat/completions",
+        json={
+            "model": "gpt-test",
+            "messages": [{"role": "user", "content": "stream"}],
+            "stream": True,
+            "metadata": {"llama_timings_usage": True},
+        },
+    ) as response:
+        body = b"".join(response.iter_bytes())
+
+    assert response.status_code == 200
+    assert b'"timings"' in body
+    with proxy_app.state.session_factory() as session:
+        record = session.scalars(select(RequestRecord)).one()
+        assert record.is_stream is True
+        assert record.billing_provider_slug == "fake"
+        assert record.billing_model == "gpt-test"
+        assert record.billing_input_tokens == 1185
+        assert record.billing_cached_input_tokens == 0
+        assert record.billing_output_tokens == 40
+        assert record.billing_total_tokens == 1225
+        assert record.billing_total_cost_usd == Decimal("0.00126500")
 
 
 def test_requests_are_associated_with_active_task_run(
@@ -852,7 +921,12 @@ def _create_routed_app(tmp_path: Path, *routes: ModelRoute) -> FastAPI:
     )
 
 
-def _configure_fake_pricing(app: FastAPI, *, model: str) -> None:
+def _configure_fake_pricing(
+    app: FastAPI,
+    *,
+    model: str,
+    cached_input_usd_per_million: str = "",
+) -> None:
     with session_scope(app.state.session_factory) as session:
         upsert_model_provider(
             session,
@@ -865,6 +939,7 @@ def _configure_fake_pricing(app: FastAPI, *, model: str) -> None:
             provider_slug="fake",
             model=model,
             input_usd_per_million="1",
+            cached_input_usd_per_million=cached_input_usd_per_million,
             output_usd_per_million="2",
         )
 

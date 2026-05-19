@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -52,6 +53,112 @@ def test_request_browser_filters_and_markdown_renderer(proxy_client: TestClient)
     assert detail.status_code == 200
     assert "<h1>Run Report</h1>" in detail.text
     assert "<li>captured</li>" in detail.text
+
+
+def test_request_browser_paginates_records(
+    proxy_client: TestClient,
+    proxy_app: FastAPI,
+) -> None:
+    with proxy_app.state.session_factory() as session:
+        started = datetime(2026, 5, 1, tzinfo=UTC)
+        for index in range(55):
+            _add_request_record(
+                session,
+                created_at=started + timedelta(minutes=index),
+                model="page-model",
+            )
+        session.commit()
+
+    first_page = proxy_client.get("/admin")
+    assert first_page.status_code == 200
+    assert "Showing <strong>1-50</strong>" in first_page.text
+    assert "of <strong>55</strong>" in first_page.text
+    assert 'href="/admin/requests/55">#55</a>' in first_page.text
+    assert 'href="/admin/requests/6">#6</a>' in first_page.text
+    assert 'href="/admin/requests/5">#5</a>' not in first_page.text
+    assert "Next" in first_page.text
+
+    second_page = proxy_client.get("/admin?page=2")
+    assert second_page.status_code == 200
+    assert "Showing <strong>51-55</strong>" in second_page.text
+    assert "of <strong>55</strong>" in second_page.text
+    assert 'href="/admin/requests/5">#5</a>' in second_page.text
+    assert 'href="/admin/requests/1">#1</a>' in second_page.text
+    assert 'href="/admin/requests/6">#6</a>' not in second_page.text
+    assert "Previous" in second_page.text
+
+
+def test_request_browser_pagination_preserves_filters(
+    proxy_client: TestClient,
+    proxy_app: FastAPI,
+) -> None:
+    with proxy_app.state.session_factory() as session:
+        started = datetime(2026, 5, 1, tzinfo=UTC)
+        for index in range(3):
+            _add_request_record(
+                session,
+                created_at=started + timedelta(minutes=index),
+                model="target-model",
+            )
+        _add_request_record(session, created_at=started, model="other-model")
+        session.commit()
+
+    page = proxy_client.get("/admin?model=target-model&per_page=1")
+
+    assert page.status_code == 200
+    assert "Showing <strong>1-1</strong>" in page.text
+    assert "of <strong>3</strong>" in page.text
+    assert "model=target-model" in page.text
+    assert "per_page=1" in page.text
+    assert "page=2" in page.text
+    assert "<span>other-model</span>" not in page.text
+
+
+def test_pending_requests_show_elapsed_duration(
+    proxy_client: TestClient,
+    proxy_app: FastAPI,
+) -> None:
+    with proxy_app.state.session_factory() as session:
+        pending = _add_request_record(
+            session,
+            created_at=datetime.now(UTC) - timedelta(minutes=5),
+            model="slow-model",
+            completed=False,
+            input_tokens=None,
+            output_tokens=None,
+            estimated_input_tokens=50_100,
+        )
+        completed = _add_request_record(
+            session,
+            created_at=datetime.now(UTC) - timedelta(minutes=1),
+            model="done-model",
+            estimated_input_tokens=100_000,
+        )
+        session.commit()
+        pending_id = pending.id
+        completed_id = completed.id
+
+    browser = proxy_client.get("/admin")
+
+    assert browser.status_code == 200
+    assert 'class="elapsed-duration" data-pending-start="' in browser.text
+    assert "so far</span>" in browser.text
+    assert (
+        '<span class="estimated-token"><strong>~50.1k</strong>'
+        "<small>Est. input</small></span>"
+    ) in browser.text
+    assert "pending" in browser.text
+    assert f'href="/admin/requests/{completed_id}">#{completed_id}</a>' in browser.text
+    assert "~100k" not in browser.text
+    assert "1 s" in browser.text
+
+    detail = proxy_client.get(f"/admin/requests/{pending_id}")
+    assert detail.status_code == 200
+    assert "Duration <strong><span class=\"elapsed-duration\"" in detail.text
+    assert "so far</span>" in detail.text
+    assert "Status <strong>pending</strong>" in detail.text
+    assert "~50.1k" in detail.text
+    assert "Estimate tokenizer" in detail.text
 
 
 def test_settings_updates_upstream_url(proxy_client: TestClient, proxy_app: FastAPI) -> None:
@@ -320,6 +427,7 @@ def test_settings_manages_model_providers_and_prices(
             "display_name": "Custom Large",
             "aliases": "custom-alias",
             "input_usd_per_million": "1.25",
+            "cached_input_usd_per_million": "0.25",
             "output_usd_per_million": "5",
             "active": "yes",
             "notes": "Local contract",
@@ -334,6 +442,7 @@ def test_settings_manages_model_providers_and_prices(
     assert "custom-large" in updated.text
     assert "custom-alias" in updated.text
     assert "$1.25" in updated.text
+    assert "$0.2500" in updated.text
     assert "$5.00" in updated.text
 
     with proxy_app.state.session_factory() as session:
@@ -346,6 +455,7 @@ def test_settings_manages_model_providers_and_prices(
         ).one()
         assert provider.upstream_url == "http://localhost:9000/v1"
         assert price.active is True
+        assert price.cached_input_usd_per_million == Decimal("0.250000")
 
     response = proxy_client.post(
         "/admin/settings/model-prices/delete",
@@ -512,6 +622,32 @@ def test_runs_require_name_and_manage_active_state(
         assert active == []
 
 
+def test_run_detail_uses_compact_header_for_active_run(proxy_client: TestClient) -> None:
+    response = proxy_client.post(
+        "/admin/runs/start",
+        data={"name": "Live compact task", "notes": "watching a local model"},
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+
+    detail = proxy_client.get("/admin/runs/1")
+
+    assert detail.status_code == 200
+    assert 'class="run-summary-header"' in detail.text
+    assert 'class="run-control"' not in detail.text
+    assert 'class="kpi-grid"' not in detail.text
+    assert "Run in progress" in detail.text
+    assert "Run: Live compact task" in detail.text
+    assert "watching a local model" in detail.text
+    assert "Started <strong>" in detail.text
+    assert "Ended <strong>active</strong>" in detail.text
+    assert "Requests" in detail.text
+    assert "LLM wall time" in detail.text
+    assert "Output tok/s" in detail.text
+    assert "End run" in detail.text
+    assert detail.text.index("run-summary-header") < detail.text.index("What-if cost")
+
+
 def test_run_filter_detail_and_badges_show_associated_requests(
     proxy_client: TestClient,
     proxy_app: FastAPI,
@@ -541,10 +677,14 @@ def test_run_filter_detail_and_badges_show_associated_requests(
 
     detail = proxy_client.get(f"/admin/runs/{task_run.id}")
     assert detail.status_code == 200
+    assert 'class="run-summary-header"' in detail.text
+    assert 'class="run-control"' not in detail.text
+    assert 'class="kpi-grid"' not in detail.text
     assert "LLM wall time" in detail.text
     assert "Total tokens" in detail.text
     assert ">9<" in detail.text
     assert "Run traffic" in detail.text
+    assert "End run" not in detail.text
     assert "#1" in detail.text
     assert "#2" not in detail.text
 
@@ -553,6 +693,53 @@ def test_run_filter_detail_and_badges_show_associated_requests(
         "Run <strong><a href=\"/admin/runs/1\">Local video task</a></strong>"
         in request_detail.text
     )
+
+
+def test_run_detail_paginates_traffic_without_limiting_what_if_totals(
+    proxy_client: TestClient,
+    proxy_app: FastAPI,
+) -> None:
+    with proxy_app.state.session_factory() as session:
+        price = upsert_model_price(
+            session,
+            provider_slug="openai",
+            model="custom-full-run",
+            display_name="Custom Full Run",
+            input_usd_per_million="1",
+            cached_input_usd_per_million="0.1",
+            output_usd_per_million="2",
+        )
+        task_run = TaskRun(name="Large run", started_at=datetime(2026, 5, 1, tzinfo=UTC))
+        session.add(task_run)
+        session.flush()
+        started = task_run.started_at
+        for index in range(55):
+            _add_request_record(
+                session,
+                created_at=started + timedelta(minutes=index),
+                model=price.model,
+                task_run_id=task_run.id,
+                input_tokens=1000,
+                cached_input_tokens=800,
+                output_tokens=500,
+            )
+        session.commit()
+        run_id = task_run.id
+
+    detail = proxy_client.get(
+        f"/admin/runs/{run_id}?what_if=openai:custom-full-run&per_page=10"
+    )
+
+    assert detail.status_code == 200
+    assert "Showing <strong>1-10</strong>" in detail.text
+    assert "of <strong>55</strong>" in detail.text
+    assert "#55" in detail.text
+    assert "#46" in detail.text
+    assert "#45" not in detail.text
+    assert "Custom Full Run" in detail.text
+    assert "$0.0704" in detail.text
+    assert "44k" in detail.text
+    assert "<td>55</td>" in detail.text
 
 
 def test_run_detail_shows_default_what_if_costs_without_mutating_snapshots(
@@ -700,6 +887,8 @@ def test_admin_formats_large_numbers_and_durations(
     assert "42m 59s" in detail.text
     assert "44m 13s" in detail.text
     assert "26m 45s" in detail.text
+    assert 'datetime="2026-05-01T00:00:00.000000Z" data-local-time="full"' in detail.text
+    assert "2026-05-01 00:00:00 UTC" in detail.text
     assert ">5.06M<" in detail.text
     assert ">56.7k<" in detail.text
     assert ">5.12M<" in detail.text
@@ -707,9 +896,51 @@ def test_admin_formats_large_numbers_and_durations(
 
     runs = proxy_client.get("/admin/runs")
     assert ">35.35<" in runs.text
+    assert 'data-local-time="table">2026-05-01 00:00:00 UTC</time>' in runs.text
     browser = proxy_client.get("/admin")
     assert "<strong>5.06M</strong><small>Input</small>" in browser.text
     assert "26m 45s" in browser.text
+    assert 'data-local-time="table">2026-05-01 00:00:00 UTC</time>' in browser.text
+
+    request_detail = proxy_client.get("/admin/requests/1")
+    assert "Created <strong><time" in request_detail.text
+    assert "Completed <strong><time" in request_detail.text
+    assert 'data-local-time="full">2026-05-01 00:00:00 UTC</time>' in request_detail.text
+
+
+def test_admin_reads_timings_usage_for_existing_stream_records(
+    proxy_client: TestClient,
+    proxy_app: FastAPI,
+) -> None:
+    with proxy_app.state.session_factory() as session:
+        record = _add_request_record(
+            session,
+            created_at=datetime.now(UTC),
+            input_tokens=None,
+            output_tokens=None,
+        )
+        record.is_stream = True
+        record.response_content_type = "text/event-stream"
+        record.response_body = (
+            b'data: {"choices":[{"delta":{"content":"hello"}}]}\n\n'
+            b'data: {"choices":[{"finish_reason":"stop","index":0,"delta":{}}],'
+            b'"timings":{"cache_n":0,"prompt_n":1185,"predicted_n":40}}\n\n'
+            b"data: [DONE]\n\n"
+        )
+        session.commit()
+        record_id = record.id
+
+    browser = proxy_client.get("/admin")
+    assert browser.status_code == 200
+    assert "<strong>1.19k</strong><small>Input</small>" in browser.text
+    assert "<strong>40</strong><small>Output</small>" in browser.text
+    assert "<strong>1.23k</strong><small>Total</small>" in browser.text
+
+    detail = proxy_client.get(f"/admin/requests/{record_id}")
+    assert detail.status_code == 200
+    assert "<strong>1.19k</strong>Input tokens" in detail.text
+    assert "<strong>40</strong>Output tokens" in detail.text
+    assert "<strong>1.23k</strong>Total tokens" in detail.text
 
 
 def test_settings_updates_incoming_server(proxy_client: TestClient) -> None:
@@ -877,3 +1108,53 @@ def _create_model_route_app(tmp_path: Path, *routes: ModelRoute) -> FastAPI:
             model_routes=routes,
         )
     )
+
+
+def _add_request_record(
+    session,
+    *,
+    created_at: datetime,
+    model: str = "gpt-test",
+    task_run_id: int | None = None,
+    input_tokens: int | None = 6,
+    cached_input_tokens: int | None = None,
+    output_tokens: int | None = 3,
+    completed: bool = True,
+    estimated_input_tokens: int | None = None,
+) -> RequestRecord:
+    total_tokens = (
+        input_tokens + output_tokens
+        if input_tokens is not None and output_tokens is not None
+        else None
+    )
+    record = RequestRecord(
+        task_run_id=task_run_id,
+        created_at=created_at,
+        completed_at=created_at + timedelta(seconds=1) if completed else None,
+        method="POST",
+        path="/v1/chat/completions",
+        query_string="",
+        endpoint="/v1/chat/completions",
+        model=model,
+        upstream_url=f"{GLOBAL_UPSTREAM_URL}/chat/completions",
+        request_headers_json="{}",
+        request_body=b"{}",
+        request_content_type="application/json",
+        response_status=200 if completed else None,
+        response_headers_json="{}" if completed else None,
+        response_body=b"{}" if completed else None,
+        response_content_type="application/json" if completed else None,
+        duration_ms=1000 if completed else None,
+        billing_provider_slug="openai",
+        billing_provider_name="OpenAI",
+        billing_model=model,
+        billing_input_tokens=input_tokens,
+        billing_cached_input_tokens=cached_input_tokens,
+        billing_output_tokens=output_tokens,
+        billing_total_tokens=total_tokens,
+        estimated_input_tokens=estimated_input_tokens,
+        estimated_input_tokenizer="o200k_base" if estimated_input_tokens is not None else None,
+        estimated_input_model=model if estimated_input_tokens is not None else None,
+    )
+    session.add(record)
+    return record

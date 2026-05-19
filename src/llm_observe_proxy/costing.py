@@ -21,9 +21,11 @@ class CostEstimate:
     provider_name: str | None
     billing_model: str | None
     input_tokens: int | None
+    cached_input_tokens: int | None
     output_tokens: int | None
     total_tokens: int | None
     input_cost_usd: Decimal | None = None
+    cached_input_cost_usd: Decimal | None = None
     output_cost_usd: Decimal | None = None
     total_cost_usd: Decimal | None = None
     snapshot: dict[str, object] | None = None
@@ -37,11 +39,14 @@ class RunCostEstimate:
     model: str
     display_name: str | None
     input_usd_per_million: Decimal
+    cached_input_usd_per_million: Decimal | None
     output_usd_per_million: Decimal
     input_tokens: int
+    cached_input_tokens: int
     output_tokens: int
     total_tokens: int
     input_cost_usd: Decimal
+    cached_input_cost_usd: Decimal | None
     output_cost_usd: Decimal
     total_cost_usd: Decimal
     included_request_count: int
@@ -64,6 +69,7 @@ def estimate_cost(
         provider_name=provider.name if provider else None,
         billing_model=resolved_model,
         input_tokens=usage.input_tokens,
+        cached_input_tokens=usage.cached_input_tokens,
         output_tokens=usage.output_tokens,
         total_tokens=usage.total_tokens,
     )
@@ -74,7 +80,12 @@ def estimate_cost(
     if price is None or usage.input_tokens is None or usage.output_tokens is None:
         return base
 
-    input_cost = _token_cost(usage.input_tokens, price.input_usd_per_million)
+    input_cost, cached_input_cost, uncached_input_tokens, cache_pricing = _input_cost(
+        usage.input_tokens,
+        usage.cached_input_tokens,
+        input_rate=price.input_usd_per_million,
+        cached_input_rate=price.cached_input_usd_per_million,
+    )
     output_cost = _token_cost(usage.output_tokens, price.output_usd_per_million)
     total_cost = input_cost + output_cost
     snapshot = {
@@ -85,7 +96,15 @@ def estimate_cost(
         "matched_model": price.model,
         "display_name": price.display_name,
         "input_usd_per_million": str(price.input_usd_per_million),
+        "cached_input_usd_per_million": (
+            str(price.cached_input_usd_per_million)
+            if price.cached_input_usd_per_million is not None
+            else None
+        ),
         "output_usd_per_million": str(price.output_usd_per_million),
+        "cached_input_tokens": usage.cached_input_tokens,
+        "uncached_input_tokens": uncached_input_tokens,
+        "cached_input_pricing": cache_pricing,
         "source": price.notes,
     }
     return CostEstimate(
@@ -93,9 +112,11 @@ def estimate_cost(
         provider_name=provider.name,
         billing_model=resolved_model,
         input_tokens=usage.input_tokens,
+        cached_input_tokens=usage.cached_input_tokens,
         output_tokens=usage.output_tokens,
         total_tokens=usage.total_tokens,
         input_cost_usd=input_cost,
+        cached_input_cost_usd=cached_input_cost,
         output_cost_usd=output_cost,
         total_cost_usd=total_cost,
         snapshot=snapshot,
@@ -107,6 +128,7 @@ def estimate_run_cost(
     price: ModelPrice,
 ) -> RunCostEstimate:
     input_tokens = 0
+    cached_input_tokens = 0
     output_tokens = 0
     total_tokens = 0
     included_request_count = 0
@@ -119,6 +141,8 @@ def estimate_run_cost(
 
         included_request_count += 1
         input_tokens += usage.input_tokens
+        if usage.cached_input_tokens is not None:
+            cached_input_tokens += min(usage.cached_input_tokens, usage.input_tokens)
         output_tokens += usage.output_tokens
         total_tokens += (
             usage.total_tokens
@@ -126,7 +150,12 @@ def estimate_run_cost(
             else usage.input_tokens + usage.output_tokens
         )
 
-    input_cost = _token_cost(input_tokens, price.input_usd_per_million)
+    input_cost, cached_input_cost, _, _ = _input_cost(
+        input_tokens,
+        cached_input_tokens,
+        input_rate=price.input_usd_per_million,
+        cached_input_rate=price.cached_input_usd_per_million,
+    )
     output_cost = _token_cost(output_tokens, price.output_usd_per_million)
     provider = price.provider
     return RunCostEstimate(
@@ -136,11 +165,14 @@ def estimate_run_cost(
         model=price.model,
         display_name=price.display_name,
         input_usd_per_million=price.input_usd_per_million,
+        cached_input_usd_per_million=price.cached_input_usd_per_million,
         output_usd_per_million=price.output_usd_per_million,
         input_tokens=input_tokens,
+        cached_input_tokens=cached_input_tokens,
         output_tokens=output_tokens,
         total_tokens=total_tokens,
         input_cost_usd=input_cost,
+        cached_input_cost_usd=cached_input_cost,
         output_cost_usd=output_cost,
         total_cost_usd=input_cost + output_cost,
         included_request_count=included_request_count,
@@ -154,6 +186,7 @@ def apply_cost_estimate(record: RequestRecord, estimate: CostEstimate) -> None:
     record.billing_provider_name = estimate.provider_name
     record.billing_model = estimate.billing_model
     record.billing_input_tokens = estimate.input_tokens
+    record.billing_cached_input_tokens = estimate.cached_input_tokens
     record.billing_output_tokens = estimate.output_tokens
     record.billing_total_tokens = estimate.total_tokens
     record.billing_input_cost_usd = estimate.input_cost_usd
@@ -222,3 +255,22 @@ def _price_aliases(price: ModelPrice) -> tuple[str, ...]:
 
 def _token_cost(tokens: int, usd_per_million: Decimal) -> Decimal:
     return (Decimal(tokens) * usd_per_million) / TOKENS_PER_MILLION
+
+
+def _input_cost(
+    input_tokens: int,
+    cached_input_tokens: int | None,
+    *,
+    input_rate: Decimal,
+    cached_input_rate: Decimal | None,
+) -> tuple[Decimal, Decimal | None, int, str]:
+    cached_tokens = min(cached_input_tokens or 0, input_tokens)
+    uncached_tokens = input_tokens - cached_tokens
+    if cached_tokens and cached_input_rate is not None:
+        uncached_cost = _token_cost(uncached_tokens, input_rate)
+        cached_cost = _token_cost(cached_tokens, cached_input_rate)
+        return uncached_cost + cached_cost, cached_cost, uncached_tokens, "cached_input_rate"
+    input_cost = _token_cost(input_tokens, input_rate)
+    if cached_tokens:
+        return input_cost, None, uncached_tokens, "standard_input_rate"
+    return input_cost, None, input_tokens, "not_reported"

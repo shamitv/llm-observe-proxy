@@ -7,7 +7,11 @@
   </div>
   <div class="detail-meta">
     <span>Status <strong>{{ record.response_status | default('pending', true) }}</strong></span>
-    <span>Duration <strong>{{ record.duration_ms | duration_ms }}</strong></span>
+    <span>Duration <strong>{% if record.duration_is_elapsed %}<span class="elapsed-duration" data-pending-start="{{ record.created_at | utc_iso }}">{{ record.duration_display_ms | duration_ms }} so far</span>{% else %}{{ record.duration_display_ms | duration_ms }}{% endif %}</strong></span>
+    <span>Created <strong><time class="local-time" datetime="{{ record.created_at | utc_iso }}" data-local-time="full">{{ record.created_at | utc_fallback }}</time></strong></span>
+    {% if record.completed_at %}
+    <span>Completed <strong><time class="local-time" datetime="{{ record.completed_at | utc_iso }}" data-local-time="full">{{ record.completed_at | utc_fallback }}</time></strong></span>
+    {% endif %}
     <span>Cost <strong>{{ record.billing_total_cost_usd | usd }}</strong></span>
     <span>Model <strong>{{ record.model | default('unknown', true) }}</strong></span>
     {% if record.upstream_model %}
@@ -113,11 +117,18 @@
       <span>{{ record.billing_provider_name or record.billing_provider_slug or 'no provider' }}</span>
     </header>
     <div class="breakdown-list">
-      <span><strong>{{ record.billing_input_tokens | compact_number }}</strong>Input tokens</span>
-      <span><strong>{{ record.billing_output_tokens | compact_number }}</strong>Output tokens</span>
-      <span><strong>{{ record.billing_total_tokens | compact_number }}</strong>Total tokens</span>
+      <span><strong>{{ record.display_input_tokens | compact_number }}</strong>Input tokens</span>
+      {% if record.completed_at is none and record.display_input_tokens is none and record.estimated_input_tokens %}
+      <span class="estimated-token"><strong>~{{ record.estimated_input_tokens | compact_number }}</strong>Est. input tokens</span>
+      {% endif %}
+      <span><strong>{{ record.display_cached_input_tokens | compact_number }}</strong>Cached input tokens</span>
+      <span><strong>{{ record.display_output_tokens | compact_number }}</strong>Output tokens</span>
+      <span><strong>{{ record.display_total_tokens | compact_number }}</strong>Total tokens</span>
       <span><strong>{{ record.billing_total_cost_usd | usd }}</strong>Estimated cost</span>
       <span><strong>{{ record.billing_model | default('-', true) }}</strong>Billing model</span>
+      {% if record.estimated_input_tokenizer %}
+      <span><strong>{{ record.estimated_input_tokenizer }}</strong>Estimate tokenizer</span>
+      {% endif %}
     </div>
   </article>
 

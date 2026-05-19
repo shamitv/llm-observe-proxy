@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "llm-observe-proxy"
-version = "0.2.0"
+version = "0.3.0"
 description = "OpenAI-compatible LLM proxy with SQLite request capture, observability, and an admin UI."
 readme = { file = "README.pypi.md", content-type = "text/markdown" }
 requires-python = ">=3.10"
@@ -31,6 +31,7 @@ dependencies = [
     "markdown-it-py>=4.0.0",
     "python-multipart>=0.0.27",
     "sqlalchemy>=2.0.49",
+    "tiktoken>=0.12.0",
     "uvicorn[standard]>=0.46.0",
 ]
 

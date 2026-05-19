@@ -7,6 +7,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlencode
 
 import httpx
 from fastapi import APIRouter, Form, Query, Request
@@ -137,6 +138,22 @@ def format_duration_ms(value: object) -> str:
     return f"{days} {day_label} {hours}h" if hours else f"{days} {day_label}"
 
 
+def format_utc_iso(value: object) -> str:
+    timestamp = _coerce_datetime_utc(value)
+    if timestamp is None:
+        return ""
+    return timestamp.isoformat(timespec="microseconds").replace("+00:00", "Z")
+
+
+def format_utc_fallback(value: object, variant: str = "full") -> str:
+    timestamp = _coerce_datetime_utc(value)
+    if timestamp is None:
+        return "-"
+    if variant == "table":
+        return timestamp.strftime("%Y-%m-%d %H:%M:%S UTC")
+    return timestamp.strftime("%Y-%m-%d %H:%M:%S UTC")
+
+
 def format_usd(value: object) -> str:
     number = _coerce_number(value)
     if number is None:
@@ -176,6 +193,14 @@ def _coerce_number(value: object) -> float | None:
     return number
 
 
+def _coerce_datetime_utc(value: object) -> datetime | None:
+    if not isinstance(value, datetime):
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
+
+
 def _format_decimal(value: float, *, max_decimals: int) -> str:
     text = f"{value:.{max_decimals}f}"
     if "." in text:
@@ -195,6 +220,8 @@ def _compact_decimals(value: float) -> int:
 templates.env.filters["compact_number"] = format_compact_number
 templates.env.filters["compact_rate"] = format_compact_rate
 templates.env.filters["duration_ms"] = format_duration_ms
+templates.env.filters["utc_fallback"] = format_utc_fallback
+templates.env.filters["utc_iso"] = format_utc_iso
 templates.env.filters["usd"] = format_usd
 
 router = APIRouter(prefix="/admin", include_in_schema=False)
@@ -218,11 +245,12 @@ async def index(
     stream: str | None = None,
     image: str | None = None,
     tool: str | None = None,
-    limit: int = Query(100, ge=1, le=500),
+    page: int = Query(1, ge=1),
+    per_page: int = Query(50, ge=1, le=200),
 ) -> HTMLResponse:
     session_factory: SessionFactory = request.app.state.session_factory
     with session_scope(session_factory) as session:
-        stmt = select(RequestRecord).order_by(desc(RequestRecord.created_at)).limit(limit)
+        stmt = select(RequestRecord)
         if endpoint:
             stmt = stmt.where(RequestRecord.endpoint.like(f"%{endpoint}%"))
         if model:
@@ -238,7 +266,22 @@ async def index(
         if tool == "1":
             stmt = stmt.where(RequestRecord.has_tool_calls.is_(True))
 
-        records = [_record_list_item(record) for record in session.scalars(stmt).all()]
+        total_records = _count_records(session, stmt)
+        pagination = _pagination_context(
+            request,
+            total=total_records,
+            page=page,
+            per_page=per_page,
+        )
+        rendered_at = datetime.now(UTC)
+        records = [
+            _record_list_item(record, now=rendered_at)
+            for record in session.scalars(
+                stmt.order_by(desc(RequestRecord.created_at))
+                .offset(pagination["offset"])
+                .limit(pagination["per_page"])
+            ).all()
+        ]
         models = [
             row[0]
             for row in session.execute(
@@ -280,11 +323,13 @@ async def index(
                 "stream": stream == "1",
                 "image": image == "1",
                 "tool": tool == "1",
-                "limit": limit,
+                "page": pagination["page"],
+                "per_page": pagination["per_page"],
             },
             "run_options": [_task_run_summary(task_run, session=None) for task_run in run_options],
             "active_run": active_run,
             "stats": stats,
+            "pagination": pagination,
             "upstream_url": upstream_url,
             "page_title": "Request Browser",
         },
@@ -312,7 +357,7 @@ async def detail(request: Request, record_id: int, mode: str = "auto") -> HTMLRe
             }
             for image in record.images
         ]
-        detail_record = _record_detail(record)
+        detail_record = _record_detail(record, now=datetime.now(UTC))
         upstream_url = get_upstream_url(session, request.app.state.settings)
         active_run = _task_run_summary(get_active_task_run(session), session)
 
@@ -379,6 +424,8 @@ async def runs(request: Request) -> HTMLResponse:
 async def run_detail(
     request: Request,
     run_id: int,
+    page: int = Query(1, ge=1),
+    per_page: int = Query(50, ge=1, le=200),
 ) -> HTMLResponse:
     session_factory: SessionFactory = request.app.state.session_factory
     what_if = request.query_params.getlist("what_if") or None
@@ -391,15 +438,24 @@ async def run_detail(
                 {"record_id": run_id, "page_title": "Run Not Found"},
                 status_code=404,
             )
+        request_stmt = select(RequestRecord).where(RequestRecord.task_run_id == run_id)
+        total_records = _count_records(session, request_stmt)
+        pagination = _pagination_context(
+            request,
+            total=total_records,
+            page=page,
+            per_page=per_page,
+        )
         request_records = session.scalars(
-            select(RequestRecord)
-            .where(RequestRecord.task_run_id == run_id)
-            .order_by(desc(RequestRecord.created_at))
+            request_stmt.order_by(desc(RequestRecord.created_at))
+            .offset(pagination["offset"])
+            .limit(pagination["per_page"])
         ).all()
-        records = [_record_list_item(record) for record in request_records]
+        rendered_at = datetime.now(UTC)
+        records = [_record_list_item(record, now=rendered_at) for record in request_records]
         stats = _task_run_stats_detail(task_run, session)
         what_if_costs = _run_what_if_context(
-            request_records,
+            _run_billing_usages(session, run_id),
             session,
             requested_keys=what_if,
         )
@@ -414,6 +470,7 @@ async def run_detail(
             "records": records,
             "stats": stats,
             "what_if": what_if_costs,
+            "pagination": pagination,
             "active_run": active_run,
             "upstream_url": upstream_url,
             "page_title": f"Run: {task_run.name}",
@@ -598,6 +655,7 @@ async def upsert_price(
     display_name: str = Form(""),
     aliases: str = Form(""),
     input_usd_per_million: str = Form(...),
+    cached_input_usd_per_million: str = Form(""),
     output_usd_per_million: str = Form(...),
     active: str | None = Form(None),
     notes: str = Form(""),
@@ -612,6 +670,7 @@ async def upsert_price(
                 display_name=display_name,
                 aliases=aliases,
                 input_usd_per_million=input_usd_per_million,
+                cached_input_usd_per_million=cached_input_usd_per_million,
                 output_usd_per_million=output_usd_per_million,
                 active=active == "yes",
                 notes=notes,
@@ -889,6 +948,7 @@ def _model_price_row(price) -> dict[str, object]:
         "display_name": price.display_name,
         "aliases": ", ".join(aliases),
         "input_usd_per_million": price.input_usd_per_million,
+        "cached_input_usd_per_million": price.cached_input_usd_per_million,
         "output_usd_per_million": price.output_usd_per_million,
         "active": price.active,
         "notes": price.notes,
@@ -896,7 +956,7 @@ def _model_price_row(price) -> dict[str, object]:
 
 
 def _run_what_if_context(
-    records: list[RequestRecord],
+    usages: list[ExtractedTokenUsage],
     session,
     *,
     requested_keys: list[str] | None,
@@ -905,7 +965,6 @@ def _run_what_if_context(
     price_by_key = {_model_price_key(price): price for price in active_prices}
     selected_keys = _selected_run_what_if_keys(requested_keys, price_by_key)
     selected_key_set = set(selected_keys)
-    usages = [_record_effective_token_usage(record) for record in records]
     scenarios = [
         _run_cost_estimate_row(estimate_run_cost(usages, price_by_key[key]))
         for key in selected_keys
@@ -964,11 +1023,14 @@ def _run_cost_estimate_row(estimate: RunCostEstimate) -> dict[str, object]:
         "display_name": estimate.display_name,
         "label": estimate.display_name or estimate.model,
         "input_usd_per_million": estimate.input_usd_per_million,
+        "cached_input_usd_per_million": estimate.cached_input_usd_per_million,
         "output_usd_per_million": estimate.output_usd_per_million,
         "input_tokens": estimate.input_tokens,
+        "cached_input_tokens": estimate.cached_input_tokens,
         "output_tokens": estimate.output_tokens,
         "total_tokens": estimate.total_tokens,
         "input_cost_usd": estimate.input_cost_usd,
+        "cached_input_cost_usd": estimate.cached_input_cost_usd,
         "output_cost_usd": estimate.output_cost_usd,
         "total_cost_usd": estimate.total_cost_usd,
         "included_request_count": estimate.included_request_count,
@@ -979,6 +1041,83 @@ def _run_cost_estimate_row(estimate: RunCostEstimate) -> dict[str, object]:
 
 def _model_price_key(price: ModelPrice) -> str:
     return f"{price.provider_slug}:{price.model}"
+
+
+def _count_records(session, stmt) -> int:
+    count_stmt = select(func.count()).select_from(stmt.order_by(None).subquery())
+    return int(session.scalar(count_stmt) or 0)
+
+
+def _pagination_context(
+    request: Request,
+    *,
+    total: int,
+    page: int,
+    per_page: int,
+) -> dict[str, object]:
+    page_size = max(1, min(per_page, 200))
+    total_pages = max(1, math.ceil(total / page_size))
+    current_page = min(max(page, 1), total_pages)
+    offset = (current_page - 1) * page_size
+    start = offset + 1 if total else 0
+    end = min(total, offset + page_size)
+    page_start = max(1, current_page - 2)
+    page_end = min(total_pages, current_page + 2)
+    return {
+        "page": current_page,
+        "per_page": page_size,
+        "offset": offset,
+        "total": total,
+        "total_pages": total_pages,
+        "start": start,
+        "end": end,
+        "has_previous": current_page > 1,
+        "has_next": current_page < total_pages,
+        "previous_url": _page_url(request, current_page - 1, page_size)
+        if current_page > 1
+        else None,
+        "next_url": _page_url(request, current_page + 1, page_size)
+        if current_page < total_pages
+        else None,
+        "pages": [
+            {
+                "number": page_number,
+                "url": _page_url(request, page_number, page_size),
+                "current": page_number == current_page,
+            }
+            for page_number in range(page_start, page_end + 1)
+        ],
+    }
+
+
+def _page_url(request: Request, page: int, per_page: int) -> str:
+    query_items = [
+        (key, value)
+        for key, value in request.query_params.multi_items()
+        if key not in {"page", "per_page"}
+    ]
+    query_items.extend((("per_page", str(per_page)), ("page", str(page))))
+    return f"{request.url.path}?{urlencode(query_items)}"
+
+
+def _run_billing_usages(session, run_id: int) -> list[ExtractedTokenUsage]:
+    rows = session.execute(
+        select(
+            RequestRecord.billing_input_tokens,
+            RequestRecord.billing_cached_input_tokens,
+            RequestRecord.billing_output_tokens,
+            RequestRecord.billing_total_tokens,
+        ).where(RequestRecord.task_run_id == run_id)
+    )
+    return [
+        ExtractedTokenUsage(
+            input_tokens=row[0],
+            cached_input_tokens=row[1],
+            output_tokens=row[2],
+            total_tokens=row[3],
+        )
+        for row in rows
+    ]
 
 
 async def _settings_with_error(request: Request, error: str) -> HTMLResponse:
@@ -1024,7 +1163,7 @@ async def _runs_with_error(request: Request, error: str) -> HTMLResponse:
     )
 
 
-def _record_list_item(record: RequestRecord) -> dict[str, object]:
+def _record_list_item(record: RequestRecord, *, now: datetime | None = None) -> dict[str, object]:
     response_render = render_payload(
         record.response_body,
         record.response_content_type,
@@ -1040,6 +1179,14 @@ def _record_list_item(record: RequestRecord) -> dict[str, object]:
     total_tokens = record.billing_total_tokens
     if total_tokens is None:
         total_tokens = token_usage.total_tokens
+    duration = _record_duration(record, now=now)
+    input_is_estimated = (
+        input_tokens is None
+        and record.completed_at is None
+        and record.estimated_input_tokens is not None
+    )
+    if input_is_estimated:
+        input_tokens = record.estimated_input_tokens
     return {
         "id": record.id,
         "created_at": record.created_at,
@@ -1050,12 +1197,18 @@ def _record_list_item(record: RequestRecord) -> dict[str, object]:
         "model_route": record.model_route,
         "status": record.response_status,
         "duration_ms": record.duration_ms,
+        "duration_display_ms": duration["duration_display_ms"],
+        "duration_is_elapsed": duration["duration_is_elapsed"],
         "is_stream": record.is_stream,
         "has_images": record.has_images,
         "has_tool_calls": record.has_tool_calls,
         "task_run": _task_run_summary(record.task_run, session=None),
         "tokens": {
             "input": input_tokens,
+            "input_estimated": input_is_estimated,
+            "cached_input": record.billing_cached_input_tokens
+            if record.billing_cached_input_tokens is not None
+            else token_usage.cached_input_tokens,
             "output": output_tokens,
             "total": total_tokens,
         },
@@ -1083,6 +1236,11 @@ def _record_effective_token_usage(record: RequestRecord) -> ExtractedTokenUsage:
         if record.billing_input_tokens is not None
         else token_usage.input_tokens
     )
+    cached_input_tokens = (
+        record.billing_cached_input_tokens
+        if record.billing_cached_input_tokens is not None
+        else token_usage.cached_input_tokens
+    )
     output_tokens = (
         record.billing_output_tokens
         if record.billing_output_tokens is not None
@@ -1095,6 +1253,7 @@ def _record_effective_token_usage(record: RequestRecord) -> ExtractedTokenUsage:
     )
     return ExtractedTokenUsage(
         input_tokens=input_tokens,
+        cached_input_tokens=cached_input_tokens,
         output_tokens=output_tokens,
         total_tokens=total_tokens,
     )
@@ -1104,7 +1263,9 @@ def _stream_token_usage(body: bytes | None) -> ExtractedTokenUsage:
     return extract_stream_token_usage(body)
 
 
-def _record_detail(record: RequestRecord) -> dict[str, object]:
+def _record_detail(record: RequestRecord, *, now: datetime | None = None) -> dict[str, object]:
+    duration = _record_duration(record, now=now)
+    token_usage = _record_effective_token_usage(record)
     return {
         "id": record.id,
         "created_at": record.created_at,
@@ -1126,6 +1287,8 @@ def _record_detail(record: RequestRecord) -> dict[str, object]:
         "upstream_response_body_raw": record.upstream_response_body_raw,
         "response_content_type": record.response_content_type,
         "duration_ms": record.duration_ms,
+        "duration_display_ms": duration["duration_display_ms"],
+        "duration_is_elapsed": duration["duration_is_elapsed"],
         "is_stream": record.is_stream,
         "has_images": record.has_images,
         "has_tool_calls": record.has_tool_calls,
@@ -1133,18 +1296,35 @@ def _record_detail(record: RequestRecord) -> dict[str, object]:
         "billing_provider_name": record.billing_provider_name,
         "billing_model": record.billing_model,
         "billing_input_tokens": record.billing_input_tokens,
+        "billing_cached_input_tokens": record.billing_cached_input_tokens,
         "billing_output_tokens": record.billing_output_tokens,
         "billing_total_tokens": record.billing_total_tokens,
+        "display_input_tokens": token_usage.input_tokens,
+        "display_cached_input_tokens": token_usage.cached_input_tokens,
+        "display_output_tokens": token_usage.output_tokens,
+        "display_total_tokens": token_usage.total_tokens,
         "billing_input_cost_usd": record.billing_input_cost_usd,
         "billing_output_cost_usd": record.billing_output_cost_usd,
         "billing_total_cost_usd": record.billing_total_cost_usd,
         "pricing_snapshot_json": record.pricing_snapshot_json,
+        "estimated_input_tokens": record.estimated_input_tokens,
+        "estimated_input_tokenizer": record.estimated_input_tokenizer,
+        "estimated_input_model": record.estimated_input_model,
         "response_was_rewritten": record.response_was_rewritten,
         "compat_fixes_json": record.compat_fixes_json,
         "compat_fix_errors_json": record.compat_fix_errors_json,
         "task_run": _task_run_summary(record.task_run, session=None),
         "error": record.error,
     }
+
+
+def _record_duration(record: RequestRecord, *, now: datetime | None) -> dict[str, object]:
+    if record.duration_ms is not None:
+        return {"duration_display_ms": record.duration_ms, "duration_is_elapsed": False}
+    if record.completed_at is None:
+        elapsed_ms = _duration_ms(record.created_at, now or datetime.now(UTC))
+        return {"duration_display_ms": elapsed_ms, "duration_is_elapsed": elapsed_ms is not None}
+    return {"duration_display_ms": None, "duration_is_elapsed": False}
 
 
 def _task_run_summary(task_run: TaskRun | None, session=None) -> dict[str, object] | None:
@@ -1191,31 +1371,24 @@ def _task_run_list_item(
 
 
 def _task_run_stats_detail(task_run: TaskRun, session) -> dict[str, object]:
-    records = session.scalars(
-        select(RequestRecord)
-        .where(RequestRecord.task_run_id == task_run.id)
-        .order_by(RequestRecord.created_at)
-    ).all()
     base_stats = get_task_run_stats(session, task_run.id)
     run_open_duration_ms = _duration_ms(
         task_run.started_at,
         task_run.ended_at or datetime.now(UTC),
     )
-    input_tokens: list[int | None] = []
-    output_tokens: list[int | None] = []
-    total_tokens: list[int | None] = []
-    total_costs: list[Decimal | None] = []
-    for record in records:
-        token_usage = _record_effective_token_usage(record)
-        input_tokens.append(token_usage.input_tokens)
-        output_tokens.append(token_usage.output_tokens)
-        total_tokens.append(token_usage.total_tokens)
-        total_costs.append(record.billing_total_cost_usd)
+    token_row = session.execute(
+        select(
+            func.sum(RequestRecord.billing_input_tokens),
+            func.sum(RequestRecord.billing_output_tokens),
+            func.sum(RequestRecord.billing_total_tokens),
+            func.sum(RequestRecord.billing_total_cost_usd),
+        ).where(RequestRecord.task_run_id == task_run.id)
+    ).one()
 
     token_totals = {
-        "input": _sum_known(input_tokens),
-        "output": _sum_known(output_tokens),
-        "total": _sum_known(total_tokens),
+        "input": _coerce_int_or_none(token_row[0]),
+        "output": _coerce_int_or_none(token_row[1]),
+        "total": _coerce_int_or_none(token_row[2]),
     }
     llm_wall_time_ms = base_stats["llm_wall_time_ms"]
     total_request_duration_ms = base_stats["total_request_duration_ms"]
@@ -1223,7 +1396,7 @@ def _task_run_stats_detail(task_run: TaskRun, session) -> dict[str, object]:
         **base_stats,
         "run_open_duration_ms": run_open_duration_ms,
         "tokens": token_totals,
-        "cost_usd": _sum_decimal_known(total_costs),
+        "cost_usd": token_row[3],
         "throughput": {
             "output_wall": _tokens_per_second(token_totals["output"], llm_wall_time_ms),
             "total_wall": _tokens_per_second(token_totals["total"], llm_wall_time_ms),
@@ -1232,11 +1405,18 @@ def _task_run_stats_detail(task_run: TaskRun, session) -> dict[str, object]:
                 total_request_duration_ms,
             ),
         },
-        "models": _counter_rows(record.model or "unknown" for record in records),
-        "endpoints": _counter_rows(record.endpoint for record in records),
-        "statuses": _counter_rows(
-            str(record.response_status) if record.response_status is not None else "pending"
-            for record in records
+        "models": _grouped_count_rows(
+            session,
+            RequestRecord.model,
+            task_run.id,
+            none_label="unknown",
+        ),
+        "endpoints": _grouped_count_rows(session, RequestRecord.endpoint, task_run.id),
+        "statuses": _grouped_count_rows(
+            session,
+            RequestRecord.response_status,
+            task_run.id,
+            none_label="pending",
         ),
         "signals": {
             "streams": base_stats["streams"],
@@ -1245,6 +1425,34 @@ def _task_run_stats_detail(task_run: TaskRun, session) -> dict[str, object]:
             "errors": base_stats["errors"],
         },
     }
+
+
+def _coerce_int_or_none(value: object) -> int | None:
+    if value is None:
+        return None
+    return int(value)
+
+
+def _grouped_count_rows(
+    session,
+    column,
+    task_run_id: int,
+    *,
+    none_label: str | None = None,
+) -> list[dict[str, object]]:
+    rows = session.execute(
+        select(column, func.count())
+        .where(RequestRecord.task_run_id == task_run_id)
+        .group_by(column)
+        .order_by(desc(func.count()))
+    )
+    return [
+        {
+            "label": str(value) if value is not None else (none_label or "-"),
+            "count": count,
+        }
+        for value, count in rows
+    ]
 
 
 def _sum_known(values: list[int | None]) -> int | None:
