@@ -39,10 +39,17 @@ to the next task.
 
 ### 3. Provider Cache Usage Extraction
 
+- [ ] Add redacted JSON fixtures from live OpenAI Chat Completions, OpenAI Responses,
+  Hugging Face Router, and OpenRouter probes.
 - [ ] Add extraction for DeepSeek-style `prompt_cache_hit_tokens`.
 - [ ] Treat cache miss tokens as prompt/input tokens when the provider reports only
   hit/miss counters.
-- [ ] Add Qwen/router cache fields when verified from current response examples.
+- [ ] Add Qwen/router cache fields when verified from current response examples,
+  including OpenRouter `prompt_tokens_details.cached_tokens`.
+- [ ] Preserve OpenRouter `cache_write_tokens` in fixtures or snapshots without
+  treating it as cached-read input cost.
+- [ ] Ensure streaming extraction handles both OpenAI/HF `choices: []` usage events
+  and OpenRouter final-delta events with attached `usage`.
 - [ ] Keep existing OpenAI cached token extraction behavior unchanged.
 - [ ] Add extraction tests for each supported provider shape.
 - [ ] Run `pytest -q tests/test_rendering_and_cli.py`.
@@ -74,6 +81,8 @@ to the next task.
 ### 6. Current Cached And Open-Weight Pricing Seeds
 
 - [ ] Re-check first-party pricing sources before entering seed values.
+- [ ] Re-check live router model IDs against OpenRouter and Hugging Face Router before
+  adding fallback seed aliases.
 - [ ] Add first-party providers and prices for verified Alibaba/Qwen, DeepSeek, Z.ai,
   Moonshot, and Mistral open-weight model families.
 - [ ] Add router fallback providers and prices only for models without first-party

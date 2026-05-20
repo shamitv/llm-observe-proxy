@@ -103,6 +103,60 @@ Cost calculation should clamp cached tokens to known input tokens, preserve unca
 token counts in snapshots, and include whether the scalar price or tier price supplied
 the cached-input rate.
 
+## Observed API Response Shapes
+
+Live compatibility probes were run on 2026-05-20 with local `.env` keys for Hugging
+Face Router, OpenRouter, and OpenAI. Secrets were not stored. Convert these observations
+into checked-in JSON fixtures during implementation.
+
+OpenAI Chat Completions:
+
+- Non-streaming responses include top-level `choices`, `created`, `id`, `model`,
+  `object`, `service_tier`, `system_fingerprint`, and `usage`.
+- `usage` has `prompt_tokens`, `completion_tokens`, `total_tokens`,
+  `prompt_tokens_details.cached_tokens`, `prompt_tokens_details.audio_tokens`, and
+  `completion_tokens_details.reasoning_tokens`.
+- Streaming responses use `text/event-stream`; intermediate events have `usage: null`,
+  and the final usage event has `choices: []` plus the same `usage` shape.
+- Current streaming events may include an `obfuscation` field that should be ignored by
+  token extraction.
+
+OpenAI Responses API:
+
+- Non-streaming responses place usage at top-level `usage`.
+- `usage` has `input_tokens`, `output_tokens`, `total_tokens`,
+  `input_tokens_details.cached_tokens`, and
+  `output_tokens_details.reasoning_tokens`.
+- Output content is under an `output` array with message items, not under
+  `choices[].message`.
+- The observed endpoint rejected `max_output_tokens` below 16, so compatibility probes
+  should use `max_output_tokens >= 16`.
+
+Hugging Face Router:
+
+- OpenAI-compatible base URL is `https://router.huggingface.co/v1`.
+- Chat completion responses expose OpenAI-style `prompt_tokens`,
+  `completion_tokens`, `total_tokens`, and
+  `prompt_tokens_details.cached_tokens`.
+- Streaming responses include SSE `data:` events, `[DONE]`, and a final usage event
+  that current stream usage extraction can read.
+
+OpenRouter:
+
+- OpenAI-compatible base URL is `https://openrouter.ai/api/v1`.
+- Non-streaming responses include top-level `provider`; choices include
+  `native_finish_reason`; messages may include `reasoning`.
+- Usage is returned when requested with `usage: {"include": true}`.
+- `usage` has OpenAI-style token totals plus router-specific fields:
+  `cost`, `is_byok`, `cost_details`, `prompt_tokens_details.cache_write_tokens`,
+  `prompt_tokens_details.audio_tokens`, and `prompt_tokens_details.video_tokens`.
+- Streaming responses may attach `usage` to the final delta event rather than emitting
+  a separate `choices: []` usage-only event.
+- `prompt_tokens_details.cached_tokens` should count as cached input tokens.
+  `cache_write_tokens` should be preserved in fixtures/snapshots for future work, but
+  should not be counted as cached-read tokens unless a later pricing model adds a
+  separate cache-write cost dimension.
+
 ## Candidate Seed Families
 
 Implementation should verify every candidate before seeding it. If a candidate source no
