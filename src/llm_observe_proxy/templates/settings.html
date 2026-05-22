@@ -253,6 +253,7 @@
             <th>Cached Input / 1M</th>
             <th>Output / 1M</th>
             <th>Aliases</th>
+            <th>Tiers</th>
             <th>Active</th>
             <th>Actions</th>
           </tr>
@@ -267,6 +268,44 @@
             <td>{{ price.cached_input_usd_per_million | usd }}</td>
             <td>{{ price.output_usd_per_million | usd }}</td>
             <td>{{ price.aliases | default('-', true) }}</td>
+            <td class="tier-cell">
+              {% if price.tiers %}
+              <div class="tier-list">
+                {% for tier in price.tiers %}
+                <div class="tier-row">
+                  <div>
+                    <strong>{{ tier.label | default(tier.range, true) }}</strong>
+                    <span class="muted">{{ tier.range }}</span>
+                    <span class="muted">In {{ tier.input_usd_per_million | usd }} / Cached {{ tier.cached_input_usd_per_million | usd }} / Out {{ tier.output_usd_per_million | usd }}</span>
+                    {% if tier.source_url or tier.checked_at or tier.release_date %}
+                    <span class="muted">{{ tier.checked_at | default('', true) }} {{ tier.release_date | default('', true) }}</span>
+                    {% endif %}
+                  </div>
+                  <form method="post" action="/admin/settings/model-price-tiers/delete">
+                    <input type="hidden" name="tier_id" value="{{ tier.id }}">
+                    <button class="button danger compact-button" type="submit">Delete</button>
+                  </form>
+                </div>
+                {% endfor %}
+              </div>
+              {% else %}
+              <span class="muted">Scalar only</span>
+              {% endif %}
+              <form class="tier-form" method="post" action="/admin/settings/model-price-tiers">
+                <input type="hidden" name="model_price_id" value="{{ price.id }}">
+                <input name="label" placeholder="Tier label">
+                <input name="min_input_tokens" placeholder="Min tokens" type="number" min="0" step="1">
+                <input name="max_input_tokens" placeholder="Max tokens" type="number" min="1" step="1">
+                <input name="input_usd_per_million" placeholder="Input / 1M" type="number" min="0" step="0.000001" required>
+                <input name="cached_input_usd_per_million" placeholder="Cached / 1M" type="number" min="0" step="0.000001">
+                <input name="output_usd_per_million" placeholder="Output / 1M" type="number" min="0" step="0.000001" required>
+                <input name="source_url" placeholder="Source URL">
+                <input name="checked_at" placeholder="Checked YYYY-MM-DD">
+                <input name="release_date" placeholder="Released YYYY-MM-DD">
+                <input name="notes" placeholder="Notes">
+                <button class="button compact-button" type="submit">Add Tier</button>
+              </form>
+            </td>
             <td><span class="pill">{{ 'yes' if price.active else 'no' }}</span></td>
             <td>
               <form method="post" action="/admin/settings/model-prices/delete">
