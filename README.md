@@ -219,7 +219,11 @@ $env:LLM_OBSERVE_DEFAULT_FIXES_JSON = '["qwen-tagged-tool-call-rewrite"]'
 
 Cost estimates are snapshotted when a response is captured. The proxy stores the billing
 provider, billing model, token counts, input/output rate snapshot, and estimated USD cost
-on the request row. Historical rows are not recalculated when pricing changes.
+on the request row. Historical rows are not generally recalculated when pricing changes,
+but v0.4 performs a startup backfill for older rows that already report cached input
+tokens and lack cached-pricing snapshot metadata. Those rows are repriced with the
+current configured cached-input rates and marked with `historical_cost_backfill` in the
+pricing snapshot.
 
 Token counts are extracted from OpenAI-compatible `usage` objects, including the shapes
 used by OpenAI, vLLM, SGLang, and LM Studio. When standard usage is absent, the proxy can
@@ -243,7 +247,8 @@ Billing identity is resolved from the routed upstream model when a model route r
 the request, otherwise from the upstream response model when present, otherwise from the
 client request model. Provider identity comes from a route's optional `provider_slug`,
 then falls back to a provider whose configured upstream URL exactly matches the active
-upstream base.
+upstream base. Historical cached-cost backfills can also infer the provider when a
+stored upstream request URL starts with a configured provider URL.
 
 SQLite is seeded with editable standard paid text rates for legacy OpenAI, Anthropic, and
 Google Gemini rows plus a broader current catalog checked on May 23, 2026. The v0.4 seed

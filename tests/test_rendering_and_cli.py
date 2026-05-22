@@ -20,11 +20,16 @@ from llm_observe_proxy.config import (
     EXPOSED_INCOMING_HOST,
     Settings,
 )
-from llm_observe_proxy.costing import estimate_cost, estimate_run_cost
+from llm_observe_proxy.costing import (
+    HISTORICAL_CACHED_COST_BACKFILL,
+    estimate_cost,
+    estimate_run_cost,
+)
 from llm_observe_proxy.database import (
     ModelPrice,
     ModelPriceTier,
     ModelProvider,
+    RequestRecord,
     create_db_engine,
     create_session_factory,
     delete_model_price_tier,
@@ -547,6 +552,173 @@ def test_init_db_seeds_model_pricing_without_overwriting_edits(tmp_path) -> None
     assert edited_price.input_usd_per_million == Decimal("123.000000")
     assert edited_openrouter_price.input_usd_per_million == Decimal("999.000000")
     assert price_count >= 40
+
+
+def test_init_db_backfills_historical_cached_token_costs(tmp_path) -> None:
+    db_path = tmp_path / "historical-cached-cost.sqlite3"
+    settings = Settings(database_url=f"sqlite:///{db_path.as_posix()}")
+    engine = create_db_engine(settings.database_url)
+    init_db(engine)
+    session_factory = create_session_factory(engine)
+
+    with session_scope(session_factory) as session:
+        upsert_model_price(
+            session,
+            provider_slug="openai",
+            model="historical-cached-model",
+            input_usd_per_million="1",
+            cached_input_usd_per_million="0.1",
+            output_usd_per_million="2",
+        )
+        session.add(
+            RequestRecord(
+                method="POST",
+                path="/v1/chat/completions",
+                endpoint="/v1/chat/completions",
+                model="historical-cached-model",
+                upstream_url="https://api.openai.com/v1/chat/completions",
+                request_headers_json="{}",
+                request_body=b'{"model":"historical-cached-model"}',
+                response_body=json.dumps(
+                    {
+                        "model": "historical-cached-model",
+                        "usage": {
+                            "prompt_tokens": 1000,
+                            "completion_tokens": 25,
+                            "total_tokens": 1025,
+                            "prompt_tokens_details": {"cached_tokens": 800},
+                        },
+                    }
+                ).encode(),
+                response_status=200,
+                billing_input_tokens=1000,
+                billing_cached_input_tokens=800,
+                billing_output_tokens=25,
+                billing_total_tokens=1025,
+                billing_input_cost_usd=Decimal("0.00100000"),
+                billing_output_cost_usd=Decimal("0.00005000"),
+                billing_total_cost_usd=Decimal("0.00105000"),
+                pricing_snapshot_json=json.dumps(
+                    {
+                        "provider_slug": "openai",
+                        "billing_model": "historical-cached-model",
+                    }
+                ),
+            )
+        )
+        session.add(
+            RequestRecord(
+                method="POST",
+                path="/v1/chat/completions",
+                endpoint="/v1/chat/completions",
+                model="historical-cached-model",
+                upstream_url="https://api.openai.com/v1/chat/completions",
+                request_headers_json="{}",
+                request_body=b'{"model":"historical-cached-model"}',
+                response_body=json.dumps(
+                    {
+                        "model": "historical-cached-model",
+                        "usage": {
+                            "prompt_tokens": 1000,
+                            "completion_tokens": 25,
+                            "total_tokens": 1025,
+                            "prompt_tokens_details": {"cached_tokens": 800},
+                        },
+                    }
+                ).encode(),
+                response_status=200,
+                billing_total_cost_usd=Decimal("0.00105000"),
+                pricing_snapshot_json=json.dumps(
+                    {
+                        "provider_slug": "openai",
+                        "billing_model": "historical-cached-model",
+                    }
+                ),
+            )
+        )
+        session.add(
+            RequestRecord(
+                method="POST",
+                path="/v1/chat/completions",
+                endpoint="/v1/chat/completions",
+                model="historical-cached-model",
+                upstream_url="https://api.openai.com/v1/chat/completions",
+                request_headers_json="{}",
+                request_body=b'{"model":"historical-cached-model"}',
+                response_body=json.dumps(
+                    {
+                        "model": "historical-cached-model",
+                        "usage": {
+                            "prompt_tokens": 1000,
+                            "completion_tokens": 25,
+                            "total_tokens": 1025,
+                            "prompt_tokens_details": {"cached_tokens": 800},
+                        },
+                    }
+                ).encode(),
+                response_status=200,
+                billing_input_tokens=1000,
+                billing_cached_input_tokens=800,
+                billing_output_tokens=25,
+                billing_total_tokens=1025,
+                billing_input_cost_usd=Decimal("0.00028000"),
+                billing_output_cost_usd=Decimal("0.00005000"),
+                billing_total_cost_usd=Decimal("0.00033000"),
+                pricing_snapshot_json=json.dumps(
+                    {
+                        "provider_slug": "openai",
+                        "billing_model": "historical-cached-model",
+                        "cached_input_pricing": "cached_input_rate",
+                    }
+                ),
+            )
+        )
+        session.add(
+            RequestRecord(
+                method="POST",
+                path="/v1/chat/completions",
+                endpoint="/v1/chat/completions",
+                upstream_url="https://api.openai.com/v1/chat/completions",
+                request_headers_json="{}",
+                request_body=b'{"model":"historical-cached-model","stream":true}',
+                response_body=(
+                    b'data: {"model":"historical-cached-model","usage":'
+                    b'{"prompt_tokens":1000,"completion_tokens":25,'
+                    b'"total_tokens":1025,"prompt_tokens_details":'
+                    b'{"cached_tokens":800}}}\n\n'
+                ),
+                response_status=200,
+                is_stream=True,
+                billing_total_cost_usd=Decimal("0.00105000"),
+                pricing_snapshot_json=json.dumps(
+                    {
+                        "provider_slug": "openai",
+                        "billing_model": "historical-cached-model",
+                    }
+                ),
+            )
+        )
+
+    init_db(engine)
+
+    with session_scope(session_factory) as session:
+        rows = session.scalars(select(RequestRecord).order_by(RequestRecord.id)).all()
+        snapshots = [json.loads(row.pricing_snapshot_json or "{}") for row in rows]
+    engine.dispose()
+
+    assert [row.billing_total_cost_usd for row in rows] == [
+        Decimal("0.00033000"),
+        Decimal("0.00033000"),
+        Decimal("0.00033000"),
+        Decimal("0.00033000"),
+    ]
+    assert [row.billing_cached_input_tokens for row in rows] == [800, 800, 800, 800]
+    assert snapshots[0]["cached_input_pricing"] == "cached_input_rate"
+    assert snapshots[0]["historical_cost_backfill"] == HISTORICAL_CACHED_COST_BACKFILL
+    assert snapshots[0]["previous_total_cost_usd"] == "0.00105000"
+    assert snapshots[1]["historical_cost_backfill"] == HISTORICAL_CACHED_COST_BACKFILL
+    assert snapshots[2].get("historical_cost_backfill") is None
+    assert snapshots[3]["historical_cost_backfill"] == HISTORICAL_CACHED_COST_BACKFILL
 
 
 def test_model_price_tiers_validate_bounds_and_preserve_relationships(tmp_path) -> None:

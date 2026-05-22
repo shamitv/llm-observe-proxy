@@ -4,15 +4,25 @@ import json
 from collections.abc import Iterable
 from dataclasses import dataclass
 from decimal import Decimal
+from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import inspect, or_, select
+from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
 
-from llm_observe_proxy.capture import ExtractedTokenUsage
+from llm_observe_proxy.capture import (
+    ExtractedTokenUsage,
+    decode_json_bytes,
+    decode_sse_json_events,
+    extract_model,
+    extract_stream_token_usage,
+    extract_token_usage,
+)
 from llm_observe_proxy.config import normalize_provider_url
 from llm_observe_proxy.database import ModelPrice, ModelPriceTier, ModelProvider, RequestRecord
 
 TOKENS_PER_MILLION = Decimal("1000000")
+HISTORICAL_CACHED_COST_BACKFILL = "cached-input-v0.4"
 
 
 @dataclass(frozen=True)
@@ -267,6 +277,79 @@ def apply_cost_estimate(record: RequestRecord, estimate: CostEstimate) -> None:
     )
 
 
+def backfill_historical_cached_cost_estimates(engine: Engine) -> int:
+    """Reprice older cached-token rows that predate cached-input snapshots."""
+    if not _request_records_table_supports_backfill(engine):
+        return 0
+    updated = 0
+    with Session(engine) as session:
+        records = session.scalars(
+            select(RequestRecord).where(
+                or_(
+                    RequestRecord.billing_cached_input_tokens > 0,
+                    RequestRecord.pricing_snapshot_json.is_(None),
+                    ~RequestRecord.pricing_snapshot_json.like('%"cached_input_pricing"%'),
+                )
+            )
+        ).all()
+        for record in records:
+            usage = _record_usage_for_backfill(record)
+            if (
+                usage.input_tokens is None
+                or usage.output_tokens is None
+                or not usage.cached_input_tokens
+            ):
+                continue
+            provider_slug = _record_provider_slug(session, record)
+            billing_model = _record_billing_model(record)
+            if provider_slug is None or billing_model is None:
+                continue
+
+            estimate = estimate_cost(
+                session,
+                usage=usage,
+                billing_model=billing_model,
+                provider_slug=provider_slug,
+            )
+            if (
+                estimate.total_cost_usd is None
+                or estimate.snapshot is None
+                or not _should_backfill_cached_cost(record, estimate.snapshot)
+            ):
+                continue
+
+            previous_total_cost_usd = (
+                str(record.billing_total_cost_usd)
+                if record.billing_total_cost_usd is not None
+                else None
+            )
+            apply_cost_estimate(record, estimate)
+            snapshot = dict(estimate.snapshot)
+            snapshot["historical_cost_backfill"] = HISTORICAL_CACHED_COST_BACKFILL
+            if previous_total_cost_usd is not None:
+                snapshot["previous_total_cost_usd"] = previous_total_cost_usd
+            record.pricing_snapshot_json = json.dumps(
+                snapshot,
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
+            updated += 1
+        if updated:
+            session.commit()
+    return updated
+
+
+def _request_records_table_supports_backfill(engine: Engine) -> bool:
+    if engine.dialect.name != "sqlite":
+        return True
+    inspector = inspect(engine)
+    if "request_records" not in inspector.get_table_names():
+        return False
+    columns = {column["name"] for column in inspector.get_columns("request_records")}
+    mapped_columns = set(RequestRecord.__table__.columns.keys())
+    return mapped_columns <= columns
+
+
 def _resolve_provider(
     session: Session,
     provider_slug: str | None,
@@ -282,6 +365,97 @@ def _resolve_provider(
     if normalized_url is None:
         return None
     return session.scalar(select(ModelProvider).where(ModelProvider.upstream_url == normalized_url))
+
+
+def _record_usage_for_backfill(record: RequestRecord) -> ExtractedTokenUsage:
+    response_usage = (
+        extract_stream_token_usage(record.response_body)
+        if record.is_stream
+        else extract_token_usage(decode_json_bytes(record.response_body))
+    )
+    return ExtractedTokenUsage(
+        input_tokens=_prefer_existing(record.billing_input_tokens, response_usage.input_tokens),
+        cached_input_tokens=_prefer_existing(
+            record.billing_cached_input_tokens,
+            response_usage.cached_input_tokens,
+        ),
+        cache_write_input_tokens=response_usage.cache_write_input_tokens,
+        output_tokens=_prefer_existing(record.billing_output_tokens, response_usage.output_tokens),
+        total_tokens=_prefer_existing(record.billing_total_tokens, response_usage.total_tokens),
+    )
+
+
+def _record_provider_slug(session: Session, record: RequestRecord) -> str | None:
+    if record.billing_provider_slug and session.get(ModelProvider, record.billing_provider_slug):
+        return record.billing_provider_slug
+    if not record.upstream_url:
+        return None
+    try:
+        upstream_url = normalize_provider_url(record.upstream_url)
+    except ValueError:
+        return None
+    if upstream_url is None:
+        return None
+    providers = session.scalars(select(ModelProvider)).all()
+    for provider in providers:
+        provider_url = provider.upstream_url.rstrip("/")
+        if upstream_url == provider_url or upstream_url.startswith(f"{provider_url}/"):
+            return provider.slug
+    return None
+
+
+def _record_billing_model(record: RequestRecord) -> str | None:
+    for value in (
+        record.billing_model,
+        record.upstream_model,
+        _body_model(record),
+        record.model,
+    ):
+        if value and value.strip():
+            return value.strip()
+    return None
+
+
+def _body_model(record: RequestRecord) -> str | None:
+    if record.is_stream:
+        for event in decode_sse_json_events(record.response_body):
+            model = extract_model(event)
+            if model:
+                return model
+        return None
+    return extract_model(decode_json_bytes(record.response_body))
+
+
+def _should_backfill_cached_cost(
+    record: RequestRecord,
+    new_snapshot: dict[str, object],
+) -> bool:
+    existing_snapshot = _decode_snapshot(record.pricing_snapshot_json)
+    if existing_snapshot.get("historical_cost_backfill") == HISTORICAL_CACHED_COST_BACKFILL:
+        return False
+    existing_cache_pricing = existing_snapshot.get("cached_input_pricing")
+    if existing_cache_pricing is None:
+        return True
+    if record.billing_total_cost_usd is None:
+        return True
+    return (
+        existing_cache_pricing == "standard_input_rate"
+        and new_snapshot.get("cached_input_pricing") == "cached_input_rate"
+    )
+
+
+def _decode_snapshot(value: str | None) -> dict[str, Any]:
+    if not value:
+        return {}
+    try:
+        decoded = json.loads(value)
+    except json.JSONDecodeError:
+        return {}
+    return decoded if isinstance(decoded, dict) else {}
+
+
+def _prefer_existing(existing: int | None, extracted: int | None) -> int | None:
+    return existing if existing is not None else extracted
 
 
 def _find_model_price(session: Session, provider_slug: str, model: str) -> ModelPrice | None:

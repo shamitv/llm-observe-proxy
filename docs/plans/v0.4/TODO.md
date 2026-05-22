@@ -126,6 +126,8 @@ Skip notes:
 - [x] Existing scalar pricing behavior remains compatible.
 - [x] Tiered pricing applies per request, not from aggregate run totals.
 - [x] Cached input tokens use cached rates only when configured.
+- [x] Historical cached-token request rows are repriced on startup when they lack
+  cached-pricing snapshot metadata.
 - [x] Seeded prices are source-attributed and do not overwrite user edits.
 - [x] Recent open-weight models are seeded from first-party prices where available.
 - [x] Router fallback prices are stored under router providers.

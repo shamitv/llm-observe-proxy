@@ -914,6 +914,9 @@ def init_db(engine: Engine) -> None:
     _ensure_sqlite_request_record_schema(engine)
     _ensure_sqlite_model_price_schema(engine)
     seed_default_model_pricing(engine)
+    from llm_observe_proxy.costing import backfill_historical_cached_cost_estimates
+
+    backfill_historical_cached_cost_estimates(engine)
 
 
 @contextmanager

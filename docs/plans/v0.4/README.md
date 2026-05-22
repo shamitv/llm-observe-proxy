@@ -10,8 +10,8 @@ This plan tracks the pricing work intended for the `0.4.0` release branch.
 - Seed popular recent open-weight model families released since 2025-05-20.
 - Prefer first-party pricing when available, and use router pricing only as a fallback
   when the model owner does not publish suitable per-token API pricing.
-- Keep historical request pricing snapshots immutable unless a request is newly
-  captured or explicitly recalculated by a future feature.
+- Keep historical request pricing snapshots readable, and backfill older cached-token
+  rows once when they lack cached-pricing snapshot metadata.
 
 ## Current State
 
@@ -196,7 +196,9 @@ The admin settings page should remain compact and server-rendered:
 - Do not overwrite user-edited model prices or tiers when seeding defaults.
 - Existing databases must upgrade in place with nullable tier tables and metadata
   columns.
-- Existing request records and pricing snapshots remain readable.
+- Existing request records and pricing snapshots remain readable; older cached-token
+  rows without cached-pricing metadata are repriced on startup and marked as a
+  historical cached-cost backfill.
 - Existing scalar prices still work when no tiers are configured.
 - The proxy remains record-only and continues forwarding every `/v1/*` request upstream.
 
