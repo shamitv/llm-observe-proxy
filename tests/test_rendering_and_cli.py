@@ -747,6 +747,98 @@ def test_cost_estimator_handles_rates_aliases_unknowns_and_missing_usage(tmp_pat
     assert cached_fallback.snapshot["cached_input_pricing"] == "standard_input_rate"
 
 
+def test_cost_estimator_uses_matching_model_price_tier_per_request(tmp_path) -> None:
+    db_path = tmp_path / "tier-estimator.sqlite3"
+    settings = Settings(database_url=f"sqlite:///{db_path.as_posix()}")
+    engine = create_db_engine(settings.database_url)
+    init_db(engine)
+    session_factory = create_session_factory(engine)
+
+    with session_scope(session_factory) as session:
+        price = upsert_model_price(
+            session,
+            provider_slug="openai",
+            model="tiered-cost-model",
+            input_usd_per_million="10",
+            cached_input_usd_per_million="1",
+            output_usd_per_million="20",
+            source_url="https://example.com/scalar",
+            checked_at="2026-05-23",
+        )
+        low = upsert_model_price_tier(
+            session,
+            model_price_id=price.id,
+            max_input_tokens="1000",
+            input_usd_per_million="1",
+            cached_input_usd_per_million="0.1",
+            output_usd_per_million="2",
+            label="short",
+            source_url="https://example.com/short",
+            checked_at="2026-05-23",
+            notes="short tier",
+        )
+        high = upsert_model_price_tier(
+            session,
+            model_price_id=price.id,
+            min_input_tokens="1000",
+            input_usd_per_million="3",
+            cached_input_usd_per_million="0.3",
+            output_usd_per_million="6",
+            label="long",
+        )
+
+        low_estimate = estimate_cost(
+            session,
+            usage=ExtractedTokenUsage(
+                input_tokens=999,
+                cached_input_tokens=900,
+                cache_write_input_tokens=25,
+                output_tokens=100,
+                total_tokens=1099,
+            ),
+            billing_model=price.model,
+            provider_slug="openai",
+        )
+        boundary_estimate = estimate_cost(
+            session,
+            usage=ExtractedTokenUsage(input_tokens=1000, output_tokens=100),
+            billing_model=price.model,
+            provider_slug="openai",
+        )
+        run_estimate = estimate_run_cost(
+            [
+                ExtractedTokenUsage(
+                    input_tokens=999,
+                    cached_input_tokens=900,
+                    cache_write_input_tokens=25,
+                    output_tokens=100,
+                ),
+                ExtractedTokenUsage(input_tokens=1000, output_tokens=100),
+            ],
+            price,
+        )
+    engine.dispose()
+
+    assert low_estimate.input_cost_usd == Decimal("0.000189")
+    assert low_estimate.output_cost_usd == Decimal("0.0002")
+    assert low_estimate.total_cost_usd == Decimal("0.000389")
+    assert low_estimate.cached_input_cost_usd == Decimal("0.00009")
+    assert low_estimate.snapshot["pricing_source_kind"] == "model_price_tier"
+    assert low_estimate.snapshot["tier_id"] == low.id
+    assert low_estimate.snapshot["tier_label"] == "short"
+    assert low_estimate.snapshot["source_url"] == "https://example.com/short"
+    assert low_estimate.snapshot["cache_write_input_tokens"] == 25
+    assert boundary_estimate.snapshot["tier_id"] == high.id
+    assert boundary_estimate.input_cost_usd == Decimal("0.003")
+    assert boundary_estimate.output_cost_usd == Decimal("0.0006")
+    assert run_estimate.input_cost_usd == Decimal("0.003189")
+    assert run_estimate.output_cost_usd == Decimal("0.0008")
+    assert run_estimate.total_cost_usd == Decimal("0.003989")
+    assert run_estimate.cached_input_cost_usd == Decimal("0.00009")
+    assert run_estimate.cache_write_input_tokens == 25
+    assert run_estimate.mixed_tiers is True
+
+
 def test_run_cost_estimator_sums_usage_and_counts_missing_requests(tmp_path) -> None:
     db_path = tmp_path / "run-estimator.sqlite3"
     settings = Settings(database_url=f"sqlite:///{db_path.as_posix()}")

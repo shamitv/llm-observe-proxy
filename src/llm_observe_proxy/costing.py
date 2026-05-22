@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 
 from llm_observe_proxy.capture import ExtractedTokenUsage
 from llm_observe_proxy.config import normalize_provider_url
-from llm_observe_proxy.database import ModelPrice, ModelProvider, RequestRecord
+from llm_observe_proxy.database import ModelPrice, ModelPriceTier, ModelProvider, RequestRecord
 
 TOKENS_PER_MILLION = Decimal("1000000")
 
@@ -22,6 +22,7 @@ class CostEstimate:
     billing_model: str | None
     input_tokens: int | None
     cached_input_tokens: int | None
+    cache_write_input_tokens: int | None
     output_tokens: int | None
     total_tokens: int | None
     input_cost_usd: Decimal | None = None
@@ -41,8 +42,10 @@ class RunCostEstimate:
     input_usd_per_million: Decimal
     cached_input_usd_per_million: Decimal | None
     output_usd_per_million: Decimal
+    mixed_tiers: bool
     input_tokens: int
     cached_input_tokens: int
+    cache_write_input_tokens: int
     output_tokens: int
     total_tokens: int
     input_cost_usd: Decimal
@@ -52,6 +55,31 @@ class RunCostEstimate:
     included_request_count: int
     missing_usage_request_count: int
     notes: str | None = None
+
+
+@dataclass(frozen=True)
+class _ResolvedRates:
+    input_usd_per_million: Decimal
+    cached_input_usd_per_million: Decimal | None
+    output_usd_per_million: Decimal
+    source_kind: str
+    tier: ModelPriceTier | None = None
+
+    @property
+    def source_url(self) -> str | None:
+        return self.tier.source_url if self.tier else None
+
+    @property
+    def checked_at(self) -> str | None:
+        return self.tier.checked_at if self.tier else None
+
+    @property
+    def release_date(self) -> str | None:
+        return self.tier.release_date if self.tier else None
+
+    @property
+    def notes(self) -> str | None:
+        return self.tier.notes if self.tier else None
 
 
 def estimate_cost(
@@ -70,6 +98,7 @@ def estimate_cost(
         billing_model=resolved_model,
         input_tokens=usage.input_tokens,
         cached_input_tokens=usage.cached_input_tokens,
+        cache_write_input_tokens=usage.cache_write_input_tokens,
         output_tokens=usage.output_tokens,
         total_tokens=usage.total_tokens,
     )
@@ -80,13 +109,14 @@ def estimate_cost(
     if price is None or usage.input_tokens is None or usage.output_tokens is None:
         return base
 
+    rates = _resolve_rates(price, usage.input_tokens)
     input_cost, cached_input_cost, uncached_input_tokens, cache_pricing = _input_cost(
         usage.input_tokens,
         usage.cached_input_tokens,
-        input_rate=price.input_usd_per_million,
-        cached_input_rate=price.cached_input_usd_per_million,
+        input_rate=rates.input_usd_per_million,
+        cached_input_rate=rates.cached_input_usd_per_million,
     )
-    output_cost = _token_cost(usage.output_tokens, price.output_usd_per_million)
+    output_cost = _token_cost(usage.output_tokens, rates.output_usd_per_million)
     total_cost = input_cost + output_cost
     snapshot = {
         "provider_slug": provider.slug,
@@ -95,24 +125,39 @@ def estimate_cost(
         "billing_model": resolved_model,
         "matched_model": price.model,
         "display_name": price.display_name,
-        "input_usd_per_million": str(price.input_usd_per_million),
+        "input_usd_per_million": str(rates.input_usd_per_million),
         "cached_input_usd_per_million": (
-            str(price.cached_input_usd_per_million)
-            if price.cached_input_usd_per_million is not None
+            str(rates.cached_input_usd_per_million)
+            if rates.cached_input_usd_per_million is not None
             else None
         ),
-        "output_usd_per_million": str(price.output_usd_per_million),
+        "output_usd_per_million": str(rates.output_usd_per_million),
         "cached_input_tokens": usage.cached_input_tokens,
+        "cache_write_input_tokens": usage.cache_write_input_tokens,
         "uncached_input_tokens": uncached_input_tokens,
         "cached_input_pricing": cache_pricing,
-        "source": price.notes,
+        "pricing_source_kind": rates.source_kind,
+        "source_url": rates.source_url or price.source_url,
+        "checked_at": rates.checked_at or price.checked_at,
+        "release_date": rates.release_date or price.release_date,
+        "source": rates.notes or price.notes,
     }
+    if rates.tier is not None:
+        snapshot.update(
+            {
+                "tier_id": rates.tier.id,
+                "tier_label": rates.tier.label,
+                "tier_min_input_tokens": rates.tier.min_input_tokens,
+                "tier_max_input_tokens": rates.tier.max_input_tokens,
+            }
+        )
     return CostEstimate(
         provider_slug=provider.slug,
         provider_name=provider.name,
         billing_model=resolved_model,
         input_tokens=usage.input_tokens,
         cached_input_tokens=usage.cached_input_tokens,
+        cache_write_input_tokens=usage.cache_write_input_tokens,
         output_tokens=usage.output_tokens,
         total_tokens=usage.total_tokens,
         input_cost_usd=input_cost,
@@ -129,10 +174,15 @@ def estimate_run_cost(
 ) -> RunCostEstimate:
     input_tokens = 0
     cached_input_tokens = 0
+    cache_write_input_tokens = 0
     output_tokens = 0
     total_tokens = 0
+    input_cost = Decimal("0")
+    output_cost = Decimal("0")
+    cached_input_cost: Decimal | None = None
     included_request_count = 0
     missing_usage_request_count = 0
+    rate_keys: set[tuple[Decimal, Decimal | None, Decimal, str, int | None]] = set()
 
     for usage in usages:
         if usage.input_tokens is None or usage.output_tokens is None:
@@ -143,20 +193,36 @@ def estimate_run_cost(
         input_tokens += usage.input_tokens
         if usage.cached_input_tokens is not None:
             cached_input_tokens += min(usage.cached_input_tokens, usage.input_tokens)
+        if usage.cache_write_input_tokens is not None:
+            cache_write_input_tokens += usage.cache_write_input_tokens
         output_tokens += usage.output_tokens
         total_tokens += (
             usage.total_tokens
             if usage.total_tokens is not None
             else usage.input_tokens + usage.output_tokens
         )
-
-    input_cost, cached_input_cost, _, _ = _input_cost(
-        input_tokens,
-        cached_input_tokens,
-        input_rate=price.input_usd_per_million,
-        cached_input_rate=price.cached_input_usd_per_million,
-    )
-    output_cost = _token_cost(output_tokens, price.output_usd_per_million)
+        rates = _resolve_rates(price, usage.input_tokens)
+        request_input_cost, request_cached_input_cost, _, _ = _input_cost(
+            usage.input_tokens,
+            usage.cached_input_tokens,
+            input_rate=rates.input_usd_per_million,
+            cached_input_rate=rates.cached_input_usd_per_million,
+        )
+        input_cost += request_input_cost
+        output_cost += _token_cost(usage.output_tokens, rates.output_usd_per_million)
+        if request_cached_input_cost is not None:
+            cached_input_cost = (cached_input_cost or Decimal("0")) + request_cached_input_cost
+        rate_keys.add(
+            (
+                rates.input_usd_per_million,
+                rates.cached_input_usd_per_million,
+                rates.output_usd_per_million,
+                rates.source_kind,
+                rates.tier.id if rates.tier else None,
+            )
+        )
+    mixed_tiers = len(rate_keys) > 1
+    display_rates = _display_rates(price, rate_keys)
     provider = price.provider
     return RunCostEstimate(
         provider_slug=price.provider_slug,
@@ -164,11 +230,13 @@ def estimate_run_cost(
         currency=provider.currency if provider else "USD",
         model=price.model,
         display_name=price.display_name,
-        input_usd_per_million=price.input_usd_per_million,
-        cached_input_usd_per_million=price.cached_input_usd_per_million,
-        output_usd_per_million=price.output_usd_per_million,
+        input_usd_per_million=display_rates[0],
+        cached_input_usd_per_million=display_rates[1],
+        output_usd_per_million=display_rates[2],
+        mixed_tiers=mixed_tiers,
         input_tokens=input_tokens,
         cached_input_tokens=cached_input_tokens,
+        cache_write_input_tokens=cache_write_input_tokens,
         output_tokens=output_tokens,
         total_tokens=total_tokens,
         input_cost_usd=input_cost,
@@ -251,6 +319,55 @@ def _price_aliases(price: ModelPrice) -> tuple[str, ...]:
     if not isinstance(aliases, list):
         return ()
     return tuple(alias for alias in aliases if isinstance(alias, str))
+
+
+def _resolve_rates(price: ModelPrice, input_tokens: int) -> _ResolvedRates:
+    tier = _matching_tier(price, input_tokens)
+    if tier is None:
+        return _ResolvedRates(
+            input_usd_per_million=price.input_usd_per_million,
+            cached_input_usd_per_million=price.cached_input_usd_per_million,
+            output_usd_per_million=price.output_usd_per_million,
+            source_kind="model_price",
+        )
+    return _ResolvedRates(
+        input_usd_per_million=tier.input_usd_per_million,
+        cached_input_usd_per_million=tier.cached_input_usd_per_million,
+        output_usd_per_million=tier.output_usd_per_million,
+        source_kind="model_price_tier",
+        tier=tier,
+    )
+
+
+def _matching_tier(price: ModelPrice, input_tokens: int) -> ModelPriceTier | None:
+    for tier in sorted(
+        price.tiers,
+        key=lambda item: (
+            item.min_input_tokens if item.min_input_tokens is not None else 0,
+            item.max_input_tokens if item.max_input_tokens is not None else 2**63 - 1,
+        ),
+    ):
+        minimum = tier.min_input_tokens if tier.min_input_tokens is not None else 0
+        if input_tokens < minimum:
+            continue
+        if tier.max_input_tokens is not None and input_tokens >= tier.max_input_tokens:
+            continue
+        return tier
+    return None
+
+
+def _display_rates(
+    price: ModelPrice,
+    rate_keys: set[tuple[Decimal, Decimal | None, Decimal, str, int | None]],
+) -> tuple[Decimal, Decimal | None, Decimal]:
+    if len(rate_keys) == 1:
+        input_rate, cached_input_rate, output_rate, _, _ = next(iter(rate_keys))
+        return input_rate, cached_input_rate, output_rate
+    return (
+        price.input_usd_per_million,
+        price.cached_input_usd_per_million,
+        price.output_usd_per_million,
+    )
 
 
 def _token_cost(tokens: int, usd_per_million: Decimal) -> Decimal:

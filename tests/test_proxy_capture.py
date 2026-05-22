@@ -19,6 +19,7 @@ from llm_observe_proxy.database import (
     session_scope,
     start_task_run,
     upsert_model_price,
+    upsert_model_price_tier,
     upsert_model_provider,
 )
 
@@ -114,6 +115,46 @@ def test_non_streaming_chat_completion_accounts_for_cached_input_tokens(
         assert snapshot["cached_input_tokens"] == 800
         assert snapshot["uncached_input_tokens"] == 200
         assert snapshot["cached_input_pricing"] == "cached_input_rate"
+
+
+def test_non_streaming_chat_completion_snapshots_tiered_cost(
+    proxy_client: TestClient,
+    proxy_app: FastAPI,
+) -> None:
+    _configure_fake_pricing(proxy_app, model="gpt-test")
+    with session_scope(proxy_app.state.session_factory) as session:
+        price = upsert_model_price(
+            session,
+            provider_slug="fake",
+            model="gpt-test",
+            input_usd_per_million="10",
+            output_usd_per_million="20",
+        )
+        upsert_model_price_tier(
+            session,
+            model_price_id=price.id,
+            max_input_tokens="100",
+            input_usd_per_million="1",
+            cached_input_usd_per_million="0.1",
+            output_usd_per_million="2",
+            label="short",
+            source_url="https://example.com/fake-short",
+            checked_at="2026-05-23",
+        )
+
+    response = proxy_client.post(
+        "/v1/chat/completions",
+        json={"model": "gpt-test", "messages": [{"role": "user", "content": "hello"}]},
+    )
+
+    assert response.status_code == 200
+    with proxy_app.state.session_factory() as session:
+        record = session.scalars(select(RequestRecord)).one()
+        snapshot = json.loads(record.pricing_snapshot_json)
+        assert record.billing_total_cost_usd == Decimal("0.00001200")
+        assert snapshot["pricing_source_kind"] == "model_price_tier"
+        assert snapshot["tier_label"] == "short"
+        assert snapshot["source_url"] == "https://example.com/fake-short"
 
 
 def test_configured_model_route_rewrites_injects_key_and_records_metadata(
@@ -351,6 +392,51 @@ def test_streaming_request_snapshots_cost_when_usage_event_is_present(
         assert record.billing_input_tokens == 6
         assert record.billing_output_tokens == 3
         assert record.billing_total_cost_usd == Decimal("0.00001200")
+
+
+def test_streaming_request_snapshots_tiered_cost_when_usage_event_is_present(
+    proxy_client: TestClient,
+    proxy_app: FastAPI,
+) -> None:
+    _configure_fake_pricing(proxy_app, model="gpt-test")
+    with session_scope(proxy_app.state.session_factory) as session:
+        price = upsert_model_price(
+            session,
+            provider_slug="fake",
+            model="gpt-test",
+            input_usd_per_million="10",
+            output_usd_per_million="20",
+        )
+        upsert_model_price_tier(
+            session,
+            model_price_id=price.id,
+            max_input_tokens="100",
+            input_usd_per_million="1",
+            cached_input_usd_per_million="0.1",
+            output_usd_per_million="2",
+            label="stream short",
+        )
+
+    with proxy_client.stream(
+        "POST",
+        "/v1/chat/completions",
+        json={
+            "model": "gpt-test",
+            "messages": [{"role": "user", "content": "stream"}],
+            "stream": True,
+            "stream_options": {"include_usage": True},
+        },
+    ) as response:
+        body = b"".join(response.iter_bytes())
+
+    assert response.status_code == 200
+    assert b'"usage"' in body
+    with proxy_app.state.session_factory() as session:
+        record = session.scalars(select(RequestRecord)).one()
+        snapshot = json.loads(record.pricing_snapshot_json)
+        assert record.billing_total_cost_usd == Decimal("0.00001200")
+        assert snapshot["pricing_source_kind"] == "model_price_tier"
+        assert snapshot["tier_label"] == "stream short"
 
 
 def test_streaming_request_snapshots_cost_from_timings_event(
