@@ -10,8 +10,8 @@ or external database.
 
 Published package: https://pypi.org/project/llm-observe-proxy/
 
-Current release: `0.3.0`, with editable model pricing, cost snapshots, run what-if
-comparisons, and a refined run detail summary layout.
+Current release: `0.4.0`, with editable scalar and tiered model pricing, cached-token
+cost snapshots, router fallback seed data, and run what-if comparisons.
 
 ## Features
 

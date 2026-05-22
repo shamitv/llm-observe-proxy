@@ -13,7 +13,7 @@ to the next task.
 - [x] `feat: manage model price tiers in settings`
 - [x] `feat: seed current cached and open-weight pricing`
 - [x] `docs: document v0.4 pricing behavior`
-- [ ] `chore: bump version to 0.4.0`
+- [x] `chore: bump version to 0.4.0`
 
 ## Feature Tasks
 
@@ -113,13 +113,13 @@ Skip notes:
 
 ### 8. Version And Release Checks
 
-- [ ] Bump `pyproject.toml` to `0.4.0`.
-- [ ] Update README version strings.
-- [ ] Run `ruff check src tests scripts`.
-- [ ] Run `python -m compileall -q src tests scripts`.
-- [ ] Run `pytest -q`.
-- [ ] Run `python scripts/publish_pypi.py --dry-run`.
-- [ ] Commit as `chore: bump version to 0.4.0`.
+- [x] Bump `pyproject.toml` to `0.4.0`.
+- [x] Update README version strings.
+- [x] Run `ruff check src tests scripts`.
+- [x] Run `python -m compileall -q src tests scripts`.
+- [x] Run `pytest -q`.
+- [x] Run `python scripts/publish_pypi.py --dry-run`.
+- [x] Commit as `chore: bump version to 0.4.0`.
 
 ## Acceptance Checklist
 
@@ -131,4 +131,4 @@ Skip notes:
 - [x] Router fallback prices are stored under router providers.
 - [x] Settings UI can manage tier rows without JavaScript.
 - [x] Documentation reflects actual cache and tier behavior.
-- [ ] Full test suite and release dry run pass.
+- [x] Full test suite and release dry run pass.
