@@ -22,13 +22,16 @@ from llm_observe_proxy.config import (
 from llm_observe_proxy.costing import estimate_cost, estimate_run_cost
 from llm_observe_proxy.database import (
     ModelPrice,
+    ModelPriceTier,
     ModelProvider,
     create_db_engine,
     create_session_factory,
+    delete_model_price_tier,
     init_db,
     session_scope,
     set_incoming_server,
     upsert_model_price,
+    upsert_model_price_tier,
 )
 from llm_observe_proxy.rendering import render_payload
 from llm_observe_proxy.token_estimation import estimate_input_tokens
@@ -414,6 +417,166 @@ def test_init_db_seeds_model_pricing_without_overwriting_edits(tmp_path) -> None
     assert price_count >= 15
 
 
+def test_model_price_tiers_validate_bounds_and_preserve_relationships(tmp_path) -> None:
+    db_path = tmp_path / "tiered-pricing.sqlite3"
+    settings = Settings(database_url=f"sqlite:///{db_path.as_posix()}")
+    engine = create_db_engine(settings.database_url)
+    init_db(engine)
+    session_factory = create_session_factory(engine)
+
+    with session_scope(session_factory) as session:
+        price = upsert_model_price(
+            session,
+            provider_slug="openai",
+            model="tiered-model",
+            display_name="Tiered Model",
+            input_usd_per_million="1",
+            cached_input_usd_per_million="0.1",
+            output_usd_per_million="2",
+            source_url="https://example.com/pricing",
+            checked_at="2026-05-23",
+            release_date="2026-01-15",
+            notes="source metadata",
+        )
+        low = upsert_model_price_tier(
+            session,
+            model_price_id=price.id,
+            min_input_tokens="",
+            max_input_tokens="1000",
+            input_usd_per_million="0.5",
+            cached_input_usd_per_million="0.05",
+            output_usd_per_million="1",
+            label="short",
+            source_url="https://example.com/tier",
+            checked_at="2026-05-23",
+            release_date="2026-01-15",
+        )
+        high = upsert_model_price_tier(
+            session,
+            model_price_id=price.id,
+            min_input_tokens="1000",
+            max_input_tokens="",
+            input_usd_per_million="1",
+            output_usd_per_million="2",
+            label="long",
+        )
+
+        with pytest.raises(ValueError, match="overlaps"):
+            upsert_model_price_tier(
+                session,
+                model_price_id=price.id,
+                min_input_tokens="999",
+                max_input_tokens="2000",
+                input_usd_per_million="1",
+                output_usd_per_million="2",
+            )
+        with pytest.raises(ValueError, match="greater than"):
+            upsert_model_price_tier(
+                session,
+                model_price_id=price.id,
+                min_input_tokens="10",
+                max_input_tokens="10",
+                input_usd_per_million="1",
+                output_usd_per_million="2",
+            )
+
+        assert price.source_url == "https://example.com/pricing"
+        assert price.checked_at == "2026-05-23"
+        assert price.release_date == "2026-01-15"
+        assert low.min_input_tokens is None
+        assert low.max_input_tokens == 1000
+        assert low.cached_input_usd_per_million == Decimal("0.050000")
+        assert high.max_input_tokens is None
+        assert delete_model_price_tier(session, low.id) is True
+        assert delete_model_price_tier(session, low.id) is False
+        session.flush()
+        assert session.get(ModelPriceTier, low.id) is None
+
+        price_id = price.id
+        session.delete(price)
+        session.flush()
+        assert session.scalars(
+            select(ModelPriceTier).where(ModelPriceTier.model_price_id == price_id)
+        ).all() == []
+    engine.dispose()
+
+
+def test_init_db_upgrades_existing_sqlite_model_prices_with_source_and_tiers(
+    tmp_path,
+) -> None:
+    db_path = tmp_path / "old-pricing.sqlite3"
+    settings = Settings(database_url=f"sqlite:///{db_path.as_posix()}")
+    engine = create_db_engine(settings.database_url)
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "CREATE TABLE model_providers ("
+                "slug VARCHAR(64) PRIMARY KEY, "
+                "name VARCHAR(128), "
+                "upstream_url TEXT, "
+                "currency VARCHAR(16), "
+                "created_at DATETIME, "
+                "updated_at DATETIME)"
+            )
+        )
+        connection.execute(
+            text(
+                "CREATE TABLE model_prices ("
+                "id INTEGER PRIMARY KEY, "
+                "provider_slug VARCHAR(64), "
+                "model VARCHAR(256), "
+                "aliases_json TEXT, "
+                "display_name VARCHAR(256), "
+                "input_usd_per_million NUMERIC, "
+                "output_usd_per_million NUMERIC, "
+                "active BOOLEAN, "
+                "notes TEXT, "
+                "created_at DATETIME, "
+                "updated_at DATETIME)"
+            )
+        )
+        connection.execute(
+            text(
+                "INSERT INTO model_providers "
+                "(slug, name, upstream_url, currency) "
+                "VALUES ('legacy', 'Legacy', 'http://localhost:9000/v1', 'USD')"
+            )
+        )
+        connection.execute(
+            text(
+                "INSERT INTO model_prices "
+                "(id, provider_slug, model, input_usd_per_million, "
+                "output_usd_per_million, active) "
+                "VALUES (1, 'legacy', 'legacy-model', 1, 2, 1)"
+            )
+        )
+
+    init_db(engine)
+
+    inspector = inspect(engine)
+    price_columns = {column["name"] for column in inspector.get_columns("model_prices")}
+    tier_columns = {column["name"] for column in inspector.get_columns("model_price_tiers")}
+    tier_indexes = {index["name"] for index in inspector.get_indexes("model_price_tiers")}
+    with engine.connect() as connection:
+        legacy_model = connection.execute(
+            text("SELECT model FROM model_prices WHERE provider_slug = 'legacy'")
+        ).scalar_one()
+    engine.dispose()
+
+    assert {"source_url", "checked_at", "release_date"}.issubset(price_columns)
+    assert {
+        "model_price_id",
+        "min_input_tokens",
+        "max_input_tokens",
+        "cached_input_usd_per_million",
+        "source_url",
+        "checked_at",
+        "release_date",
+    }.issubset(tier_columns)
+    assert "ix_model_price_tiers_model_price_id" in tier_indexes
+    assert legacy_model == "legacy-model"
+
+
 def test_cost_estimator_handles_rates_aliases_unknowns_and_missing_usage(tmp_path) -> None:
     db_path = tmp_path / "estimator.sqlite3"
     settings = Settings(database_url=f"sqlite:///{db_path.as_posix()}")
@@ -552,6 +715,7 @@ def test_init_db_upgrades_existing_sqlite_request_records_with_route_metadata(tm
     inspector = inspect(engine)
     columns = {column["name"] for column in inspector.get_columns("request_records")}
     price_columns = {column["name"] for column in inspector.get_columns("model_prices")}
+    tier_columns = {column["name"] for column in inspector.get_columns("model_price_tiers")}
     indexes = {index["name"] for index in inspector.get_indexes("request_records")}
     with engine.connect() as connection:
         ids = connection.execute(text("SELECT id FROM request_records")).scalars().all()
@@ -578,6 +742,18 @@ def test_init_db_upgrades_existing_sqlite_request_records_with_route_metadata(tm
         "estimated_input_model",
     }.issubset(columns)
     assert "cached_input_usd_per_million" in price_columns
+    assert {"source_url", "checked_at", "release_date"}.issubset(price_columns)
+    assert {
+        "model_price_id",
+        "min_input_tokens",
+        "max_input_tokens",
+        "input_usd_per_million",
+        "cached_input_usd_per_million",
+        "output_usd_per_million",
+        "source_url",
+        "checked_at",
+        "release_date",
+    }.issubset(tier_columns)
     assert {
         "ix_request_records_task_run_id",
         "ix_request_records_upstream_model",

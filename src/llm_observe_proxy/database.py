@@ -34,6 +34,7 @@ from sqlalchemy.orm import (
     contains_eager,
     mapped_column,
     relationship,
+    selectinload,
     sessionmaker,
 )
 
@@ -242,6 +243,9 @@ class ModelPrice(Base):
     )
     output_usd_per_million: Mapped[Decimal] = mapped_column(Numeric(18, 6))
     active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    source_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    checked_at: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    release_date: Mapped[str | None] = mapped_column(String(32), nullable=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     updated_at: Mapped[datetime] = mapped_column(
@@ -251,6 +255,43 @@ class ModelPrice(Base):
     )
 
     provider: Mapped[ModelProvider] = relationship(back_populates="prices")
+    tiers: Mapped[list[ModelPriceTier]] = relationship(
+        back_populates="price",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        order_by="ModelPriceTier.min_input_tokens",
+    )
+
+
+class ModelPriceTier(Base):
+    __tablename__ = "model_price_tiers"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    model_price_id: Mapped[int] = mapped_column(
+        ForeignKey("model_prices.id", ondelete="CASCADE"),
+        index=True,
+    )
+    min_input_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    max_input_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    input_usd_per_million: Mapped[Decimal] = mapped_column(Numeric(18, 6))
+    cached_input_usd_per_million: Mapped[Decimal | None] = mapped_column(
+        Numeric(18, 6),
+        nullable=True,
+    )
+    output_usd_per_million: Mapped[Decimal] = mapped_column(Numeric(18, 6))
+    label: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    source_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    checked_at: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    release_date: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=_now,
+        onupdate=_now,
+    )
+
+    price: Mapped[ModelPrice] = relationship(back_populates="tiers")
 
 
 class AppSetting(Base):
@@ -386,7 +427,7 @@ def list_model_prices(session: Session) -> list[ModelPrice]:
         session.scalars(
             select(ModelPrice)
             .join(ModelProvider)
-            .options(contains_eager(ModelPrice.provider))
+            .options(contains_eager(ModelPrice.provider), selectinload(ModelPrice.tiers))
             .order_by(ModelProvider.name, ModelPrice.model)
         ).all()
     )
@@ -454,6 +495,9 @@ def upsert_model_price(
     aliases: str | list[str] | tuple[str, ...] = "",
     display_name: str = "",
     active: bool = True,
+    source_url: str = "",
+    checked_at: str = "",
+    release_date: str = "",
     notes: str = "",
 ) -> ModelPrice:
     resolved_provider_slug = normalize_provider_slug(provider_slug)
@@ -489,9 +533,76 @@ def upsert_model_price(
     price.cached_input_usd_per_million = cached_input_rate
     price.output_usd_per_million = output_rate
     price.active = active
+    price.source_url = _optional_metadata(source_url, "Source URL", max_length=2048)
+    price.checked_at = _optional_metadata(checked_at, "Checked date")
+    price.release_date = _optional_metadata(release_date, "Release date")
     price.notes = notes.strip() or None
     session.flush()
     return price
+
+
+def upsert_model_price_tier(
+    session: Session,
+    *,
+    model_price_id: int,
+    input_usd_per_million: object,
+    output_usd_per_million: object,
+    cached_input_usd_per_million: object = "",
+    min_input_tokens: object = "",
+    max_input_tokens: object = "",
+    label: str = "",
+    source_url: str = "",
+    checked_at: str = "",
+    release_date: str = "",
+    notes: str = "",
+    tier_id: int | None = None,
+) -> ModelPriceTier:
+    price = session.get(ModelPrice, model_price_id)
+    if price is None:
+        raise ValueError("Model price was not found.")
+
+    minimum = _optional_token_bound(min_input_tokens, "Minimum input tokens")
+    maximum = _optional_token_bound(max_input_tokens, "Maximum input tokens")
+    _validate_tier_bounds(minimum, maximum)
+
+    tier = session.get(ModelPriceTier, tier_id) if tier_id is not None else None
+    if tier_id is not None and (tier is None or tier.model_price_id != model_price_id):
+        raise ValueError("Model price tier was not found.")
+    _validate_non_overlapping_tier(
+        session,
+        price.id,
+        minimum,
+        maximum,
+        tier.id if tier else None,
+    )
+
+    if tier is None:
+        tier = ModelPriceTier(model_price_id=model_price_id)
+        session.add(tier)
+    tier.min_input_tokens = minimum
+    tier.max_input_tokens = maximum
+    tier.input_usd_per_million = _decimal_rate(input_usd_per_million, "Tier input price")
+    tier.cached_input_usd_per_million = _optional_decimal_rate(
+        cached_input_usd_per_million,
+        "Tier cached input price",
+    )
+    tier.output_usd_per_million = _decimal_rate(output_usd_per_million, "Tier output price")
+    tier.label = label.strip() or None
+    tier.source_url = _optional_metadata(source_url, "Tier source URL", max_length=2048)
+    tier.checked_at = _optional_metadata(checked_at, "Tier checked date")
+    tier.release_date = _optional_metadata(release_date, "Tier release date")
+    tier.notes = notes.strip() or None
+    session.flush()
+    return tier
+
+
+def delete_model_price_tier(session: Session, tier_id: int) -> bool:
+    tier = session.get(ModelPriceTier, tier_id)
+    if tier is None:
+        return False
+    session.delete(tier)
+    session.flush()
+    return True
 
 
 def delete_model_price(session: Session, provider_slug: str, model: str) -> bool:
@@ -822,6 +933,19 @@ def _ensure_sqlite_model_price_schema(engine: Engine) -> None:
             connection.execute(
                 text("ALTER TABLE model_prices ADD COLUMN cached_input_usd_per_million NUMERIC")
             )
+        if "source_url" not in columns:
+            connection.execute(text("ALTER TABLE model_prices ADD COLUMN source_url TEXT"))
+        if "checked_at" not in columns:
+            connection.execute(text("ALTER TABLE model_prices ADD COLUMN checked_at VARCHAR(32)"))
+        if "release_date" not in columns:
+            connection.execute(text("ALTER TABLE model_prices ADD COLUMN release_date VARCHAR(32)"))
+        connection.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS "
+                "ix_model_price_tiers_model_price_id "
+                "ON model_price_tiers (model_price_id)"
+            )
+        )
 
 
 def _set_ui_model_routes(session: Session, routes: list[ModelRoute]) -> None:
@@ -855,6 +979,59 @@ def _optional_decimal_rate(value: object, label: str) -> Decimal | None:
     if isinstance(value, str) and not value.strip():
         return None
     return _decimal_rate(value, label)
+
+
+def _optional_token_bound(value: object, label: str) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, str) and not value.strip():
+        return None
+    try:
+        bound = int(str(value).strip())
+    except ValueError:
+        raise ValueError(f"{label} must be a whole number.") from None
+    if bound < 0:
+        raise ValueError(f"{label} must be zero or greater.")
+    return bound
+
+
+def _validate_tier_bounds(minimum: int | None, maximum: int | None) -> None:
+    if minimum is not None and maximum is not None and maximum <= minimum:
+        raise ValueError("Maximum input tokens must be greater than minimum input tokens.")
+
+
+def _validate_non_overlapping_tier(
+    session: Session,
+    model_price_id: int,
+    minimum: int | None,
+    maximum: int | None,
+    tier_id: int | None,
+) -> None:
+    new_min = minimum if minimum is not None else 0
+    new_max = maximum
+    tiers = session.scalars(
+        select(ModelPriceTier).where(ModelPriceTier.model_price_id == model_price_id)
+    ).all()
+    for existing in tiers:
+        if tier_id is not None and existing.id == tier_id:
+            continue
+        existing_min = existing.min_input_tokens if existing.min_input_tokens is not None else 0
+        existing_max = existing.max_input_tokens
+        lower_overlaps = existing_max is None or new_min < existing_max
+        upper_overlaps = new_max is None or existing_min < new_max
+        if lower_overlaps and upper_overlaps:
+            raise ValueError("Model price tier overlaps an existing tier.")
+
+
+def _optional_metadata(value: object, label: str, *, max_length: int = 32) -> str | None:
+    if value is None:
+        return None
+    text_value = str(value).strip()
+    if not text_value:
+        return None
+    if not text_value.isascii() or len(text_value) > max_length:
+        raise ValueError(f"{label} must be ASCII and at most {max_length} characters.")
+    return text_value
 
 
 def _aliases_json(value: str | list[str] | tuple[str, ...]) -> str | None:
