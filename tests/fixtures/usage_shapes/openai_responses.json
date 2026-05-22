@@ -1,0 +1,33 @@
+{
+  "id": "resp_fixture",
+  "object": "response",
+  "created_at": 1770000000,
+  "status": "completed",
+  "model": "gpt-4.1-nano",
+  "output": [
+    {
+      "id": "msg_fixture",
+      "type": "message",
+      "status": "completed",
+      "role": "assistant",
+      "content": [
+        {
+          "type": "output_text",
+          "text": "ok",
+          "annotations": []
+        }
+      ]
+    }
+  ],
+  "usage": {
+    "input_tokens": 12,
+    "input_tokens_details": {
+      "cached_tokens": 5
+    },
+    "output_tokens": 2,
+    "output_tokens_details": {
+      "reasoning_tokens": 0
+    },
+    "total_tokens": 14
+  }
+}

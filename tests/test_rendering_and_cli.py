@@ -4,6 +4,7 @@ import json
 import subprocess
 import sys
 from decimal import Decimal
+from pathlib import Path
 
 import pytest
 from sqlalchemy import inspect, select, text
@@ -35,6 +36,16 @@ from llm_observe_proxy.database import (
 )
 from llm_observe_proxy.rendering import render_payload
 from llm_observe_proxy.token_estimation import estimate_input_tokens
+
+FIXTURES = Path(__file__).parent / "fixtures" / "usage_shapes"
+
+
+def _load_fixture_json(name: str):
+    return json.loads((FIXTURES / name).read_text(encoding="utf-8"))
+
+
+def _load_fixture_bytes(name: str) -> bytes:
+    return (FIXTURES / name).read_bytes()
 
 
 def test_app_factory_exposes_health_route() -> None:
@@ -172,6 +183,65 @@ def test_extract_token_usage_supports_chat_responses_and_responses_api() -> None
     assert input_cached_usage.total_tokens == 25
 
 
+def test_extract_token_usage_supports_live_provider_fixtures() -> None:
+    openai_chat = extract_token_usage(_load_fixture_json("openai_chat_completion.json"))
+    assert openai_chat.input_tokens == 12
+    assert openai_chat.cached_input_tokens == 4
+    assert openai_chat.output_tokens == 1
+    assert openai_chat.total_tokens == 13
+
+    openai_responses = extract_token_usage(_load_fixture_json("openai_responses.json"))
+    assert openai_responses.input_tokens == 12
+    assert openai_responses.cached_input_tokens == 5
+    assert openai_responses.output_tokens == 2
+    assert openai_responses.total_tokens == 14
+
+    hf_router = extract_token_usage(_load_fixture_json("hf_router_chat_completion.json"))
+    assert hf_router.input_tokens == 40
+    assert hf_router.cached_input_tokens == 6
+    assert hf_router.output_tokens == 2
+    assert hf_router.total_tokens == 42
+
+    openrouter = extract_token_usage(_load_fixture_json("openrouter_chat_completion.json"))
+    assert openrouter.input_tokens == 15
+    assert openrouter.cached_input_tokens == 3
+    assert openrouter.cache_write_input_tokens == 7
+    assert openrouter.output_tokens == 2
+    assert openrouter.total_tokens == 17
+
+
+def test_extract_token_usage_supports_deepseek_cache_counters() -> None:
+    usage = extract_token_usage(
+        {
+            "usage": {
+                "prompt_cache_hit_tokens": 90,
+                "prompt_cache_miss_tokens": 10,
+                "completion_tokens": 25,
+            }
+        }
+    )
+
+    assert usage.input_tokens == 100
+    assert usage.cached_input_tokens == 90
+    assert usage.output_tokens == 25
+    assert usage.total_tokens == 125
+
+    explicit_prompt_total = extract_token_usage(
+        {
+            "usage": {
+                "prompt_tokens": 150,
+                "prompt_cache_hit_tokens": 90,
+                "prompt_cache_miss_tokens": 10,
+                "completion_tokens": 25,
+            }
+        }
+    )
+
+    assert explicit_prompt_total.input_tokens == 150
+    assert explicit_prompt_total.cached_input_tokens == 90
+    assert explicit_prompt_total.output_tokens == 25
+
+
 def test_extract_token_usage_prefers_openai_usage_over_provider_fallbacks() -> None:
     usage = extract_token_usage(
         {
@@ -258,6 +328,21 @@ def test_stream_token_usage_reads_final_sse_usage_event(monkeypatch: pytest.Monk
     assert usage.cached_input_tokens == 900
     assert usage.output_tokens == 25
     assert usage.total_tokens == 1025
+
+
+def test_stream_token_usage_reads_fixture_usage_events() -> None:
+    openai_usage = _stream_token_usage(_load_fixture_bytes("openai_chat_stream.sse"))
+    assert openai_usage.input_tokens == 12
+    assert openai_usage.cached_input_tokens == 4
+    assert openai_usage.output_tokens == 1
+    assert openai_usage.total_tokens == 13
+
+    openrouter_usage = _stream_token_usage(_load_fixture_bytes("openrouter_chat_stream.sse"))
+    assert openrouter_usage.input_tokens == 15
+    assert openrouter_usage.cached_input_tokens == 3
+    assert openrouter_usage.cache_write_input_tokens == 7
+    assert openrouter_usage.output_tokens == 2
+    assert openrouter_usage.total_tokens == 17
 
 
 def test_stream_token_usage_reads_final_sse_timings_event(
