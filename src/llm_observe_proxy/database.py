@@ -50,7 +50,32 @@ from llm_observe_proxy.config import (
 
 MODEL_ROUTES_SETTING_KEY = "model_routes_json"
 DEFAULT_COMPAT_FIXES_SETTING_KEY = "default_compat_fixes_json"
-DEFAULT_PRICING_SOURCE = "Seeded from official standard paid text pricing checked on 2026-05-03."
+DEFAULT_PRICING_CHECKED_AT = "2026-05-23"
+DEFAULT_PRICING_SOURCE = (
+    "Seeded static catalog checked on 2026-05-23. Verify provider pricing before "
+    "high-volume use."
+)
+ALIBABA_PRICING_URL = "https://www.alibabacloud.com/help/en/model-studio/model-pricing"
+ALIBABA_CACHE_URL = "https://www.alibabacloud.com/help/en/model-studio/context-cache"
+DEEPSEEK_PRICING_URL = "https://api-docs.deepseek.com/quick_start/pricing"
+ZAI_PRICING_URL = "https://docs.z.ai/guides/overview/pricing"
+KIMI_K26_PRICING_URL = "https://platform.kimi.ai/docs/pricing/chat-k26"
+KIMI_K25_PRICING_URL = "https://platform.kimi.ai/docs/pricing/chat-k25"
+KIMI_K2_PRICING_URL = "https://platform.kimi.ai/docs/pricing/chat-k2"
+MISTRAL_API_URL = "https://docs.mistral.ai/api"
+MISTRAL_DEVSTRAL_URL = "https://docs.mistral.ai/models/model-cards/devstral-2-25-12"
+MISTRAL_SMALL_URL = "https://docs.mistral.ai/models/model-cards/mistral-small-4-0-26-03"
+MISTRAL_LARGE_URL = "https://docs.mistral.ai/models/model-cards/mistral-large-3-25-12"
+MISTRAL_MINISTRAL_3B_URL = "https://docs.mistral.ai/models/model-cards/ministral-3-3b-25-12"
+MISTRAL_MINISTRAL_14B_URL = "https://docs.mistral.ai/models/model-cards/ministral-3-14b-25-12"
+MISTRAL_CODESTRAL_URL = "https://docs.mistral.ai/models/model-cards/codestral-25-08"
+OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models"
+HF_ROUTER_MODELS_URL = "https://huggingface.co/inference/models"
+GPT_OSS_RELEASE_URL = "https://openai.com/index/introducing-gpt-oss/"
+IBM_GRANITE_RELEASE_URL = (
+    "https://www.ibm.com/new/announcements/"
+    "ibm-granite-4-0-hyper-efficient-high-performance-hybrid-models"
+)
 DEFAULT_MODEL_PROVIDERS = (
     {
         "slug": "openai",
@@ -70,23 +95,578 @@ DEFAULT_MODEL_PROVIDERS = (
         "upstream_url": "https://generativelanguage.googleapis.com/v1beta/openai",
         "currency": "USD",
     },
+    {
+        "slug": "alibaba",
+        "name": "Alibaba Cloud Model Studio",
+        "upstream_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+        "currency": "USD",
+    },
+    {
+        "slug": "deepseek",
+        "name": "DeepSeek",
+        "upstream_url": "https://api.deepseek.com/v1",
+        "currency": "USD",
+    },
+    {
+        "slug": "zai",
+        "name": "Z.ai",
+        "upstream_url": "https://api.z.ai/api/paas/v4",
+        "currency": "USD",
+    },
+    {
+        "slug": "moonshot",
+        "name": "Moonshot Kimi",
+        "upstream_url": "https://api.moonshot.ai/v1",
+        "currency": "USD",
+    },
+    {
+        "slug": "mistral",
+        "name": "Mistral AI",
+        "upstream_url": "https://api.mistral.ai/v1",
+        "currency": "USD",
+    },
+    {
+        "slug": "openrouter",
+        "name": "OpenRouter",
+        "upstream_url": "https://openrouter.ai/api/v1",
+        "currency": "USD",
+    },
+    {
+        "slug": "huggingface-router",
+        "name": "Hugging Face Router",
+        "upstream_url": "https://router.huggingface.co/v1",
+        "currency": "USD",
+    },
 )
 DEFAULT_MODEL_PRICES = (
-    ("openai", "gpt-5.5", "GPT-5.5", "5.00", "30.00"),
-    ("openai", "gpt-5.5-pro", "GPT-5.5 Pro", "30.00", "180.00"),
-    ("openai", "gpt-5.4", "GPT-5.4", "2.50", "15.00"),
-    ("openai", "gpt-5.4-mini", "GPT-5.4 Mini", "0.75", "4.50"),
-    ("openai", "gpt-5.4-nano", "GPT-5.4 Nano", "0.20", "1.25"),
-    ("openai", "gpt-5.4-pro", "GPT-5.4 Pro", "30.00", "180.00"),
-    ("anthropic", "claude-opus-4-7", "Claude Opus 4.7", "5.00", "25.00"),
-    ("anthropic", "claude-opus-4-6", "Claude Opus 4.6", "5.00", "25.00"),
-    ("anthropic", "claude-sonnet-4-6", "Claude Sonnet 4.6", "3.00", "15.00"),
-    ("anthropic", "claude-haiku-4-5", "Claude Haiku 4.5", "1.00", "5.00"),
-    ("google", "gemini-3.1-pro-preview", "Gemini 3.1 Pro Preview", "2.00", "12.00"),
-    ("google", "gemini-3-flash-preview", "Gemini 3 Flash Preview", "0.50", "3.00"),
-    ("google", "gemini-2.5-pro", "Gemini 2.5 Pro", "1.25", "10.00"),
-    ("google", "gemini-2.5-flash", "Gemini 2.5 Flash", "0.30", "2.50"),
-    ("google", "gemini-2.5-flash-lite", "Gemini 2.5 Flash-Lite", "0.10", "0.40"),
+    {
+        "provider_slug": "openai",
+        "model": "gpt-5.5",
+        "display_name": "GPT-5.5",
+        "input_usd_per_million": "5.00",
+        "output_usd_per_million": "30.00",
+        "notes": "Legacy scalar seed from v0.3.",
+    },
+    {
+        "provider_slug": "openai",
+        "model": "gpt-5.5-pro",
+        "display_name": "GPT-5.5 Pro",
+        "input_usd_per_million": "30.00",
+        "output_usd_per_million": "180.00",
+        "notes": "Legacy scalar seed from v0.3.",
+    },
+    {
+        "provider_slug": "openai",
+        "model": "gpt-5.4",
+        "display_name": "GPT-5.4",
+        "input_usd_per_million": "2.50",
+        "output_usd_per_million": "15.00",
+        "notes": "Legacy scalar seed from v0.3.",
+    },
+    {
+        "provider_slug": "openai",
+        "model": "gpt-5.4-mini",
+        "display_name": "GPT-5.4 Mini",
+        "input_usd_per_million": "0.75",
+        "output_usd_per_million": "4.50",
+        "notes": "Legacy scalar seed from v0.3.",
+    },
+    {
+        "provider_slug": "openai",
+        "model": "gpt-5.4-nano",
+        "display_name": "GPT-5.4 Nano",
+        "input_usd_per_million": "0.20",
+        "output_usd_per_million": "1.25",
+        "notes": "Legacy scalar seed from v0.3.",
+    },
+    {
+        "provider_slug": "openai",
+        "model": "gpt-5.4-pro",
+        "display_name": "GPT-5.4 Pro",
+        "input_usd_per_million": "30.00",
+        "output_usd_per_million": "180.00",
+        "notes": "Legacy scalar seed from v0.3.",
+    },
+    {
+        "provider_slug": "anthropic",
+        "model": "claude-opus-4-7",
+        "display_name": "Claude Opus 4.7",
+        "input_usd_per_million": "5.00",
+        "output_usd_per_million": "25.00",
+        "notes": "Legacy scalar seed from v0.3.",
+    },
+    {
+        "provider_slug": "anthropic",
+        "model": "claude-opus-4-6",
+        "display_name": "Claude Opus 4.6",
+        "input_usd_per_million": "5.00",
+        "output_usd_per_million": "25.00",
+        "notes": "Legacy scalar seed from v0.3.",
+    },
+    {
+        "provider_slug": "anthropic",
+        "model": "claude-sonnet-4-6",
+        "display_name": "Claude Sonnet 4.6",
+        "input_usd_per_million": "3.00",
+        "output_usd_per_million": "15.00",
+        "notes": "Legacy scalar seed from v0.3.",
+    },
+    {
+        "provider_slug": "anthropic",
+        "model": "claude-haiku-4-5",
+        "display_name": "Claude Haiku 4.5",
+        "input_usd_per_million": "1.00",
+        "output_usd_per_million": "5.00",
+        "notes": "Legacy scalar seed from v0.3.",
+    },
+    {
+        "provider_slug": "google",
+        "model": "gemini-3.1-pro-preview",
+        "display_name": "Gemini 3.1 Pro Preview",
+        "input_usd_per_million": "2.00",
+        "output_usd_per_million": "12.00",
+        "notes": "Legacy scalar seed from v0.3.",
+    },
+    {
+        "provider_slug": "google",
+        "model": "gemini-3-flash-preview",
+        "display_name": "Gemini 3 Flash Preview",
+        "input_usd_per_million": "0.50",
+        "output_usd_per_million": "3.00",
+        "notes": "Legacy scalar seed from v0.3.",
+    },
+    {
+        "provider_slug": "google",
+        "model": "gemini-2.5-pro",
+        "display_name": "Gemini 2.5 Pro",
+        "input_usd_per_million": "1.25",
+        "output_usd_per_million": "10.00",
+        "notes": "Legacy scalar seed from v0.3.",
+    },
+    {
+        "provider_slug": "google",
+        "model": "gemini-2.5-flash",
+        "display_name": "Gemini 2.5 Flash",
+        "input_usd_per_million": "0.30",
+        "output_usd_per_million": "2.50",
+        "notes": "Legacy scalar seed from v0.3.",
+    },
+    {
+        "provider_slug": "google",
+        "model": "gemini-2.5-flash-lite",
+        "display_name": "Gemini 2.5 Flash-Lite",
+        "input_usd_per_million": "0.10",
+        "output_usd_per_million": "0.40",
+        "notes": "Legacy scalar seed from v0.3.",
+    },
+    {
+        "provider_slug": "alibaba",
+        "model": "qwen3-coder-plus",
+        "display_name": "Qwen3 Coder Plus",
+        "input_usd_per_million": "0.574",
+        "cached_input_usd_per_million": "0.1148",
+        "output_usd_per_million": "2.294",
+        "aliases": ("qwen/qwen3-coder-plus", "qwen3-coder-plus-2025-09-23"),
+        "source_url": ALIBABA_PRICING_URL,
+        "checked_at": DEFAULT_PRICING_CHECKED_AT,
+        "release_date": "2025-09-23",
+        "notes": (
+            "Global Model Studio rates. Cached input uses implicit cache at 20% of "
+            f"input rate per {ALIBABA_CACHE_URL}."
+        ),
+        "tiers": (
+            ("0-32K", 0, 32001, "0.574", "0.1148", "2.294"),
+            ("32K-128K", 32001, 128001, "0.861", "0.1722", "3.441"),
+            ("128K-256K", 128001, 256001, "1.434", "0.2868", "5.735"),
+            ("256K-1M", 256001, 1000001, "2.868", "0.5736", "28.671"),
+        ),
+    },
+    {
+        "provider_slug": "alibaba",
+        "model": "qwen3-coder-flash",
+        "display_name": "Qwen3 Coder Flash",
+        "input_usd_per_million": "0.144",
+        "cached_input_usd_per_million": "0.0288",
+        "output_usd_per_million": "0.574",
+        "aliases": ("qwen/qwen3-coder-flash", "qwen3-coder-flash-2025-07-28"),
+        "source_url": ALIBABA_PRICING_URL,
+        "checked_at": DEFAULT_PRICING_CHECKED_AT,
+        "release_date": "2025-07-28",
+        "notes": (
+            "Global Model Studio rates. Cached input uses implicit cache at 20% of "
+            f"input rate per {ALIBABA_CACHE_URL}."
+        ),
+        "tiers": (
+            ("0-32K", 0, 32001, "0.144", "0.0288", "0.574"),
+            ("32K-128K", 32001, 128001, "0.216", "0.0432", "0.861"),
+            ("128K-256K", 128001, 256001, "0.359", "0.0718", "1.434"),
+            ("256K-1M", 256001, 1000001, "0.717", "0.1434", "3.584"),
+        ),
+    },
+    {
+        "provider_slug": "alibaba",
+        "model": "qwen3-coder-480b-a35b-instruct",
+        "display_name": "Qwen3 Coder 480B A35B Instruct",
+        "input_usd_per_million": "0.861",
+        "output_usd_per_million": "3.441",
+        "aliases": ("qwen/qwen3-coder", "Qwen/Qwen3-Coder-480B-A35B-Instruct"),
+        "source_url": ALIBABA_PRICING_URL,
+        "checked_at": DEFAULT_PRICING_CHECKED_AT,
+        "release_date": "2025-07-22",
+        "notes": "Global Model Studio Qwen3-Coder open-weight model rates.",
+        "tiers": (
+            ("0-32K", 0, 32001, "0.861", "", "3.441"),
+            ("32K-128K", 32001, 128001, "1.291", "", "5.161"),
+            ("128K-200K", 128001, 200001, "2.151", "", "8.602"),
+        ),
+    },
+    {
+        "provider_slug": "deepseek",
+        "model": "deepseek-v4-flash",
+        "display_name": "DeepSeek V4 Flash",
+        "input_usd_per_million": "0.14",
+        "cached_input_usd_per_million": "0.0028",
+        "output_usd_per_million": "0.28",
+        "aliases": ("deepseek-chat", "deepseek/deepseek-v4-flash"),
+        "source_url": DEEPSEEK_PRICING_URL,
+        "checked_at": DEFAULT_PRICING_CHECKED_AT,
+        "release_date": "2026-04-24",
+        "notes": (
+            "DeepSeek notes deepseek-chat maps to the non-thinking V4 Flash "
+            "compatibility mode."
+        ),
+    },
+    {
+        "provider_slug": "deepseek",
+        "model": "deepseek-v4-pro",
+        "display_name": "DeepSeek V4 Pro",
+        "input_usd_per_million": "0.435",
+        "cached_input_usd_per_million": "0.003625",
+        "output_usd_per_million": "0.87",
+        "aliases": ("deepseek-reasoner", "deepseek/deepseek-v4-pro"),
+        "source_url": DEEPSEEK_PRICING_URL,
+        "checked_at": DEFAULT_PRICING_CHECKED_AT,
+        "release_date": "2026-04-24",
+        "notes": (
+            "Official page lists 75% off pricing until 2026-05-31 and a "
+            "post-promo adjustment."
+        ),
+    },
+    {
+        "provider_slug": "zai",
+        "model": "glm-5.1",
+        "display_name": "GLM-5.1",
+        "input_usd_per_million": "1.40",
+        "cached_input_usd_per_million": "0.26",
+        "output_usd_per_million": "4.40",
+        "aliases": ("z-ai/glm-5.1", "zai-org/GLM-5.1-FP8"),
+        "source_url": ZAI_PRICING_URL,
+        "checked_at": DEFAULT_PRICING_CHECKED_AT,
+        "release_date": "2026-04-08",
+        "notes": "Official Z.ai model pricing. Cached input storage listed as limited-time free.",
+    },
+    {
+        "provider_slug": "zai",
+        "model": "glm-4.5",
+        "display_name": "GLM-4.5",
+        "input_usd_per_million": "0.60",
+        "cached_input_usd_per_million": "0.11",
+        "output_usd_per_million": "2.20",
+        "aliases": ("z-ai/glm-4.5", "zai-org/GLM-4.5"),
+        "source_url": ZAI_PRICING_URL,
+        "checked_at": DEFAULT_PRICING_CHECKED_AT,
+        "release_date": "2025-07-25",
+        "notes": "Official Z.ai model pricing. Cached input storage listed as limited-time free.",
+    },
+    {
+        "provider_slug": "zai",
+        "model": "glm-4.5-air",
+        "display_name": "GLM-4.5 Air",
+        "input_usd_per_million": "0.20",
+        "cached_input_usd_per_million": "0.03",
+        "output_usd_per_million": "1.10",
+        "aliases": ("z-ai/glm-4.5-air", "zai-org/GLM-4.5-Air"),
+        "source_url": ZAI_PRICING_URL,
+        "checked_at": DEFAULT_PRICING_CHECKED_AT,
+        "release_date": "2025-07-25",
+        "notes": "Official Z.ai model pricing. Cached input storage listed as limited-time free.",
+    },
+    {
+        "provider_slug": "moonshot",
+        "model": "kimi-k2.6",
+        "display_name": "Kimi K2.6",
+        "input_usd_per_million": "0.95",
+        "cached_input_usd_per_million": "0.16",
+        "output_usd_per_million": "4.00",
+        "aliases": ("moonshotai/kimi-k2.6", "kimi-k2.6-preview"),
+        "source_url": KIMI_K26_PRICING_URL,
+        "checked_at": DEFAULT_PRICING_CHECKED_AT,
+        "release_date": "2026-05-18",
+        "notes": (
+            "Official Kimi page lists input price as cache miss and cached input "
+            "as cache hit."
+        ),
+    },
+    {
+        "provider_slug": "moonshot",
+        "model": "kimi-k2.5",
+        "display_name": "Kimi K2.5",
+        "input_usd_per_million": "0.60",
+        "cached_input_usd_per_million": "0.10",
+        "output_usd_per_million": "3.00",
+        "aliases": ("moonshotai/kimi-k2.5", "moonshotai/Kimi-K2.5"),
+        "source_url": KIMI_K25_PRICING_URL,
+        "checked_at": DEFAULT_PRICING_CHECKED_AT,
+        "release_date": "2026-01-01",
+        "notes": (
+            "Official Kimi page lists input price as cache miss and cached input "
+            "as cache hit."
+        ),
+    },
+    {
+        "provider_slug": "moonshot",
+        "model": "kimi-k2-0905-preview",
+        "display_name": "Kimi K2 0905 Preview",
+        "input_usd_per_million": "0.60",
+        "cached_input_usd_per_million": "0.15",
+        "output_usd_per_million": "2.50",
+        "aliases": ("moonshotai/kimi-k2-0905", "moonshotai/kimi-k2"),
+        "source_url": KIMI_K2_PRICING_URL,
+        "checked_at": DEFAULT_PRICING_CHECKED_AT,
+        "release_date": "2025-09-05",
+        "notes": (
+            "Official page says Kimi K2 series retires on 2026-05-25; seed remains "
+            "for historical runs."
+        ),
+    },
+    {
+        "provider_slug": "mistral",
+        "model": "devstral-2512",
+        "display_name": "Devstral 2",
+        "input_usd_per_million": "0.40",
+        "cached_input_usd_per_million": "0.04",
+        "output_usd_per_million": "2.00",
+        "aliases": ("mistralai/devstral-2512", "devstral-2-25-12"),
+        "source_url": MISTRAL_DEVSTRAL_URL,
+        "checked_at": DEFAULT_PRICING_CHECKED_AT,
+        "release_date": "2025-12-09",
+        "notes": (
+            "Official model-card rates; cached tokens billed at 10% of input per "
+            f"{MISTRAL_API_URL}."
+        ),
+    },
+    {
+        "provider_slug": "mistral",
+        "model": "mistral-small-2603",
+        "display_name": "Mistral Small 4",
+        "input_usd_per_million": "0.15",
+        "cached_input_usd_per_million": "0.015",
+        "output_usd_per_million": "0.60",
+        "aliases": ("mistralai/mistral-small-2603", "mistral-small-4-0-26-03"),
+        "source_url": MISTRAL_SMALL_URL,
+        "checked_at": DEFAULT_PRICING_CHECKED_AT,
+        "release_date": "2026-03-16",
+        "notes": (
+            "Official model-card rates; cached tokens billed at 10% of input per "
+            f"{MISTRAL_API_URL}."
+        ),
+    },
+    {
+        "provider_slug": "mistral",
+        "model": "mistral-large-2512",
+        "display_name": "Mistral Large 3",
+        "input_usd_per_million": "0.50",
+        "cached_input_usd_per_million": "0.05",
+        "output_usd_per_million": "1.50",
+        "aliases": ("mistralai/mistral-large-2512", "mistral-large-3-25-12"),
+        "source_url": MISTRAL_LARGE_URL,
+        "checked_at": DEFAULT_PRICING_CHECKED_AT,
+        "release_date": "2025-12-02",
+        "notes": (
+            "Official model-card rates; cached tokens billed at 10% of input per "
+            f"{MISTRAL_API_URL}."
+        ),
+    },
+    {
+        "provider_slug": "mistral",
+        "model": "ministral-3b-2512",
+        "display_name": "Ministral 3 3B",
+        "input_usd_per_million": "0.10",
+        "cached_input_usd_per_million": "0.01",
+        "output_usd_per_million": "0.10",
+        "aliases": ("mistralai/ministral-3b-2512",),
+        "source_url": MISTRAL_MINISTRAL_3B_URL,
+        "checked_at": DEFAULT_PRICING_CHECKED_AT,
+        "release_date": "2025-12-02",
+        "notes": (
+            "Official model-card rates; cached tokens billed at 10% of input per "
+            f"{MISTRAL_API_URL}."
+        ),
+    },
+    {
+        "provider_slug": "mistral",
+        "model": "ministral-14b-2512",
+        "display_name": "Ministral 3 14B",
+        "input_usd_per_million": "0.20",
+        "cached_input_usd_per_million": "0.02",
+        "output_usd_per_million": "0.20",
+        "aliases": ("mistralai/ministral-14b-2512",),
+        "source_url": MISTRAL_MINISTRAL_14B_URL,
+        "checked_at": DEFAULT_PRICING_CHECKED_AT,
+        "release_date": "2025-12-02",
+        "notes": (
+            "Official model-card rates; cached tokens billed at 10% of input per "
+            f"{MISTRAL_API_URL}."
+        ),
+    },
+    {
+        "provider_slug": "mistral",
+        "model": "codestral-2508",
+        "display_name": "Codestral 2508",
+        "input_usd_per_million": "0.30",
+        "cached_input_usd_per_million": "0.03",
+        "output_usd_per_million": "0.90",
+        "aliases": ("mistralai/codestral-2508",),
+        "source_url": MISTRAL_CODESTRAL_URL,
+        "checked_at": DEFAULT_PRICING_CHECKED_AT,
+        "release_date": "2025-07-30",
+        "notes": (
+            "Official model-card rates; cached tokens billed at 10% of input per "
+            f"{MISTRAL_API_URL}."
+        ),
+    },
+    {
+        "provider_slug": "openrouter",
+        "model": "openai/gpt-oss-120b",
+        "display_name": "OpenAI gpt-oss-120b (OpenRouter)",
+        "input_usd_per_million": "0.039",
+        "output_usd_per_million": "0.18",
+        "aliases": ("gpt-oss-120b",),
+        "source_url": OPENROUTER_MODELS_URL,
+        "checked_at": DEFAULT_PRICING_CHECKED_AT,
+        "release_date": "2025-08-05",
+        "notes": f"Router fallback for OpenAI open-weight model released at {GPT_OSS_RELEASE_URL}.",
+    },
+    {
+        "provider_slug": "openrouter",
+        "model": "openai/gpt-oss-20b",
+        "display_name": "OpenAI gpt-oss-20b (OpenRouter)",
+        "input_usd_per_million": "0.030",
+        "output_usd_per_million": "0.14",
+        "aliases": ("gpt-oss-20b",),
+        "source_url": OPENROUTER_MODELS_URL,
+        "checked_at": DEFAULT_PRICING_CHECKED_AT,
+        "release_date": "2025-08-05",
+        "notes": f"Router fallback for OpenAI open-weight model released at {GPT_OSS_RELEASE_URL}.",
+    },
+    {
+        "provider_slug": "openrouter",
+        "model": "ibm-granite/granite-4.0-h-micro",
+        "display_name": "IBM Granite 4.0 H Micro (OpenRouter)",
+        "input_usd_per_million": "0.017",
+        "output_usd_per_million": "0.112",
+        "aliases": ("granite-4.0-h-micro",),
+        "source_url": OPENROUTER_MODELS_URL,
+        "checked_at": DEFAULT_PRICING_CHECKED_AT,
+        "release_date": "2025-10-02",
+        "notes": f"Router fallback; IBM release source: {IBM_GRANITE_RELEASE_URL}.",
+    },
+    {
+        "provider_slug": "openrouter",
+        "model": "minimax/minimax-m2.1",
+        "display_name": "MiniMax M2.1 (OpenRouter)",
+        "input_usd_per_million": "0.29",
+        "cached_input_usd_per_million": "0.03",
+        "output_usd_per_million": "0.95",
+        "aliases": ("MiniMaxAI/MiniMax-M2.1",),
+        "source_url": OPENROUTER_MODELS_URL,
+        "checked_at": DEFAULT_PRICING_CHECKED_AT,
+        "release_date": "2025-12-23",
+        "notes": "Router fallback. Cache write prices are not billed by v0.4 cost math.",
+    },
+    {
+        "provider_slug": "openrouter",
+        "model": "deepseek/deepseek-v3.2",
+        "display_name": "DeepSeek V3.2 (OpenRouter)",
+        "input_usd_per_million": "0.252",
+        "cached_input_usd_per_million": "0.0252",
+        "output_usd_per_million": "0.378",
+        "aliases": ("DeepSeek-V3.2",),
+        "source_url": OPENROUTER_MODELS_URL,
+        "checked_at": DEFAULT_PRICING_CHECKED_AT,
+        "release_date": "2025-12-01",
+        "notes": "Router fallback because current official DeepSeek API lists V4 model IDs.",
+    },
+    {
+        "provider_slug": "openrouter",
+        "model": "qwen/qwen3-coder",
+        "display_name": "Qwen3 Coder 480B A35B (OpenRouter)",
+        "input_usd_per_million": "0.22",
+        "output_usd_per_million": "1.80",
+        "aliases": ("Qwen/Qwen3-Coder-480B-A35B-Instruct",),
+        "source_url": OPENROUTER_MODELS_URL,
+        "checked_at": DEFAULT_PRICING_CHECKED_AT,
+        "release_date": "2025-07-23",
+        "notes": "Router fallback for Qwen3 Coder open-weight model.",
+    },
+    {
+        "provider_slug": "huggingface-router",
+        "model": "openai/gpt-oss-120b",
+        "display_name": "OpenAI gpt-oss-120b (HF Router)",
+        "input_usd_per_million": "0.05",
+        "output_usd_per_million": "0.25",
+        "source_url": HF_ROUTER_MODELS_URL,
+        "checked_at": DEFAULT_PRICING_CHECKED_AT,
+        "release_date": "2025-08-05",
+        "notes": "Hugging Face router cheapest listed provider row; no HF markup per pricing docs.",
+    },
+    {
+        "provider_slug": "huggingface-router",
+        "model": "openai/gpt-oss-20b",
+        "display_name": "OpenAI gpt-oss-20b (HF Router)",
+        "input_usd_per_million": "0.04",
+        "output_usd_per_million": "0.15",
+        "source_url": HF_ROUTER_MODELS_URL,
+        "checked_at": DEFAULT_PRICING_CHECKED_AT,
+        "release_date": "2025-08-05",
+        "notes": "Hugging Face router cheapest listed provider row; no HF markup per pricing docs.",
+    },
+    {
+        "provider_slug": "huggingface-router",
+        "model": "moonshotai/Kimi-K2.5",
+        "display_name": "Kimi K2.5 (HF Router)",
+        "input_usd_per_million": "0.60",
+        "output_usd_per_million": "3.00",
+        "aliases": ("moonshotai/kimi-k2.5",),
+        "source_url": HF_ROUTER_MODELS_URL,
+        "checked_at": DEFAULT_PRICING_CHECKED_AT,
+        "release_date": "2026-01-01",
+        "notes": "Hugging Face router listed provider row; no HF markup per pricing docs.",
+    },
+    {
+        "provider_slug": "huggingface-router",
+        "model": "Qwen/Qwen3-Coder-30B-A3B-Instruct",
+        "display_name": "Qwen3 Coder 30B A3B Instruct (HF Router)",
+        "input_usd_per_million": "0.07",
+        "output_usd_per_million": "0.26",
+        "aliases": ("qwen/qwen3-coder-30b-a3b-instruct",),
+        "source_url": HF_ROUTER_MODELS_URL,
+        "checked_at": DEFAULT_PRICING_CHECKED_AT,
+        "release_date": "2025-07-31",
+        "notes": "Hugging Face router cheapest listed provider row.",
+    },
+    {
+        "provider_slug": "huggingface-router",
+        "model": "MiniMaxAI/MiniMax-M2.1",
+        "display_name": "MiniMax M2.1 (HF Router)",
+        "input_usd_per_million": "0.30",
+        "output_usd_per_million": "1.20",
+        "aliases": ("minimax/minimax-m2.1",),
+        "source_url": HF_ROUTER_MODELS_URL,
+        "checked_at": DEFAULT_PRICING_CHECKED_AT,
+        "release_date": "2025-12-23",
+        "notes": "Hugging Face router listed provider row.",
+    },
 )
 
 
@@ -632,7 +1212,9 @@ def seed_default_model_pricing(engine: Engine) -> None:
                 session.add(ModelProvider(**provider_data))
         session.flush()
 
-        for provider_slug, model, display_name, input_rate, output_rate in DEFAULT_MODEL_PRICES:
+        for price_data in DEFAULT_MODEL_PRICES:
+            provider_slug = str(price_data["provider_slug"])
+            model = str(price_data["model"])
             existing = session.scalar(
                 select(ModelPrice).where(
                     ModelPrice.provider_slug == provider_slug,
@@ -641,17 +1223,41 @@ def seed_default_model_pricing(engine: Engine) -> None:
             )
             if existing is not None:
                 continue
-            session.add(
-                ModelPrice(
-                    provider_slug=provider_slug,
-                    model=model,
-                    display_name=display_name,
-                    input_usd_per_million=Decimal(input_rate),
-                    output_usd_per_million=Decimal(output_rate),
-                    active=True,
-                    notes=DEFAULT_PRICING_SOURCE,
-                )
+            price = ModelPrice(
+                provider_slug=provider_slug,
+                model=model,
+                display_name=str(price_data.get("display_name") or "") or None,
+                aliases_json=_aliases_json(price_data.get("aliases", "")),
+                input_usd_per_million=_seed_decimal(price_data["input_usd_per_million"]),
+                cached_input_usd_per_million=_seed_optional_decimal(
+                    price_data.get("cached_input_usd_per_million")
+                ),
+                output_usd_per_million=_seed_decimal(price_data["output_usd_per_million"]),
+                active=bool(price_data.get("active", True)),
+                source_url=str(price_data.get("source_url") or "") or None,
+                checked_at=str(price_data.get("checked_at") or "") or None,
+                release_date=str(price_data.get("release_date") or "") or None,
+                notes=str(price_data.get("notes") or DEFAULT_PRICING_SOURCE),
             )
+            for tier_data in price_data.get("tiers", ()):
+                label, minimum, maximum, input_rate, cached_input_rate, output_rate = tier_data
+                price.tiers.append(
+                    ModelPriceTier(
+                        min_input_tokens=minimum,
+                        max_input_tokens=maximum,
+                        input_usd_per_million=_seed_decimal(input_rate),
+                        cached_input_usd_per_million=_seed_optional_decimal(
+                            cached_input_rate
+                        ),
+                        output_usd_per_million=_seed_decimal(output_rate),
+                        label=label,
+                        source_url=price.source_url,
+                        checked_at=price.checked_at,
+                        release_date=price.release_date,
+                        notes=price.notes,
+                    )
+                )
+            session.add(price)
         session.commit()
 
 
@@ -971,6 +1577,18 @@ def _decimal_rate(value: object, label: str) -> Decimal:
     if rate < 0:
         raise ValueError(f"{label} must be zero or greater.")
     return rate
+
+
+def _seed_decimal(value: object) -> Decimal:
+    return Decimal(str(value))
+
+
+def _seed_optional_decimal(value: object) -> Decimal | None:
+    if value is None:
+        return None
+    if isinstance(value, str) and not value.strip():
+        return None
+    return _seed_decimal(value)
 
 
 def _optional_decimal_rate(value: object, label: str) -> Decimal | None:

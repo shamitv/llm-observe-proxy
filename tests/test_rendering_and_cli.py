@@ -484,6 +484,44 @@ def test_init_db_seeds_model_pricing_without_overwriting_edits(tmp_path) -> None
             )
         ).one()
         openai_price.input_usd_per_million = Decimal("123")
+        qwen_price = session.scalars(
+            select(ModelPrice).where(
+                ModelPrice.provider_slug == "alibaba",
+                ModelPrice.model == "qwen3-coder-plus",
+            )
+        ).one()
+        openrouter_price = session.scalars(
+            select(ModelPrice).where(
+                ModelPrice.provider_slug == "openrouter",
+                ModelPrice.model == "openai/gpt-oss-120b",
+            )
+        ).one()
+        openrouter_price.input_usd_per_million = Decimal("999")
+
+        assert qwen_price.source_url == (
+            "https://www.alibabacloud.com/help/en/model-studio/model-pricing"
+        )
+        assert qwen_price.checked_at == "2026-05-23"
+        assert qwen_price.release_date == "2025-09-23"
+        assert "qwen/qwen3-coder-plus" in json.loads(qwen_price.aliases_json)
+        assert len(qwen_price.tiers) == 4
+        assert qwen_price.tiers[0].cached_input_usd_per_million == Decimal("0.114800")
+
+        deepseek_price = session.scalars(
+            select(ModelPrice).where(
+                ModelPrice.provider_slug == "deepseek",
+                ModelPrice.model == "deepseek-v4-flash",
+            )
+        ).one()
+        assert deepseek_price.cached_input_usd_per_million == Decimal("0.002800")
+
+        hf_price = session.scalars(
+            select(ModelPrice).where(
+                ModelPrice.provider_slug == "huggingface-router",
+                ModelPrice.model == "openai/gpt-oss-120b",
+            )
+        ).one()
+        assert hf_price.output_usd_per_million == Decimal("0.250000")
 
     init_db(engine)
 
@@ -494,12 +532,21 @@ def test_init_db_seeds_model_pricing_without_overwriting_edits(tmp_path) -> None
                 ModelPrice.model == "gpt-5.4-mini",
             )
         ).one()
+        edited_openrouter_price = session.scalars(
+            select(ModelPrice).where(
+                ModelPrice.provider_slug == "openrouter",
+                ModelPrice.model == "openai/gpt-oss-120b",
+            )
+        ).one()
         price_count = session.scalar(text("SELECT count(*) FROM model_prices"))
     engine.dispose()
 
-    assert providers == ["anthropic", "google", "openai"]
+    assert {"alibaba", "deepseek", "huggingface-router", "moonshot", "openrouter"} <= set(
+        providers
+    )
     assert edited_price.input_usd_per_million == Decimal("123.000000")
-    assert price_count >= 15
+    assert edited_openrouter_price.input_usd_per_million == Decimal("999.000000")
+    assert price_count >= 40
 
 
 def test_model_price_tiers_validate_bounds_and_preserve_relationships(tmp_path) -> None:
