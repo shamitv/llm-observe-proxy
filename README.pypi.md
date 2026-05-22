@@ -24,13 +24,14 @@ comparisons, and a refined run detail summary layout.
 - Runs for grouping all requests made during a task, benchmark, or repro workflow.
 - Run detail pages with request counts, LLM wall time, token totals, cost totals,
   tokens/sec, model and endpoint breakdowns, and signal/error counts.
-- Run what-if pricing for comparing captured usage against other configured model prices.
+- Run what-if pricing for comparing captured usage against other configured scalar or
+  tiered model prices.
 - Detail pages with response render modes for JSON, plain text, Markdown, tool calls,
   and raw SSE streams.
 - Request image gallery for data URL and remote image references.
 - Settings UI for upstream URL, model upstream routes, model provider/pricing config,
-  response compatibility fixes, incoming host/port preferences, all-IPs exposure, and
-  retention trimming.
+  price tiers, response compatibility fixes, incoming host/port preferences, all-IPs
+  exposure, and retention trimming.
 - Config-driven model routes for sending selected proxy-facing model names to different
   upstream `/v1` endpoints with optional upstream model rewrites, provider selection,
   and API key injection.
@@ -217,11 +218,18 @@ used by OpenAI, vLLM, SGLang, and LM Studio. When standard usage is absent, the 
 also read llama.cpp `timings` and Ollama-style `prompt_eval_count` / `eval_count` fields
 if those metrics are present in captured `/v1` responses or stream events.
 
-The estimator uses separate input and output token rates per 1M tokens:
+The estimator uses separate input, cached-input, and output token rates per 1M tokens:
 
 ```text
-cost = (input_tokens * input_rate + output_tokens * output_rate) / 1,000,000
+cost = (uncached_input_tokens * input_rate
+      + cached_input_tokens * cached_input_rate
+      + output_tokens * output_rate) / 1,000,000
 ```
+
+If cached input tokens are present but the matched model price has no cached-input rate,
+those tokens fall back to the standard input rate. Cache-write token counts from router
+responses are preserved in pricing snapshots for audit/debugging, but v0.4 does not bill a
+separate cache-write dimension.
 
 Billing identity is resolved from the routed upstream model when a model route rewrites
 the request, otherwise from the upstream response model when present, otherwise from the
@@ -229,11 +237,19 @@ client request model. Provider identity comes from a route's optional `provider_
 then falls back to a provider whose configured upstream URL exactly matches the active
 upstream base.
 
-SQLite is seeded with editable standard paid text rates for common OpenAI, Anthropic,
-and Google Gemini models. Those seed values were checked against official pricing pages
-on May 3, 2026. They are inserted only when missing, so UI edits are preserved. V1 cost
-estimates intentionally ignore cache, batch/flex/priority tiers, tool fees, image/audio
-pricing, regional premiums, and long-context premiums.
+SQLite is seeded with editable standard paid text rates for legacy OpenAI, Anthropic, and
+Google Gemini rows plus a broader current catalog checked on May 23, 2026. The v0.4 seed
+catalog includes first-party rows for Alibaba/Qwen, DeepSeek, Z.ai, Moonshot/Kimi, and
+Mistral where suitable API pricing is published. OpenRouter and Hugging Face Router rows
+are seeded only as router-provider fallbacks. Seeded rows include source metadata, aliases,
+cached-input rates where available, and Qwen-style request-size tiers. Seeds are inserted
+only when missing, so UI edits are preserved.
+
+Tier ranges use `[min_input_tokens, max_input_tokens)`, and tier selection happens per
+captured request. Run what-if comparisons estimate each request independently and then sum
+the results; when a run spans multiple tiers, rate columns show `Mixed tiers`. Estimates
+still ignore non-token charges such as batch/flex/priority discounts, separate cache-write
+fees, tool fees, image/audio prices, and regional premiums.
 
 Run detail pages include what-if cost comparisons. By default they compare captured run
 usage against GPT-5.5 and GPT-5.4 Mini when those prices are active. You can select any
@@ -289,6 +305,8 @@ https://github.com/shamitv/llm-observe-proxy
 - `POST /admin/settings/providers/delete`: delete a model provider and its prices.
 - `POST /admin/settings/model-prices`: create or update model token pricing.
 - `POST /admin/settings/model-prices/delete`: delete model token pricing.
+- `POST /admin/settings/model-price-tiers`: create a request-size price tier.
+- `POST /admin/settings/model-price-tiers/delete`: delete a request-size price tier.
 - `POST /admin/trim`: delete records older than `N` days.
 - `GET /healthz`: health check.
 
