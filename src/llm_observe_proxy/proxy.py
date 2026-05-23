@@ -33,7 +33,6 @@ from llm_observe_proxy.database import (
     SessionFactory,
     get_active_task_run,
     get_default_compat_fixes,
-    get_effective_model_routes,
     get_upstream_url,
     session_scope,
 )
@@ -76,14 +75,17 @@ async def proxy_openai(path: str, request: Request) -> Response:
     endpoint = f"/v1/{path}"
 
     with _session(session_factory) as session:
-        model_routes = get_effective_model_routes(session, settings)
         routing_decision = select_model_route(
             request_payload,
             settings,
-            model_routes,
+            session=session,
         )
         default_fixes = get_default_compat_fixes(session, settings)
-        compat_fix_ids = routing_decision.fixes if routing_decision.route else default_fixes
+        compat_fix_ids = (
+            routing_decision.fixes
+            if routing_decision.model_route or routing_decision.fallback_used
+            else default_fixes
+        )
         forward_body = build_forward_body(request_body, request_payload, routing_decision)
         forward_headers = build_forward_headers(
             request.headers,

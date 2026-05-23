@@ -41,10 +41,12 @@ from sqlalchemy.orm import (
 from llm_observe_proxy.compatibility import normalize_fix_ids
 from llm_observe_proxy.config import (
     EXPOSED_INCOMING_HOST,
+    VALID_MATCH_TYPES,
     ModelRoute,
     Settings,
     normalize_provider_slug,
     normalize_provider_url,
+    normalize_upstream_url,
     parse_model_routes,
 )
 
@@ -92,60 +94,80 @@ DEFAULT_MODEL_PROVIDERS = (
         "name": "OpenAI",
         "upstream_url": "https://api.openai.com/v1",
         "currency": "USD",
+        "api_key_env": "OPENAI_API_KEY",
+        "capabilities_json": '{"text":true,"tool_calling":true,"vision":true}',
     },
     {
         "slug": "anthropic",
         "name": "Anthropic",
         "upstream_url": "https://api.anthropic.com/v1",
         "currency": "USD",
+        "api_key_env": "ANTHROPIC_API_KEY",
+        "capabilities_json": '{"text":true,"tool_calling":true,"vision":true}',
     },
     {
         "slug": "google",
         "name": "Google Gemini",
         "upstream_url": "https://generativelanguage.googleapis.com/v1beta/openai",
         "currency": "USD",
+        "api_key_env": "GEMINI_API_KEY",
+        "capabilities_json": '{"text":true,"tool_calling":true,"vision":true}',
     },
     {
         "slug": "alibaba",
         "name": "Alibaba Cloud Model Studio",
         "upstream_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
         "currency": "USD",
+        "api_key_env": "DASHSCOPE_API_KEY",
+        "capabilities_json": '{"text":true,"tool_calling":true,"vision":true}',
     },
     {
         "slug": "deepseek",
         "name": "DeepSeek",
         "upstream_url": "https://api.deepseek.com/v1",
         "currency": "USD",
+        "api_key_env": "DEEPSEEK_API_KEY",
+        "capabilities_json": '{"text":true,"tool_calling":true}',
     },
     {
         "slug": "zai",
         "name": "Z.ai",
         "upstream_url": "https://api.z.ai/api/paas/v4",
         "currency": "USD",
+        "api_key_env": "ZAI_API_KEY",
+        "capabilities_json": '{"text":true,"tool_calling":true}',
     },
     {
         "slug": "moonshot",
         "name": "Moonshot Kimi",
         "upstream_url": "https://api.moonshot.ai/v1",
         "currency": "USD",
+        "api_key_env": "MOONSHOT_API_KEY",
+        "capabilities_json": '{"text":true,"tool_calling":true}',
     },
     {
         "slug": "mistral",
         "name": "Mistral AI",
         "upstream_url": "https://api.mistral.ai/v1",
         "currency": "USD",
+        "api_key_env": "MISTRAL_API_KEY",
+        "capabilities_json": '{"text":true,"tool_calling":true}',
     },
     {
         "slug": "openrouter",
         "name": "OpenRouter",
         "upstream_url": "https://openrouter.ai/api/v1",
         "currency": "USD",
+        "api_key_env": "OPENROUTER_API_KEY",
+        "capabilities_json": '{"text":true,"tool_calling":true,"vision":true}',
     },
     {
         "slug": "huggingface-router",
         "name": "Hugging Face Router",
         "upstream_url": "https://router.huggingface.co/v1",
         "currency": "USD",
+        "api_key_env": "HF_TOKEN",
+        "capabilities_json": '{"text":true,"tool_calling":true,"vision":true}',
     },
 )
 DEFAULT_MODEL_PRICES = (
@@ -1154,6 +1176,10 @@ class ModelProvider(Base):
     name: Mapped[str] = mapped_column(String(128))
     upstream_url: Mapped[str | None] = mapped_column(Text, nullable=True, unique=True)
     currency: Mapped[str] = mapped_column(String(16), default="USD")
+    api_key_env: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    is_default_fallback: Mapped[bool] = mapped_column(Boolean, default=False)
+    capabilities_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -1166,6 +1192,55 @@ class ModelProvider(Base):
         cascade="all, delete-orphan",
         passive_deletes=True,
     )
+    routes: Mapped[list[ModelRouteDB]] = relationship(back_populates="provider")
+
+
+class ModelRouteDB(Base):
+    __tablename__ = "model_routes"
+    __table_args__ = (
+        UniqueConstraint("incoming_model", "match_type", name="uq_route_model_match"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    incoming_model: Mapped[str] = mapped_column(String(256), index=True)
+    match_type: Mapped[str] = mapped_column(String(32), default="exact")
+    upstream_url: Mapped[str] = mapped_column(Text)
+    upstream_model: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    provider_slug: Mapped[str | None] = mapped_column(
+        ForeignKey("model_providers.slug", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    api_key_env: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    compatibility_fixes_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    override_fallback: Mapped[bool] = mapped_column(Boolean, default=False)
+    priority: Mapped[int] = mapped_column(Integer, default=50)
+    active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=_now,
+        onupdate=_now,
+    )
+
+    provider: Mapped[ModelProvider | None] = relationship(back_populates="routes")
+
+    @property
+    def model(self) -> str:
+        return self.incoming_model
+
+    @property
+    def effective_upstream_model(self) -> str:
+        return self.upstream_model or self.incoming_model
+
+    @property
+    def fixes(self) -> tuple[str, ...]:
+        if not self.compatibility_fixes_json:
+            return ()
+        try:
+            return normalize_fix_ids(json.loads(self.compatibility_fixes_json))
+        except (json.JSONDecodeError, ValueError):
+            return ()
 
 
 class ModelPrice(Base):
@@ -1276,8 +1351,10 @@ def create_session_factory(engine: Engine) -> SessionFactory:
 def init_db(engine: Engine) -> None:
     Base.metadata.create_all(engine)
     _ensure_sqlite_request_record_schema(engine)
+    _ensure_sqlite_model_provider_schema(engine)
     _ensure_sqlite_model_price_schema(engine)
     seed_default_model_pricing(engine)
+    _migrate_json_blob_routes(engine)
 
 
 @contextmanager
@@ -1305,6 +1382,7 @@ def set_setting(session: Session, key: str, value: str) -> AppSetting:
         session.add(setting)
     else:
         setting.value = value
+    session.flush()
     return setting
 
 
@@ -1362,8 +1440,93 @@ def set_default_compat_fixes(session: Session, fix_ids: object) -> None:
     )
 
 
+def get_default_provider_slug(session: Session) -> str | None:
+    configured = normalize_provider_slug(get_setting(session, "default_provider_slug"))
+    if configured:
+        return configured
+    provider = get_default_fallback_provider(session)
+    return provider.slug if provider else None
+
+
+def set_default_provider_slug(session: Session, slug: str | None) -> None:
+    provider_slug = normalize_provider_slug(slug)
+    if provider_slug is not None and session.get(ModelProvider, provider_slug) is None:
+        raise ValueError("Default provider was not found.")
+    if provider_slug:
+        set_default_fallback_provider(session, provider_slug)
+    else:
+        set_setting(session, "default_provider_slug", "")
+
+
+def get_default_model(session: Session) -> str | None:
+    value = get_setting(session, "default_model")
+    return value.strip() if value and value.strip() else None
+
+
+def set_default_model(session: Session, model: str | None) -> None:
+    set_setting(session, "default_model", (model or "").strip())
+
+
+def is_fallback_enabled(session: Session) -> bool:
+    value = get_setting(session, "fallback_enabled")
+    if value is None:
+        return True
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def set_fallback_enabled(session: Session, enabled: bool) -> None:
+    set_setting(session, "fallback_enabled", "true" if enabled else "false")
+
+
+def get_default_fallback_provider(session: Session) -> ModelProvider | None:
+    return session.scalar(
+        select(ModelProvider)
+        .where(ModelProvider.is_default_fallback.is_(True))
+        .order_by(ModelProvider.name)
+    )
+
+
+def set_default_fallback_provider(session: Session, slug: str) -> ModelProvider:
+    provider_slug = normalize_provider_slug(slug)
+    if provider_slug is None:
+        raise ValueError("Default provider is required.")
+    provider = session.get(ModelProvider, provider_slug)
+    if provider is None:
+        raise ValueError("Default provider was not found.")
+    if not provider.active:
+        raise ValueError("Default provider must be active.")
+    for existing in session.scalars(select(ModelProvider)).all():
+        existing.is_default_fallback = existing.slug == provider_slug
+    set_setting(session, "default_provider_slug", provider_slug)
+    session.flush()
+    return provider
+
+
+def get_fallback_summary(session: Session) -> dict[str, object | None]:
+    provider_slug = get_default_provider_slug(session)
+    provider = session.get(ModelProvider, provider_slug) if provider_slug else None
+    model = get_default_model(session)
+    return {
+        "enabled": is_fallback_enabled(session),
+        "provider_slug": provider.slug if provider else provider_slug,
+        "provider_name": provider.name if provider else None,
+        "model": model,
+        "upstream_url": provider.upstream_url if provider else None,
+    }
+
+
 def list_model_providers(session: Session) -> list[ModelProvider]:
     return list(session.scalars(select(ModelProvider).order_by(ModelProvider.name)).all())
+
+
+def list_active_model_providers(session: Session) -> list[ModelProvider]:
+    return list(
+        session.scalars(
+            select(ModelProvider)
+            .where(ModelProvider.active.is_(True))
+            .order_by(ModelProvider.name)
+        ).all()
+    )
 
 
 def list_model_prices(session: Session) -> list[ModelPrice]:
@@ -1384,6 +1547,10 @@ def upsert_model_provider(
     name: str,
     upstream_url: str = "",
     currency: str = "USD",
+    api_key_env: str = "",
+    active: bool = True,
+    is_default_fallback: bool = False,
+    capabilities: object = None,
 ) -> ModelProvider:
     provider_slug = normalize_provider_slug(slug)
     if provider_slug is None:
@@ -1413,6 +1580,16 @@ def upsert_model_provider(
     provider.name = provider_name
     provider.upstream_url = normalized_url
     provider.currency = provider_currency
+    provider.api_key_env = _optional_metadata(api_key_env, "API key environment variable")
+    provider.active = bool(active)
+    provider.capabilities_json = _capabilities_json(capabilities)
+    if is_default_fallback:
+        if not provider.active:
+            raise ValueError("Default fallback provider must be active.")
+        session.flush()
+        set_default_fallback_provider(session, provider.slug)
+    else:
+        provider.is_default_fallback = bool(provider.is_default_fallback)
     session.flush()
     return provider
 
@@ -1425,6 +1602,92 @@ def delete_model_provider(session: Session, slug: str) -> bool:
     if provider is None:
         return False
     session.delete(provider)
+    return True
+
+
+def list_model_routes_db(session: Session, *, active_only: bool = False) -> list[ModelRouteDB]:
+    stmt = select(ModelRouteDB).order_by(ModelRouteDB.priority, ModelRouteDB.id)
+    if active_only:
+        stmt = stmt.where(ModelRouteDB.active.is_(True))
+    return list(session.scalars(stmt).all())
+
+
+def get_model_route_db(session: Session, route_id: int) -> ModelRouteDB | None:
+    return session.get(ModelRouteDB, route_id)
+
+
+def upsert_model_route_db(
+    session: Session,
+    *,
+    incoming_model: str,
+    match_type: str = "exact",
+    upstream_url: str,
+    upstream_model: str = "",
+    provider_slug: str = "",
+    api_key_env: str = "",
+    compatibility_fixes: object = None,
+    override_fallback: bool = False,
+    priority: int | str = 50,
+    active: bool = True,
+    route_id: int | None = None,
+) -> ModelRouteDB:
+    pattern = incoming_model.strip()
+    if not pattern:
+        raise ValueError("Incoming model is required.")
+    resolved_match_type = match_type.strip().lower()
+    if resolved_match_type not in VALID_MATCH_TYPES:
+        raise ValueError("Match type must be exact or prefix.")
+    normalized_url = normalize_upstream_url(upstream_url)
+    try:
+        resolved_priority = int(priority)
+    except (TypeError, ValueError):
+        raise ValueError("Route priority must be a number.") from None
+    if not 1 <= resolved_priority <= 100:
+        raise ValueError("Route priority must be between 1 and 100.")
+
+    resolved_provider_slug = normalize_provider_slug(provider_slug)
+    if resolved_provider_slug and session.get(ModelProvider, resolved_provider_slug) is None:
+        raise ValueError("Provider was not found.")
+
+    fixes = normalize_fix_ids(compatibility_fixes)
+    existing = session.scalar(
+        select(ModelRouteDB).where(
+            ModelRouteDB.incoming_model == pattern,
+            ModelRouteDB.match_type == resolved_match_type,
+        )
+    )
+    if existing is not None and (route_id is None or existing.id != route_id):
+        raise ValueError("A route with this incoming model and match type already exists.")
+
+    route = session.get(ModelRouteDB, route_id) if route_id is not None else existing
+    if route_id is not None and route is None:
+        raise ValueError("Model route was not found.")
+    if route is None:
+        route = ModelRouteDB(incoming_model=pattern, match_type=resolved_match_type)
+        session.add(route)
+
+    route.incoming_model = pattern
+    route.match_type = resolved_match_type
+    route.upstream_url = normalized_url
+    route.upstream_model = _optional_metadata(upstream_model, "Upstream model", max_length=256)
+    route.provider_slug = resolved_provider_slug
+    route.api_key_env = _optional_metadata(api_key_env, "API key environment variable")
+    route.compatibility_fixes_json = (
+        json.dumps(list(fixes), ensure_ascii=False, separators=(",", ":")) if fixes else None
+    )
+    route.override_fallback = bool(override_fallback)
+    route.priority = resolved_priority
+    route.active = bool(active)
+    session.flush()
+    return route
+
+
+def delete_model_route_db(session: Session, route_id: int) -> bool:
+    route = session.get(ModelRouteDB, route_id)
+    if route is None:
+        return False
+    session.delete(route)
+    session.flush()
     return True
 
 
@@ -1572,8 +1835,16 @@ def delete_model_price(session: Session, provider_slug: str, model: str) -> bool
 def seed_default_model_pricing(engine: Engine) -> None:
     with Session(engine) as session:
         for provider_data in DEFAULT_MODEL_PROVIDERS:
-            if session.get(ModelProvider, provider_data["slug"]) is None:
+            provider = session.get(ModelProvider, provider_data["slug"])
+            if provider is None:
                 session.add(ModelProvider(**provider_data))
+            else:
+                if not provider.api_key_env:
+                    provider.api_key_env = provider_data.get("api_key_env")
+                if not provider.capabilities_json:
+                    provider.capabilities_json = provider_data.get("capabilities_json")
+                if provider.active is None:
+                    provider.active = True
         session.flush()
 
         for price_data in DEFAULT_MODEL_PRICES:
@@ -1603,23 +1874,16 @@ def seed_default_model_pricing(engine: Engine) -> None:
 
 
 def get_ui_model_routes(session: Session) -> tuple[ModelRoute, ...]:
-    value = get_setting(session, MODEL_ROUTES_SETTING_KEY)
-    if not value:
-        return ()
-    try:
-        routes = parse_model_routes(json.loads(value))
-    except (json.JSONDecodeError, ValueError):
-        return ()
     return tuple(
         ModelRoute(
-            model=route.model,
+            model=route.incoming_model,
             upstream_url=route.upstream_url,
             upstream_model=route.upstream_model,
             provider_slug=route.provider_slug,
             api_key_env=route.api_key_env,
             fixes=route.fixes,
         )
-        for route in routes
+        for route in list_model_routes_db(session)
     )
 
 
@@ -1631,20 +1895,38 @@ def upsert_ui_model_route(session: Session, settings: Settings, route: ModelRout
     if route.model in {configured.model for configured in settings.model_routes}:
         raise ValueError("Model route already exists in startup configuration.")
 
-    routes = [
-        existing for existing in get_ui_model_routes(session) if existing.model != route.model
-    ]
-    routes.append(route)
-    _set_ui_model_routes(session, routes)
+    existing = session.scalar(
+        select(ModelRouteDB).where(
+            ModelRouteDB.incoming_model == route.model,
+            ModelRouteDB.match_type == "exact",
+        )
+    )
+    upsert_model_route_db(
+        session,
+        route_id=existing.id if existing else None,
+        incoming_model=route.model,
+        match_type="exact",
+        upstream_url=route.upstream_url,
+        upstream_model=route.upstream_model or "",
+        provider_slug=route.provider_slug or "",
+        api_key_env=route.api_key_env or "",
+        compatibility_fixes=route.fixes,
+        priority=50,
+        active=True,
+    )
 
 
 def delete_ui_model_route(session: Session, model: str) -> bool:
     resolved_model = model.strip()
-    routes = list(get_ui_model_routes(session))
-    remaining = [route for route in routes if route.model != resolved_model]
-    if len(remaining) == len(routes):
+    route = session.scalar(
+        select(ModelRouteDB).where(
+            ModelRouteDB.incoming_model == resolved_model,
+            ModelRouteDB.match_type == "exact",
+        )
+    )
+    if route is None:
         return False
-    _set_ui_model_routes(session, remaining)
+    session.delete(route)
     return True
 
 
@@ -1875,6 +2157,41 @@ def _ensure_sqlite_request_record_schema(engine: Engine) -> None:
         )
 
 
+def _ensure_sqlite_model_provider_schema(engine: Engine) -> None:
+    if engine.dialect.name != "sqlite":
+        return
+    inspector = inspect(engine)
+    if "model_providers" not in inspector.get_table_names():
+        return
+    columns = {column["name"] for column in inspector.get_columns("model_providers")}
+    with engine.begin() as connection:
+        if "api_key_env" not in columns:
+            connection.execute(
+                text("ALTER TABLE model_providers ADD COLUMN api_key_env VARCHAR(128)")
+            )
+        if "active" not in columns:
+            connection.execute(
+                text("ALTER TABLE model_providers ADD COLUMN active BOOLEAN DEFAULT 1")
+            )
+        if "is_default_fallback" not in columns:
+            connection.execute(
+                text(
+                    "ALTER TABLE model_providers ADD COLUMN "
+                    "is_default_fallback BOOLEAN DEFAULT 0"
+                )
+            )
+        if "capabilities_json" not in columns:
+            connection.execute(
+                text("ALTER TABLE model_providers ADD COLUMN capabilities_json TEXT")
+            )
+        connection.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS "
+                "ix_model_providers_active ON model_providers (active)"
+            )
+        )
+
+
 def _ensure_sqlite_model_price_schema(engine: Engine) -> None:
     if engine.dialect.name != "sqlite":
         return
@@ -1900,6 +2217,36 @@ def _ensure_sqlite_model_price_schema(engine: Engine) -> None:
                 "ON model_price_tiers (model_price_id)"
             )
         )
+
+
+def _migrate_json_blob_routes(engine: Engine) -> None:
+    with Session(engine) as session:
+        if session.scalar(select(func.count()).select_from(ModelRouteDB)):
+            return
+        value = get_setting(session, MODEL_ROUTES_SETTING_KEY)
+        if not value:
+            return
+        try:
+            routes = parse_model_routes(json.loads(value))
+        except (json.JSONDecodeError, ValueError):
+            return
+        for route in routes:
+            upsert_model_route_db(
+                session,
+                incoming_model=route.model,
+                match_type="exact",
+                upstream_url=route.upstream_url,
+                upstream_model=route.upstream_model or "",
+                provider_slug=route.provider_slug or "",
+                api_key_env=route.api_key_env or "",
+                compatibility_fixes=route.fixes,
+                priority=50,
+                active=True,
+            )
+        setting = session.get(AppSetting, MODEL_ROUTES_SETTING_KEY)
+        if setting is not None:
+            session.delete(setting)
+        session.commit()
 
 
 def _set_ui_model_routes(session: Session, routes: list[ModelRoute]) -> None:
@@ -1999,6 +2346,28 @@ def _optional_metadata(value: object, label: str, *, max_length: int = 32) -> st
     if not text_value.isascii() or len(text_value) > max_length:
         raise ValueError(f"{label} must be ASCII and at most {max_length} characters.")
     return text_value
+
+
+def _capabilities_json(value: object) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        text_value = value.strip()
+        if not text_value:
+            return None
+        try:
+            decoded = json.loads(text_value)
+        except json.JSONDecodeError:
+            raise ValueError("Capabilities must be valid JSON.") from None
+    elif isinstance(value, dict):
+        decoded = value
+    else:
+        raise ValueError("Capabilities must be a JSON object.")
+    if not isinstance(decoded, dict):
+        raise ValueError("Capabilities must be a JSON object.")
+    allowed = {"text", "vision", "tool_calling"}
+    normalized = {key: bool(decoded.get(key)) for key in allowed if key in decoded}
+    return json.dumps(normalized, sort_keys=True, separators=(",", ":")) if normalized else None
 
 
 def _aliases_json(value: str | list[str] | tuple[str, ...]) -> str | None:
