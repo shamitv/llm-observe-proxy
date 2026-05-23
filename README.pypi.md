@@ -10,7 +10,7 @@ or external database.
 
 Project repository: https://github.com/shamitv/llm-observe-proxy
 
-Current release: `0.4.0`, with editable scalar and tiered model pricing, cached-token
+Current release includes editable scalar and tiered model pricing, cached-token
 cost snapshots, router fallback seed data, and run what-if comparisons.
 
 ## Features
