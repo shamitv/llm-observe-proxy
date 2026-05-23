@@ -1540,6 +1540,72 @@ def list_model_prices(session: Session) -> list[ModelPrice]:
     )
 
 
+def get_provider_usage_summary(session: Session) -> list[dict[str, object]]:
+    today_start = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+    usage_rows = {
+        row[0]: {
+            "requests_today": int(row[1] or 0),
+            "estimated_cost_usd": float(row[2] or 0),
+        }
+        for row in session.execute(
+            select(
+                RequestRecord.billing_provider_slug,
+                func.count(RequestRecord.id),
+                func.coalesce(func.sum(RequestRecord.billing_total_cost_usd), 0),
+            )
+            .where(RequestRecord.created_at >= today_start)
+            .where(RequestRecord.billing_provider_slug.is_not(None))
+            .group_by(RequestRecord.billing_provider_slug)
+        )
+    }
+    route_counts = {
+        row[0]: int(row[1] or 0)
+        for row in session.execute(
+            select(ModelRouteDB.provider_slug, func.count(ModelRouteDB.id))
+            .where(ModelRouteDB.active.is_(True))
+            .where(ModelRouteDB.provider_slug.is_not(None))
+            .group_by(ModelRouteDB.provider_slug)
+        )
+    }
+    summaries: list[dict[str, object]] = []
+    for provider in list_model_providers(session):
+        usage = usage_rows.get(provider.slug, {})
+        summaries.append(
+            {
+                "provider_slug": provider.slug,
+                "provider_name": provider.name,
+                "requests_today": usage.get("requests_today", 0),
+                "estimated_cost_usd": usage.get("estimated_cost_usd", 0.0),
+                "active_routes": route_counts.get(provider.slug, 0),
+            }
+        )
+    return summaries
+
+
+def get_route_usage_summary(session: Session) -> list[dict[str, object]]:
+    today_start = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+    rows = session.execute(
+        select(
+            RequestRecord.model_route,
+            func.count(RequestRecord.id),
+            func.max(RequestRecord.created_at),
+        )
+        .where(RequestRecord.created_at >= today_start)
+        .where(RequestRecord.model_route.is_not(None))
+        .group_by(RequestRecord.model_route)
+    ).all()
+    return [
+        {
+            "route": row[0],
+            "requests_today": int(row[1] or 0),
+            "last_matched_at": (
+                row[2].isoformat().replace("+00:00", "Z") if isinstance(row[2], datetime) else None
+            ),
+        }
+        for row in rows
+    ]
+
+
 def upsert_model_provider(
     session: Session,
     *,

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 from collections import Counter
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -31,34 +32,46 @@ from llm_observe_proxy.config import ModelRoute, normalize_upstream_url
 from llm_observe_proxy.costing import RunCostEstimate, estimate_run_cost
 from llm_observe_proxy.database import (
     ModelPrice,
+    ModelProvider,
+    ModelRouteDB,
     RequestRecord,
     SessionFactory,
     TaskRun,
     delete_model_price,
     delete_model_price_tier,
     delete_model_provider,
+    delete_model_route_db,
     delete_ui_model_route,
     end_active_task_run,
     get_active_task_run,
     get_default_compat_fixes,
     get_effective_model_routes,
     get_expose_all_ips,
+    get_fallback_summary,
     get_incoming_host,
     get_incoming_port,
+    get_model_route_db,
+    get_provider_usage_summary,
+    get_route_usage_summary,
     get_task_run_stats,
     get_ui_model_routes,
     get_upstream_url,
     list_model_prices,
     list_model_providers,
+    list_model_routes_db,
     list_task_runs_with_stats,
     session_scope,
     set_default_compat_fixes,
+    set_default_model,
+    set_default_provider_slug,
+    set_fallback_enabled,
     set_incoming_server,
     set_setting,
     start_task_run,
     upsert_model_price,
     upsert_model_price_tier,
     upsert_model_provider,
+    upsert_model_route_db,
     upsert_ui_model_route,
 )
 from llm_observe_proxy.rendering import escape_preview, render_payload
@@ -67,6 +80,7 @@ from llm_observe_proxy.routing import (
     build_forward_headers,
     model_route_display,
     select_model_route,
+    simulate_route_resolution,
 )
 
 TEMPLATE_DIR = Path(__file__).parent / "templates"
@@ -777,6 +791,7 @@ async def test_upstream(
             payload,
             settings,
             get_effective_model_routes(session, settings),
+            session=session,
         )
         forward_body = build_forward_body(request_body, payload, routing_decision)
         forward_headers = build_forward_headers(
@@ -838,6 +853,272 @@ async def trim_records(
         for record in records:
             session.delete(record)
     return RedirectResponse(f"/admin/settings?days={days}&trimmed={deleted}", status_code=303)
+
+
+@router.get("/api/settings/summary", response_model=None)
+async def api_settings_summary(request: Request, days: int = Query(30, ge=1, le=3650)):
+    session_factory: SessionFactory = request.app.state.session_factory
+    with session_scope(session_factory) as session:
+        return _api_settings_summary(request, session, days=days)
+
+
+@router.post("/api/settings/listener", response_model=None)
+async def api_update_listener(request: Request):
+    payload = await _json_payload(request)
+    port = int(payload.get("port") or payload.get("incoming_port") or 0)
+    if not 1 <= port <= 65535:
+        return JSONResponse({"detail": "Incoming port must be between 1 and 65535."}, 400)
+    session_factory: SessionFactory = request.app.state.session_factory
+    with session_scope(session_factory) as session:
+        set_incoming_server(session, port, _truthy(payload.get("expose_all_ips")))
+        return _api_settings_summary(request, session)
+
+
+@router.post("/api/settings/upstream-defaults", response_model=None)
+async def api_update_upstream_defaults(request: Request):
+    payload = await _json_or_form_payload(request)
+    try:
+        normalized_url = normalize_upstream_url(str(payload.get("upstream_url", "")))
+        provider_slug = str(payload.get("default_provider_slug") or "")
+        default_model = str(payload.get("default_model") or "")
+        session_factory: SessionFactory = request.app.state.session_factory
+        with session_scope(session_factory) as session:
+            set_setting(session, "upstream_url", normalized_url)
+            set_default_provider_slug(session, provider_slug or None)
+            set_default_model(session, default_model)
+            set_fallback_enabled(session, _truthy(payload.get("fallback_enabled", True)))
+            return _api_settings_summary(request, session)
+    except ValueError as exc:
+        return JSONResponse({"detail": str(exc)}, status_code=400)
+
+
+@router.post("/api/settings/compat-fixes", response_model=None)
+async def api_update_compat_fixes(request: Request):
+    payload = await _json_or_form_payload(request)
+    fixes = payload.get("fixes", payload.get("fix_ids", []))
+    try:
+        parsed = normalize_fix_ids(fixes)
+        session_factory: SessionFactory = request.app.state.session_factory
+        with session_scope(session_factory) as session:
+            set_default_compat_fixes(session, parsed)
+        return {"compatibility_fixes": list(parsed)}
+    except ValueError as exc:
+        return JSONResponse({"detail": str(exc)}, status_code=400)
+
+
+@router.get("/api/settings/retention-preview", response_model=None)
+async def api_retention_preview(request: Request, days: int = Query(30, ge=1, le=3650)):
+    session_factory: SessionFactory = request.app.state.session_factory
+    cutoff = datetime.now(UTC) - timedelta(days=days)
+    with session_scope(session_factory) as session:
+        count = session.scalar(select(func.count()).where(RequestRecord.created_at < cutoff)) or 0
+    return {"days": days, "rows": count}
+
+
+@router.post("/api/settings/trim", response_model=None)
+async def api_trim_records(request: Request):
+    payload = await _json_payload(request)
+    days = int(payload.get("days") or 0)
+    if days < 1:
+        return JSONResponse({"detail": "Retention days must be at least 1."}, status_code=400)
+    if not _truthy(payload.get("confirm")):
+        return JSONResponse({"detail": "Confirm deletion before trimming records."}, 400)
+    cutoff = datetime.now(UTC) - timedelta(days=days)
+    session_factory: SessionFactory = request.app.state.session_factory
+    with session_scope(session_factory) as session:
+        records = session.scalars(
+            select(RequestRecord).where(RequestRecord.created_at < cutoff)
+        ).all()
+        deleted = len(records)
+        for record in records:
+            session.delete(record)
+    return {"deleted": deleted}
+
+
+@router.get("/api/providers", response_model=None)
+async def api_list_providers(
+    request: Request,
+    search: str = "",
+    status: str = "all",
+    currency: str = "",
+    page: int = Query(1, ge=1),
+    per_page: int = Query(25, ge=1, le=100),
+):
+    session_factory: SessionFactory = request.app.state.session_factory
+    with session_scope(session_factory) as session:
+        providers = [
+            _provider_api_row(session, provider)
+            for provider in list_model_providers(session)
+        ]
+    rows = _filter_providers(providers, search=search, status=status, currency=currency)
+    return _paginated(rows, page, per_page)
+
+
+@router.post("/api/providers", response_model=None)
+async def api_create_provider(request: Request):
+    payload = await _json_payload(request)
+    return _save_provider_from_payload(request, payload)
+
+
+@router.post("/api/providers/health-checks", response_model=None)
+async def api_provider_health_checks(request: Request):
+    session_factory: SessionFactory = request.app.state.session_factory
+    with session_scope(session_factory) as session:
+        providers = [provider for provider in list_model_providers(session) if provider.active]
+    results = [await _provider_health_result(provider) for provider in providers]
+    request.app.state.provider_health_results = {row["provider_slug"]: row for row in results}
+    return results
+
+
+@router.get("/api/providers/usage", response_model=None)
+async def api_provider_usage(request: Request):
+    session_factory: SessionFactory = request.app.state.session_factory
+    with session_scope(session_factory) as session:
+        return get_provider_usage_summary(session)
+
+
+@router.get("/api/providers/{slug}", response_model=None)
+async def api_get_provider(request: Request, slug: str):
+    session_factory: SessionFactory = request.app.state.session_factory
+    with session_scope(session_factory) as session:
+        provider = session.get(ModelProvider, slug)
+        if provider is None:
+            return JSONResponse({"detail": "Provider not found."}, status_code=404)
+        return _provider_api_row(session, provider)
+
+
+@router.put("/api/providers/{slug}", response_model=None)
+async def api_update_provider(request: Request, slug: str):
+    payload = await _json_payload(request)
+    payload["slug"] = slug
+    return _save_provider_from_payload(request, payload)
+
+
+@router.delete("/api/providers/{slug}", response_model=None)
+async def api_delete_provider(request: Request, slug: str):
+    session_factory: SessionFactory = request.app.state.session_factory
+    with session_scope(session_factory) as session:
+        if not delete_model_provider(session, slug):
+            return JSONResponse({"detail": "Provider not found."}, status_code=404)
+    return {"deleted": True}
+
+
+@router.post("/api/providers/{slug}/test", response_model=None)
+async def api_test_provider(request: Request, slug: str):
+    session_factory: SessionFactory = request.app.state.session_factory
+    with session_scope(session_factory) as session:
+        provider = session.get(ModelProvider, slug)
+        if provider is None:
+            return JSONResponse({"detail": "Provider not found."}, status_code=404)
+        return await _provider_health_result(provider)
+
+
+@router.get("/api/routes", response_model=None)
+async def api_list_routes(
+    request: Request,
+    search: str = "",
+    status: str = "all",
+    provider: str = "",
+    page: int = Query(1, ge=1),
+    per_page: int = Query(25, ge=1, le=100),
+):
+    session_factory: SessionFactory = request.app.state.session_factory
+    with session_scope(session_factory) as session:
+        rows = [_route_api_row(session, route) for route in list_model_routes_db(session)]
+    filtered = _filter_routes(rows, search=search, status=status, provider=provider)
+    return _paginated(filtered, page, per_page)
+
+
+@router.post("/api/routes", response_model=None)
+async def api_create_route(request: Request):
+    payload = await _json_payload(request)
+    return _save_route_from_payload(request, payload)
+
+
+@router.post("/api/routes/simulate", response_model=None)
+async def api_simulate_route(request: Request):
+    payload = await _json_payload(request)
+    incoming_model = str(payload.get("incoming_model") or payload.get("model") or "").strip()
+    if not incoming_model:
+        return JSONResponse({"detail": "Incoming model is required."}, status_code=400)
+    session_factory: SessionFactory = request.app.state.session_factory
+    with session_scope(session_factory) as session:
+        result = simulate_route_resolution(incoming_model, session, request.app.state.settings)
+    return {
+        "status": result.status,
+        "matched_route": result.matched_route,
+        "match_type": result.match_type,
+        "upstream_url": result.upstream_url,
+        "upstream_model": result.upstream_model,
+        "provider_slug": result.provider_slug,
+        "provider_name": result.provider_name,
+        "api_key_state": result.api_key_state,
+        "compatibility_fixes": list(result.compatibility_fixes),
+    }
+
+
+@router.get("/api/routes/usage", response_model=None)
+async def api_route_usage(request: Request):
+    session_factory: SessionFactory = request.app.state.session_factory
+    with session_scope(session_factory) as session:
+        return get_route_usage_summary(session)
+
+
+@router.get("/api/routes/{route_id}", response_model=None)
+async def api_get_route(request: Request, route_id: int):
+    session_factory: SessionFactory = request.app.state.session_factory
+    with session_scope(session_factory) as session:
+        route = get_model_route_db(session, route_id)
+        if route is None:
+            return JSONResponse({"detail": "Route not found."}, status_code=404)
+        return _route_api_row(session, route)
+
+
+@router.put("/api/routes/{route_id}", response_model=None)
+async def api_update_route(request: Request, route_id: int):
+    payload = await _json_payload(request)
+    payload["id"] = route_id
+    return _save_route_from_payload(request, payload)
+
+
+@router.delete("/api/routes/{route_id}", response_model=None)
+async def api_delete_route(request: Request, route_id: int):
+    session_factory: SessionFactory = request.app.state.session_factory
+    with session_scope(session_factory) as session:
+        if not delete_model_route_db(session, route_id):
+            return JSONResponse({"detail": "Route not found."}, status_code=404)
+    return {"deleted": True}
+
+
+@router.post("/api/routes/{route_id}/test", response_model=None)
+async def api_test_route(request: Request, route_id: int):
+    payload = await _json_payload(request)
+    test_kind = str(payload.get("test_kind") or payload.get("message_type") or "simple")
+    prompt = str(payload.get("prompt") or TEST_PROMPT_DEFAULT)
+    session_factory: SessionFactory = request.app.state.session_factory
+    with session_scope(session_factory) as session:
+        route = get_model_route_db(session, route_id)
+        if route is None:
+            return JSONResponse({"detail": "Route not found."}, status_code=404)
+        test_payload = build_upstream_test_payload(test_kind, route.incoming_model, prompt)
+        decision = select_model_route(test_payload, request.app.state.settings, session=session)
+        body = json.dumps(test_payload, ensure_ascii=False, separators=(",", ":")).encode()
+        forward_body = build_forward_body(body, test_payload, decision)
+        forward_headers = build_forward_headers(
+            {"content-type": "application/json"},
+            decision,
+            set(),
+        )
+        upstream_base = (decision.upstream_base_url or route.upstream_url).rstrip("/")
+        chat_url = f"{upstream_base}/chat/completions"
+    return await _send_upstream_test(
+        chat_url,
+        forward_body,
+        forward_headers,
+        test_kind,
+        decision.model_route,
+        decision.upstream_model,
+    )
 
 
 def build_upstream_test_payload(test_kind: str, model: str, prompt: str) -> dict[str, Any]:
@@ -927,6 +1208,265 @@ async def _send_upstream_test(
         "model_route": model_route,
         "upstream_model": upstream_model,
     }
+
+
+async def _json_payload(request: Request) -> dict[str, Any]:
+    try:
+        payload = await request.json()
+    except json.JSONDecodeError:
+        payload = {}
+    return payload if isinstance(payload, dict) else {}
+
+
+async def _json_or_form_payload(request: Request) -> dict[str, Any]:
+    content_type = request.headers.get("content-type", "")
+    if "application/json" in content_type:
+        return await _json_payload(request)
+    form = await request.form()
+    return dict(form)
+
+
+def _truthy(value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _api_settings_summary(request: Request, session, *, days: int = 30) -> dict[str, object]:
+    settings = request.app.state.settings
+    host = get_incoming_host(session, settings)
+    port = get_incoming_port(session, settings)
+    cutoff = datetime.now(UTC) - timedelta(days=days)
+    fallback = get_fallback_summary(session)
+    return {
+        "listener": {"host": host, "port": port},
+        "client_base_url": f"http://localhost:{port}/v1",
+        "upstream": {
+            "url": get_upstream_url(session, settings),
+            "default_provider_slug": fallback["provider_slug"],
+            "default_provider_name": fallback["provider_name"],
+            "default_model": fallback["model"],
+        },
+        "stored_rows": session.scalar(select(func.count()).select_from(RequestRecord)) or 0,
+        "active_routes": session.scalar(
+            select(func.count()).where(ModelRouteDB.active.is_(True))
+        )
+        or 0,
+        "active_providers": session.scalar(
+            select(func.count()).where(ModelProvider.active.is_(True))
+        )
+        or 0,
+        "retention_days": days,
+        "rows_older_than_retention": session.scalar(
+            select(func.count()).where(RequestRecord.created_at < cutoff)
+        )
+        or 0,
+    }
+
+
+def _provider_api_row(session, provider: ModelProvider) -> dict[str, object]:
+    route_count = session.scalar(
+        select(func.count()).where(ModelRouteDB.provider_slug == provider.slug)
+    ) or 0
+    model_count = session.scalar(
+        select(func.count()).where(ModelPrice.provider_slug == provider.slug)
+    ) or 0
+    try:
+        capabilities = json.loads(provider.capabilities_json or "{}")
+    except json.JSONDecodeError:
+        capabilities = {}
+    return {
+        "slug": provider.slug,
+        "name": provider.name,
+        "upstream_url": provider.upstream_url,
+        "base_url": provider.upstream_url,
+        "currency": provider.currency,
+        "api_key_env": provider.api_key_env,
+        "active": bool(provider.active),
+        "status": "active" if provider.active else "inactive",
+        "is_default_fallback": bool(provider.is_default_fallback),
+        "capabilities": capabilities,
+        "model_count": model_count,
+        "route_count": route_count,
+    }
+
+
+def _route_api_row(session, route: ModelRouteDB) -> dict[str, object]:
+    provider = session.get(ModelProvider, route.provider_slug) if route.provider_slug else None
+    return {
+        "id": route.id,
+        "incoming_model": route.incoming_model,
+        "match_type": route.match_type,
+        "upstream_url": route.upstream_url,
+        "upstream_model": route.effective_upstream_model,
+        "provider_slug": route.provider_slug,
+        "provider_name": provider.name if provider else None,
+        "api_key_env": route.api_key_env,
+        "compatibility_fixes": list(route.fixes),
+        "override_fallback": bool(route.override_fallback),
+        "priority": route.priority,
+        "active": bool(route.active),
+        "status": "active" if route.active else "inactive",
+    }
+
+
+def _filter_providers(
+    rows: list[dict[str, object]],
+    *,
+    search: str,
+    status: str,
+    currency: str,
+) -> list[dict[str, object]]:
+    needle = search.strip().lower()
+    filtered = rows
+    if needle:
+        filtered = [
+            row
+            for row in filtered
+            if needle
+            in " ".join(
+                str(row.get(key) or "").lower()
+                for key in ("slug", "name", "upstream_url", "currency")
+            )
+        ]
+    if status in {"active", "inactive"}:
+        filtered = [row for row in filtered if row["status"] == status]
+    if currency:
+        filtered = [row for row in filtered if row["currency"] == currency]
+    return filtered
+
+
+def _filter_routes(
+    rows: list[dict[str, object]],
+    *,
+    search: str,
+    status: str,
+    provider: str,
+) -> list[dict[str, object]]:
+    needle = search.strip().lower()
+    filtered = rows
+    if needle:
+        filtered = [
+            row
+            for row in filtered
+            if needle
+            in " ".join(
+                str(row.get(key) or "").lower()
+                for key in ("incoming_model", "upstream_url", "upstream_model", "provider_name")
+            )
+        ]
+    if status in {"active", "inactive"}:
+        filtered = [row for row in filtered if row["status"] == status]
+    if provider:
+        filtered = [row for row in filtered if row["provider_slug"] == provider]
+    return filtered
+
+
+def _paginated(rows: list[dict[str, object]], page: int, per_page: int) -> dict[str, object]:
+    total = len(rows)
+    start = (page - 1) * per_page
+    end = start + per_page
+    return {
+        "items": rows[start:end],
+        "page": page,
+        "per_page": per_page,
+        "total": total,
+        "pages": max(1, math.ceil(total / per_page)) if total else 1,
+    }
+
+
+def _save_provider_from_payload(request: Request, payload: dict[str, Any]):
+    try:
+        session_factory: SessionFactory = request.app.state.session_factory
+        with session_scope(session_factory) as session:
+            provider = upsert_model_provider(
+                session,
+                slug=str(payload.get("slug") or ""),
+                name=str(payload.get("name") or ""),
+                upstream_url=str(payload.get("upstream_url") or payload.get("base_url") or ""),
+                currency=str(payload.get("currency") or "USD"),
+                api_key_env=str(payload.get("api_key_env") or ""),
+                active=_truthy(payload.get("active", True)),
+                is_default_fallback=_truthy(payload.get("is_default_fallback")),
+                capabilities=payload.get("capabilities"),
+            )
+            if _truthy(payload.get("is_default_fallback")):
+                set_default_provider_slug(session, provider.slug)
+            return _provider_api_row(session, provider)
+    except ValueError as exc:
+        return JSONResponse({"detail": str(exc)}, status_code=400)
+
+
+def _save_route_from_payload(request: Request, payload: dict[str, Any]):
+    try:
+        session_factory: SessionFactory = request.app.state.session_factory
+        with session_scope(session_factory) as session:
+            route = upsert_model_route_db(
+                session,
+                route_id=int(payload["id"]) if payload.get("id") else None,
+                incoming_model=str(payload.get("incoming_model") or payload.get("model") or ""),
+                match_type=str(payload.get("match_type") or "exact"),
+                upstream_url=str(payload.get("upstream_url") or ""),
+                upstream_model=str(payload.get("upstream_model") or ""),
+                provider_slug=str(payload.get("provider_slug") or ""),
+                api_key_env=str(payload.get("api_key_env") or ""),
+                compatibility_fixes=payload.get("compatibility_fixes") or payload.get("fixes"),
+                override_fallback=_truthy(payload.get("override_fallback")),
+                priority=payload.get("priority", 50),
+                active=_truthy(payload.get("active", True)),
+            )
+            return _route_api_row(session, route)
+    except ValueError as exc:
+        return JSONResponse({"detail": str(exc)}, status_code=400)
+
+
+async def _provider_health_result(provider: ModelProvider) -> dict[str, object]:
+    if not provider.upstream_url:
+        return {
+            "provider_slug": provider.slug,
+            "status": "warning",
+            "latency_ms": None,
+            "auth_state": "not_configured",
+            "message": "Provider has no base URL.",
+        }
+    headers = {}
+    auth_state = "not_configured"
+    if provider.api_key_env:
+        token = os.getenv(provider.api_key_env)
+        auth_state = "valid" if token else "missing_key"
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+    started = datetime.now(UTC)
+    url = f"{provider.upstream_url.rstrip('/')}/models"
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            response = await client.get(url, headers=headers)
+        latency_ms = int((datetime.now(UTC) - started).total_seconds() * 1000)
+        status = (
+            "healthy"
+            if response.status_code < 500 and auth_state != "missing_key"
+            else "warning"
+        )
+        return {
+            "provider_slug": provider.slug,
+            "status": status,
+            "latency_ms": latency_ms,
+            "auth_state": auth_state,
+            "message": f"HTTP {response.status_code}",
+            "checked_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+        }
+    except httpx.HTTPError as exc:
+        latency_ms = int((datetime.now(UTC) - started).total_seconds() * 1000)
+        return {
+            "provider_slug": provider.slug,
+            "status": "warning",
+            "latency_ms": latency_ms,
+            "auth_state": auth_state,
+            "message": str(exc),
+            "checked_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+        }
 
 
 def _settings_context(
