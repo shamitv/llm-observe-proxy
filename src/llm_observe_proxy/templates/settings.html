@@ -277,7 +277,7 @@
                     <strong>{{ tier.label | default(tier.range, true) }}</strong>
                     <span class="muted">{{ tier.range }}</span>
                     <span class="muted">In {{ tier.input_usd_per_million | usd }} / Cached {{ tier.cached_input_usd_per_million | usd }} / Out {{ tier.output_usd_per_million | usd }}</span>
-                    {% if tier.source_url or tier.checked_at or tier.release_date %}
+                    {% if tier.checked_at or tier.release_date %}
                     <span class="muted">{{ tier.checked_at | default('', true) }} {{ tier.release_date | default('', true) }}</span>
                     {% endif %}
                   </div>

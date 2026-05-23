@@ -562,6 +562,7 @@ def test_init_db_backfills_historical_cached_token_costs(tmp_path) -> None:
     session_factory = create_session_factory(engine)
 
     with session_scope(session_factory) as session:
+        session.add(ModelProvider(slug="local-null-url", name="Local Null URL"))
         upsert_model_price(
             session,
             provider_slug="openai",

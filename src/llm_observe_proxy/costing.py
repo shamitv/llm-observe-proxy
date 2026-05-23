@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import inspect, or_, select
+from sqlalchemy import Text, and_, cast, inspect, or_, select
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
 
@@ -283,22 +283,23 @@ def backfill_historical_cached_cost_estimates(engine: Engine) -> int:
         return 0
     updated = 0
     with Session(engine) as session:
-        stale_snapshot = or_(
-            RequestRecord.pricing_snapshot_json.is_(None),
-            ~RequestRecord.pricing_snapshot_json.like('%"cached_input_pricing"%'),
-            RequestRecord.pricing_snapshot_json.like('%"standard_input_rate"%'),
+        providers = session.scalars(select(ModelProvider)).all()
+        providers_by_slug = {provider.slug: provider for provider in providers}
+        provider_urls = tuple(
+            (provider.slug, provider.upstream_url.rstrip("/"))
+            for provider in providers
+            if provider.upstream_url
         )
+        candidate_filter = _backfill_candidate_filter(engine)
+        has_candidates = session.scalar(
+            select(RequestRecord.id).where(candidate_filter).limit(1)
+        )
+        if has_candidates is None:
+            return 0
         records = session.scalars(
-            select(RequestRecord)
-            .where(stale_snapshot)
-            .execution_options(yield_per=200)
+            select(RequestRecord).where(candidate_filter).execution_options(yield_per=200)
         )
         for record in records:
-            if (
-                record.billing_cached_input_tokens is not None
-                and record.billing_cached_input_tokens <= 0
-            ):
-                continue
             usage = _record_usage_for_backfill(record)
             if (
                 usage.input_tokens is None
@@ -306,7 +307,7 @@ def backfill_historical_cached_cost_estimates(engine: Engine) -> int:
                 or not usage.cached_input_tokens
             ):
                 continue
-            provider_slug = _record_provider_slug(session, record)
+            provider_slug = _record_provider_slug(record, providers_by_slug, provider_urls)
             billing_model = _record_billing_model(record)
             if provider_slug is None or billing_model is None:
                 continue
@@ -343,6 +344,26 @@ def backfill_historical_cached_cost_estimates(engine: Engine) -> int:
         if updated:
             session.commit()
     return updated
+
+
+def _backfill_candidate_filter(engine: Engine):
+    stale_snapshot = or_(
+        RequestRecord.pricing_snapshot_json.is_(None),
+        ~RequestRecord.pricing_snapshot_json.like('%"cached_input_pricing"%'),
+        RequestRecord.pricing_snapshot_json.like('%"standard_input_rate"%'),
+    )
+    if engine.dialect.name != "sqlite":
+        return and_(stale_snapshot, RequestRecord.billing_cached_input_tokens > 0)
+
+    response_body_text = cast(RequestRecord.response_body, Text)
+    cached_usage_marker = or_(
+        RequestRecord.billing_cached_input_tokens > 0,
+        response_body_text.like('%"cached_tokens"%'),
+        response_body_text.like('%"cache_read_tokens"%'),
+        response_body_text.like('%"cached_input_tokens"%'),
+        response_body_text.like('%"prompt_cache_hit_tokens"%'),
+    )
+    return and_(stale_snapshot, cached_usage_marker)
 
 
 def _request_records_table_supports_backfill(engine: Engine) -> bool:
@@ -391,8 +412,12 @@ def _record_usage_for_backfill(record: RequestRecord) -> ExtractedTokenUsage:
     )
 
 
-def _record_provider_slug(session: Session, record: RequestRecord) -> str | None:
-    if record.billing_provider_slug and session.get(ModelProvider, record.billing_provider_slug):
+def _record_provider_slug(
+    record: RequestRecord,
+    providers_by_slug: dict[str, ModelProvider],
+    provider_urls: tuple[tuple[str, str], ...],
+) -> str | None:
+    if record.billing_provider_slug and record.billing_provider_slug in providers_by_slug:
         return record.billing_provider_slug
     if not record.upstream_url:
         return None
@@ -402,11 +427,9 @@ def _record_provider_slug(session: Session, record: RequestRecord) -> str | None
         return None
     if upstream_url is None:
         return None
-    providers = session.scalars(select(ModelProvider)).all()
-    for provider in providers:
-        provider_url = provider.upstream_url.rstrip("/")
+    for slug, provider_url in provider_urls:
         if upstream_url == provider_url or upstream_url.startswith(f"{provider_url}/"):
-            return provider.slug
+            return slug
     return None
 
 
