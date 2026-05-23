@@ -1294,7 +1294,8 @@ figcaption {
 }
 
 .registry-card,
-.route-summary-card {
+.route-summary-card,
+.health-card {
   grid-column: 1 / -1;
 }
 
@@ -1423,6 +1424,18 @@ fieldset legend,
   margin-top: 3px;
   color: var(--muted);
   font-size: 12px;
+}
+
+.diagnostics-card .data-table,
+.usage-card .data-table {
+  min-width: 0;
+}
+
+.diagnostics-card .data-table th,
+.diagnostics-card .data-table td,
+.usage-card .data-table th,
+.usage-card .data-table td {
+  padding: 10px 12px;
 }
 
 .fix-list,
