@@ -283,16 +283,22 @@ def backfill_historical_cached_cost_estimates(engine: Engine) -> int:
         return 0
     updated = 0
     with Session(engine) as session:
+        stale_snapshot = or_(
+            RequestRecord.pricing_snapshot_json.is_(None),
+            ~RequestRecord.pricing_snapshot_json.like('%"cached_input_pricing"%'),
+            RequestRecord.pricing_snapshot_json.like('%"standard_input_rate"%'),
+        )
         records = session.scalars(
-            select(RequestRecord).where(
-                or_(
-                    RequestRecord.billing_cached_input_tokens > 0,
-                    RequestRecord.pricing_snapshot_json.is_(None),
-                    ~RequestRecord.pricing_snapshot_json.like('%"cached_input_pricing"%'),
-                )
-            )
-        ).all()
+            select(RequestRecord)
+            .where(stale_snapshot)
+            .execution_options(yield_per=200)
+        )
         for record in records:
+            if (
+                record.billing_cached_input_tokens is not None
+                and record.billing_cached_input_tokens <= 0
+            ):
+                continue
             usage = _record_usage_for_backfill(record)
             if (
                 usage.input_tokens is None

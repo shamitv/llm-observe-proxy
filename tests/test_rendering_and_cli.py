@@ -783,6 +783,15 @@ def test_model_price_tiers_validate_bounds_and_preserve_relationships(tmp_path) 
                 input_usd_per_million="1",
                 output_usd_per_million="2",
             )
+        with pytest.raises(ValueError, match="greater than"):
+            upsert_model_price_tier(
+                session,
+                model_price_id=price.id,
+                min_input_tokens="",
+                max_input_tokens="0",
+                input_usd_per_million="1",
+                output_usd_per_million="2",
+            )
 
         assert price.source_url == "https://example.com/pricing"
         assert price.checked_at == "2026-05-23"

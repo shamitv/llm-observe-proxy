@@ -1617,7 +1617,8 @@ def _optional_token_bound(value: object, label: str) -> int | None:
 
 
 def _validate_tier_bounds(minimum: int | None, maximum: int | None) -> None:
-    if minimum is not None and maximum is not None and maximum <= minimum:
+    normalized_minimum = minimum if minimum is not None else 0
+    if maximum is not None and maximum <= normalized_minimum:
         raise ValueError("Maximum input tokens must be greater than minimum input tokens.")
 
 
