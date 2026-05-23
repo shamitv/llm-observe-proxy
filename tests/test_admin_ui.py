@@ -115,6 +115,36 @@ def test_request_browser_pagination_preserves_filters(
     assert "<span>other-model</span>" not in page.text
 
 
+def test_request_browser_tool_filter_accepts_empty_form_values(
+    proxy_client: TestClient,
+    proxy_app: FastAPI,
+) -> None:
+    with proxy_app.state.session_factory() as session:
+        started = datetime(2026, 5, 1, tzinfo=UTC)
+        plain_record = _add_request_record(
+            session,
+            created_at=started,
+            model="plain-model",
+        )
+        tool_record = _add_request_record(
+            session,
+            created_at=started + timedelta(minutes=1),
+            model="tool-model",
+            has_tool_calls=True,
+        )
+        session.commit()
+        plain_id = plain_record.id
+        tool_id = tool_record.id
+
+    page = proxy_client.get("/admin?endpoint=&model=&run=&status=&tool=1")
+
+    assert page.status_code == 200
+    assert "tool-model" in page.text
+    assert f'href="/admin/requests/{tool_id}">#{tool_id}</a>' in page.text
+    assert f'href="/admin/requests/{plain_id}">#{plain_id}</a>' not in page.text
+    assert 'name="tool" value="1" checked' in page.text
+
+
 def test_pending_requests_show_elapsed_duration(
     proxy_client: TestClient,
     proxy_app: FastAPI,
@@ -1418,6 +1448,7 @@ def _add_request_record(
     output_tokens: int | None = 3,
     completed: bool = True,
     estimated_input_tokens: int | None = None,
+    has_tool_calls: bool = False,
 ) -> RequestRecord:
     total_tokens = (
         input_tokens + output_tokens
@@ -1452,6 +1483,7 @@ def _add_request_record(
         estimated_input_tokens=estimated_input_tokens,
         estimated_input_tokenizer="o200k_base" if estimated_input_tokens is not None else None,
         estimated_input_model=model if estimated_input_tokens is not None else None,
+        has_tool_calls=has_tool_calls,
     )
     session.add(record)
     return record

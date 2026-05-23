@@ -11,7 +11,7 @@ from typing import Annotated, Any
 from urllib.parse import unquote, urlencode
 
 import httpx
-from fastapi import APIRouter, Form, Query, Request
+from fastapi import APIRouter, Form, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from jinja2 import Undefined, pass_context
 from sqlalchemy import desc, func, select
@@ -257,8 +257,8 @@ async def index(
     request: Request,
     endpoint: str | None = None,
     model: str | None = None,
-    status: int | None = None,
-    run: int | None = None,
+    status: str | None = None,
+    run: str | None = None,
     stream: str | None = None,
     image: str | None = None,
     tool: str | None = None,
@@ -266,16 +266,18 @@ async def index(
     per_page: int = Query(50, ge=1, le=200),
 ) -> HTMLResponse:
     session_factory: SessionFactory = request.app.state.session_factory
+    status_filter = _optional_query_int(status, "status")
+    run_filter = _optional_query_int(run, "run")
     with session_scope(session_factory) as session:
         stmt = select(RequestRecord)
         if endpoint:
             stmt = stmt.where(RequestRecord.endpoint.like(f"%{endpoint}%"))
         if model:
             stmt = stmt.where(RequestRecord.model == model)
-        if status is not None:
-            stmt = stmt.where(RequestRecord.response_status == status)
-        if run is not None:
-            stmt = stmt.where(RequestRecord.task_run_id == run)
+        if status_filter is not None:
+            stmt = stmt.where(RequestRecord.response_status == status_filter)
+        if run_filter is not None:
+            stmt = stmt.where(RequestRecord.task_run_id == run_filter)
         if stream == "1":
             stmt = stmt.where(RequestRecord.is_stream.is_(True))
         if image == "1":
@@ -335,8 +337,8 @@ async def index(
             "filters": {
                 "endpoint": endpoint or "",
                 "model": model or "",
-                "status": status or "",
-                "run": run or "",
+                "status": status_filter if status_filter is not None else "",
+                "run": run_filter if run_filter is not None else "",
                 "stream": stream == "1",
                 "image": image == "1",
                 "tool": tool == "1",
@@ -1398,6 +1400,18 @@ def _truthy(value: object) -> bool:
     if value is None:
         return False
     return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _optional_query_int(value: object, field_name: str) -> int | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        return int(text)
+    except ValueError:
+        raise HTTPException(status_code=422, detail=f"{field_name} must be an integer.") from None
 
 
 def _api_settings_summary(request: Request, session, *, days: int = 30) -> dict[str, object]:
