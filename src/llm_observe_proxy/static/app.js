@@ -335,3 +335,239 @@ if (whatIfPanel) {
 
   updateFromApi();
 }
+
+document.querySelectorAll("[data-confirm-message]").forEach((form) => {
+  form.addEventListener("submit", (event) => {
+    const message = form.dataset.confirmMessage || "Continue with this action?";
+    if (!window.confirm(message)) {
+      event.preventDefault();
+    }
+  });
+});
+
+document.querySelectorAll("[data-enable-danger]").forEach((checkbox) => {
+  const form = checkbox.closest("form");
+  const button = form?.querySelector("[data-danger-submit]");
+  const update = () => {
+    if (button) {
+      button.disabled = !checkbox.checked;
+    }
+  };
+  checkbox.addEventListener("change", update);
+  update();
+});
+
+document.querySelectorAll("[data-fix-picker]").forEach((form) => {
+  const target = form.querySelector("[data-fix-target]");
+  const manual = form.querySelector("[data-fix-manual]");
+  const checkboxes = Array.from(form.querySelectorAll("[data-fix-id]"));
+
+  const syncFromChecks = () => {
+    const value = checkboxes
+      .filter((checkbox) => checkbox.checked)
+      .map((checkbox) => checkbox.value)
+      .join("\n");
+    if (target) {
+      target.value = value;
+    }
+    if (manual) {
+      manual.value = value;
+    }
+  };
+
+  const syncFromManual = () => {
+    if (target && manual) {
+      target.value = manual.value;
+    }
+  };
+
+  checkboxes.forEach((checkbox) => checkbox.addEventListener("change", syncFromChecks));
+  manual?.addEventListener("input", syncFromManual);
+  form.addEventListener("submit", syncFromManual);
+});
+
+const applyTableFilters = (tableId) => {
+  const table = document.getElementById(tableId);
+  if (!table) {
+    return;
+  }
+
+  const search = document.querySelector(`[data-table-filter="${tableId}"]`)?.value
+    .trim()
+    .toLowerCase() || "";
+  const status = document.querySelector(`[data-table-status-filter="${tableId}"]`)?.value || "";
+  const provider = document.querySelector(`[data-table-provider-filter="${tableId}"]`)?.value || "";
+  const currency = document.querySelector(`[data-table-currency-filter="${tableId}"]`)?.value || "";
+
+  table.querySelectorAll("tbody tr").forEach((row) => {
+    const text = (row.dataset.searchText || row.textContent || "").toLowerCase();
+    const matchesSearch = !search || text.includes(search);
+    const matchesStatus = !status || row.dataset.status === status;
+    const matchesProvider = !provider || row.dataset.provider === provider;
+    const matchesCurrency = !currency || row.dataset.currency === currency;
+    row.hidden = !(matchesSearch && matchesStatus && matchesProvider && matchesCurrency);
+  });
+};
+
+document.querySelectorAll("[data-table-filter], [data-table-status-filter], [data-table-provider-filter], [data-table-currency-filter]").forEach((control) => {
+  const tableId = control.dataset.tableFilter
+    || control.dataset.tableStatusFilter
+    || control.dataset.tableProviderFilter
+    || control.dataset.tableCurrencyFilter;
+  control.addEventListener("input", () => applyTableFilters(tableId));
+  control.addEventListener("change", () => applyTableFilters(tableId));
+});
+
+const setFieldValue = (form, selector, value) => {
+  const field = form.querySelector(selector);
+  if (!field) {
+    return;
+  }
+  if (field.type === "checkbox") {
+    field.checked = value === "yes" || value === "true" || value === true;
+    return;
+  }
+  field.value = value || "";
+};
+
+document.querySelectorAll("[data-route-row]").forEach((row) => {
+  row.addEventListener("click", (event) => {
+    if (event.target.closest("button, a, form, input, select, textarea")) {
+      return;
+    }
+    const form = document.querySelector("[data-route-editor]");
+    if (!form || !row.dataset.routeId) {
+      return;
+    }
+    document.querySelectorAll("[data-route-row]").forEach((item) => item.classList.remove("is-selected"));
+    row.classList.add("is-selected");
+    setFieldValue(form, "[data-route-editor-field='route_id']", row.dataset.routeId);
+    setFieldValue(form, "[data-route-editor-field='model']", row.dataset.routeModel);
+    setFieldValue(form, "[data-route-editor-field='match_type']", row.dataset.routeMatchType);
+    setFieldValue(form, "[data-route-editor-field='upstream_url']", row.dataset.routeUpstreamUrl);
+    setFieldValue(form, "[data-route-editor-field='upstream_model']", row.dataset.routeUpstreamModel);
+    setFieldValue(form, "[data-route-editor-field='provider_slug']", row.dataset.routeProvider);
+    setFieldValue(form, "[data-route-editor-field='api_key_env']", row.dataset.routeApiKeyEnv);
+    setFieldValue(form, "[data-route-editor-field='fixes']", row.dataset.routeFixes);
+    setFieldValue(form, "[data-route-editor-field='priority']", row.dataset.routePriority || "50");
+    setFieldValue(form, "[data-route-editor-field='active']", row.dataset.routeActive);
+    setFieldValue(form, "[data-route-editor-field='override_fallback']", row.dataset.routeOverrideFallback);
+  });
+});
+
+document.querySelector("[data-clear-route-editor]")?.addEventListener("click", () => {
+  const form = document.querySelector("[data-route-editor]");
+  if (!form) {
+    return;
+  }
+  form.reset();
+  setFieldValue(form, "[data-route-editor-field='route_id']", "");
+  setFieldValue(form, "[data-route-editor-field='priority']", "50");
+  document.querySelectorAll("[data-route-row]").forEach((item) => item.classList.remove("is-selected"));
+});
+
+document.querySelectorAll("[data-provider-row]").forEach((row) => {
+  row.addEventListener("click", (event) => {
+    if (event.target.closest("button, a, form, input, select, textarea")) {
+      return;
+    }
+    const form = document.querySelector("[data-provider-editor]");
+    if (!form) {
+      return;
+    }
+    document.querySelectorAll("[data-provider-row]").forEach((item) => item.classList.remove("is-selected"));
+    row.classList.add("is-selected");
+    setFieldValue(form, "[data-provider-editor-field='slug']", row.dataset.providerSlug);
+    setFieldValue(form, "[data-provider-editor-field='name']", row.dataset.providerName);
+    setFieldValue(form, "[data-provider-editor-field='upstream_url']", row.dataset.providerUrl);
+    setFieldValue(form, "[data-provider-editor-field='currency']", row.dataset.providerCurrency || "USD");
+    setFieldValue(form, "[data-provider-editor-field='api_key_env']", row.dataset.providerApiKeyEnv);
+    setFieldValue(form, "[data-provider-editor-field='active']", row.dataset.providerActive);
+    setFieldValue(form, "[data-provider-editor-field='is_default_fallback']", row.dataset.providerDefault);
+    setFieldValue(form, "[data-provider-editor-field='capability_text']", row.dataset.providerText);
+    setFieldValue(form, "[data-provider-editor-field='capability_vision']", row.dataset.providerVision);
+    setFieldValue(form, "[data-provider-editor-field='capability_tool_calling']", row.dataset.providerToolCalling);
+  });
+});
+
+document.querySelector("[data-clear-provider-editor]")?.addEventListener("click", () => {
+  const form = document.querySelector("[data-provider-editor]");
+  if (!form) {
+    return;
+  }
+  form.reset();
+  document.querySelectorAll("[data-provider-row]").forEach((item) => item.classList.remove("is-selected"));
+});
+
+document.querySelectorAll("[data-route-simulator]").forEach((form) => {
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const result = form.parentElement.querySelector("[data-route-simulator-result]");
+    const model = form.querySelector("input[name='model']")?.value || "";
+    if (result) {
+      result.textContent = "Running simulation...";
+    }
+    try {
+      const response = await fetch("/admin/api/routes/simulate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        body: JSON.stringify({ model }),
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.detail || `Simulation returned ${response.status}`);
+      }
+      if (result) {
+        result.replaceChildren();
+        const status = document.createElement("strong");
+        status.textContent = data.status || "unknown";
+        const route = document.createElement("span");
+        route.textContent = `Route: ${data.matched_route || "global fallback or no match"}`;
+        const upstream = document.createElement("code");
+        upstream.textContent = `${data.upstream_url || "-"} -> ${data.upstream_model || "-"}`;
+        const provider = document.createElement("span");
+        provider.textContent = `Provider: ${data.provider_name || data.provider_slug || "-"}`;
+        result.append(status, route, upstream, provider);
+      }
+    } catch (error) {
+      if (result) {
+        result.textContent = error.message || "Simulation failed.";
+      }
+    }
+  });
+});
+
+document.querySelectorAll("[data-provider-health]").forEach((button) => {
+  button.addEventListener("click", async () => {
+    const tables = document.querySelectorAll("[data-provider-health-table] tbody");
+    button.disabled = true;
+    button.textContent = "Checking...";
+    try {
+      const response = await fetch("/admin/api/providers/health-checks", {
+        method: "POST",
+        headers: { Accept: "application/json" },
+      });
+      const rows = await response.json();
+      if (!response.ok) {
+        throw new Error(`Health checks returned ${response.status}`);
+      }
+      tables.forEach((tbody) => {
+        tbody.replaceChildren();
+        rows.forEach((item) => {
+          const row = document.createElement("tr");
+          [item.provider_slug, item.checked_at || "now", item.latency_ms ?? "-", item.auth_state || "-", item.status || "-"].forEach((value) => {
+            const cell = document.createElement("td");
+            cell.textContent = value;
+            row.append(cell);
+          });
+          tbody.append(row);
+        });
+      });
+    } catch (_error) {
+      window.alert("Provider health checks are unavailable.");
+    } finally {
+      button.disabled = false;
+      button.textContent = "Run health checks";
+    }
+  });
+});

@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+{% import "_connection_summary.html" as summaries %}
+{% block app_body %}
+{% set tab_items = [
+  ("server", "Server", "/admin/settings/server", "S"),
+  ("routing", "Routing", "/admin/settings/routing", "R"),
+  ("providers", "Providers", "/admin/settings/providers", "P"),
+  ("pricing", "Pricing", "/admin/settings/pricing", "$"),
+  ("diagnostics", "Diagnostics", "/admin/settings/diagnostics", "D"),
+  ("data", "Data", "/admin/settings/data", "DB")
+] %}
+<aside class="settings-sidebar" aria-label="Settings sections">
+  <div class="sidebar-header">
+    <span class="sidebar-title">Settings</span>
+    <span class="sidebar-subtitle">v0.5 control plane</span>
+  </div>
+  <nav class="sidebar-nav">
+    {% for key, label, href, icon in tab_items %}
+    <a class="sidebar-nav-item {{ 'active' if settings_tab == key else '' }}" href="{{ href }}">
+      <span class="nav-icon" aria-hidden="true">{{ icon }}</span>
+      <span>{{ label }}</span>
+    </a>
+    {% endfor %}
+  </nav>
+  <div class="sidebar-env-card">
+    <span>Environment</span>
+    <strong>Local development</strong>
+    <small>{{ incoming_host }}:{{ incoming_port }} / {{ app_version }}</small>
+  </div>
+</aside>
+
+<main class="settings-content">
+  <section class="settings-hero">
+    <div>
+      <p class="eyebrow">Admin</p>
+      <h1>Settings</h1>
+    </div>
+    <div class="settings-hero-meta">
+      <span>{{ settings_tab | title }}</span>
+      <span>{{ summary.stored_rows | compact_number }} stored rows</span>
+    </div>
+  </section>
+
+  {% if error %}
+  <div class="alert">{{ error }}</div>
+  {% endif %}
+
+  <section class="connection-summary" aria-label="Connection summary">
+    {% block summary_cards %}
+    {{ summaries.summary_card("IN", "Proxy listener", summary.listener.host ~ ":" ~ summary.listener.port, "Admin and proxy port") }}
+    {{ summaries.summary_card("CL", "Client base URL", summary.client_base_url, "OpenAI-compatible endpoint") }}
+    {{ summaries.summary_card("FB", "Global fallback", (summary.upstream.default_provider_name or "No provider") ~ " / " ~ (summary.upstream.default_model or "No model"), "Used when no route matches", true) }}
+    {{ summaries.summary_card("DB", "Stored rows", summary.stored_rows | compact_number, (summary.rows_older_than_retention | compact_number) ~ " older than " ~ summary.retention_days ~ " days") }}
+    {% endblock %}
+  </section>
+
+  <nav class="tab-bar" aria-label="Settings tabs">
+    {% for key, label, href, icon in tab_items %}
+    <a class="tab-item {{ 'active' if settings_tab == key else '' }}" href="{{ href }}">
+      <span aria-hidden="true">{{ icon }}</span>
+      <span>{{ label }}</span>
+    </a>
+    {% endfor %}
+  </nav>
+
+  {% block settings_content %}{% endblock %}
+</main>
+{% endblock %}

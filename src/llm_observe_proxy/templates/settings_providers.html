@@ -1,0 +1,237 @@
+{% extends "settings_base.html" %}
+{% import "_connection_summary.html" as summaries %}
+{% import "_status_badge.html" as badges %}
+{% block summary_cards %}
+{{ summaries.summary_card("PV", "Active providers", summary.active_providers | compact_number, "Across all environments") }}
+{{ summaries.summary_card("DF", "Default provider", fallback.provider_name | default("No provider", true), "Used for fallback", true) }}
+{{ summaries.summary_card("MD", "Default model family", fallback.model | default("No model", true), "Used when no route matches") }}
+{{ summaries.summary_card("DB", "Stored rows", summary.stored_rows | compact_number, (summary.rows_older_than_retention | compact_number) ~ " older than " ~ summary.retention_days ~ " days") }}
+{% endblock %}
+{% block settings_content %}
+<section class="settings-grid v05-grid">
+  <article class="card registry-card">
+    <div class="card-header">
+      <div>
+        <h2>Provider Registry</h2>
+        <p>Base URLs, auth environment variables, capabilities, and fallback status.</p>
+      </div>
+      <a class="button primary button-primary" href="#provider-editor">Add provider</a>
+    </div>
+    <div class="filter-row">
+      <label class="search-bar">
+        <span>Search providers</span>
+        <input data-table-filter="providers-table" placeholder="Search providers..." aria-label="Search providers">
+      </label>
+      <label>
+        <span>Status</span>
+        <select data-table-status-filter="providers-table">
+          <option value="">All status</option>
+          <option value="active">Active</option>
+          <option value="inactive">Inactive</option>
+        </select>
+      </label>
+      <label>
+        <span>Currency</span>
+        <select data-table-currency-filter="providers-table">
+          <option value="">All currencies</option>
+          {% for provider in providers | unique(attribute="currency") %}
+          <option value="{{ provider.currency }}">{{ provider.currency }}</option>
+          {% endfor %}
+        </select>
+      </label>
+    </div>
+    <div class="table-shell">
+      <table class="data-table" id="providers-table">
+        <thead>
+          <tr>
+            <th scope="col">Provider</th>
+            <th scope="col">Slug</th>
+            <th scope="col">Base URL</th>
+            <th scope="col">Currency</th>
+            <th scope="col">Status</th>
+            <th scope="col">Models / Routes</th>
+            <th scope="col">Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for provider in providers %}
+          {% set usage = provider_usage | selectattr("provider_slug", "equalto", provider.slug) | list | first %}
+          <tr data-search-text="{{ provider.name }} {{ provider.slug }} {{ provider.upstream_url }} {{ provider.currency }}" data-status="{{ 'active' if provider.active else 'inactive' }}" data-currency="{{ provider.currency }}" data-provider-row data-provider-slug="{{ provider.slug }}" data-provider-name="{{ provider.name }}" data-provider-url="{{ provider.upstream_url | default('', true) }}" data-provider-currency="{{ provider.currency }}" data-provider-api-key-env="{{ provider.api_key_env | default('', true) }}" data-provider-active="{{ 'yes' if provider.active else 'no' }}" data-provider-default="{{ 'yes' if provider.is_default_fallback else 'no' }}" data-provider-text="{{ 'yes' if provider.capabilities.text else 'no' }}" data-provider-vision="{{ 'yes' if provider.capabilities.vision else 'no' }}" data-provider-tool-calling="{{ 'yes' if provider.capabilities.tool_calling else 'no' }}">
+            <td><strong>{{ provider.name }}</strong>{% if provider.is_default_fallback %}<small>Default fallback</small>{% endif %}</td>
+            <td><code>{{ provider.slug }}</code></td>
+            <td><code>{{ provider.upstream_url | default("-", true) }}</code></td>
+            <td>{{ provider.currency }}</td>
+            <td>{{ badges.status_badge("Active" if provider.active else "Inactive") }}</td>
+            <td>{{ usage.active_routes | default(0, true) }} routes</td>
+            <td>
+              <form method="post" action="/admin/settings/providers/delete" data-confirm-message="Delete provider {{ provider.name }}? This may affect routes and pricing entries.">
+                <input type="hidden" name="slug" value="{{ provider.slug }}">
+                <button class="button danger compact-button button-danger" type="submit">Delete</button>
+              </form>
+            </td>
+          </tr>
+          {% else %}
+          <tr><td colspan="7" class="empty">No providers are configured.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </article>
+
+  <form class="card form-card editor-card" id="provider-editor" method="post" action="/admin/settings/providers" data-provider-editor>
+    <div class="card-header">
+      <div>
+        <h2>Selected Provider</h2>
+        <p>Click a provider row to load it here, or save a new provider.</p>
+      </div>
+      {{ badges.status_badge("Editable") }}
+    </div>
+    <div class="form-grid two-col">
+      <label class="form-field">
+        <span>Provider name</span>
+        <input name="name" placeholder="OpenAI" required data-provider-editor-field="name">
+      </label>
+      <label class="form-field">
+        <span>Slug</span>
+        <input name="slug" placeholder="openai" required data-provider-editor-field="slug">
+      </label>
+      <label class="form-field wide">
+        <span>Base URL</span>
+        <input name="upstream_url" placeholder="https://api.openai.com/v1" data-provider-editor-field="upstream_url">
+      </label>
+      <label class="form-field">
+        <span>Currency</span>
+        <input name="currency" value="USD" required data-provider-editor-field="currency">
+      </label>
+      <label class="form-field">
+        <span>API key env var</span>
+        <input name="api_key_env" placeholder="OPENAI_API_KEY" data-provider-editor-field="api_key_env">
+      </label>
+      <label class="check switch-line">
+        <input type="hidden" name="active" value="no">
+        <input type="checkbox" name="active" value="yes" checked data-provider-editor-field="active">
+        <span>Active</span>
+      </label>
+      <label class="check switch-line">
+        <input type="checkbox" name="is_default_fallback" value="yes" data-provider-editor-field="is_default_fallback">
+        <span>Default for fallback</span>
+      </label>
+    </div>
+    <fieldset class="chip-fieldset">
+      <legend>Supported capabilities</legend>
+      <label class="check"><input type="checkbox" name="capability_text" value="yes" checked data-provider-editor-field="capability_text"> Text</label>
+      <label class="check"><input type="checkbox" name="capability_vision" value="yes" data-provider-editor-field="capability_vision"> Vision</label>
+      <label class="check"><input type="checkbox" name="capability_tool_calling" value="yes" checked data-provider-editor-field="capability_tool_calling"> Tool calling</label>
+    </fieldset>
+    <p class="muted">A default fallback provider must be active and should have a reachable OpenAI-compatible base URL.</p>
+    <div class="button-row">
+      <button class="button primary button-primary" type="submit">Save provider</button>
+      <button class="button ghost button-ghost" type="button" data-run-provider-test>Test provider</button>
+      <button class="button ghost button-ghost" type="button" data-clear-provider-editor>Clear</button>
+    </div>
+  </form>
+
+  <form class="card form-card" method="post" action="/admin/settings/upstream-defaults">
+    <div class="card-header">
+      <div>
+        <h2>Fallback Defaults</h2>
+        <p>Route misses can use a default provider and model.</p>
+      </div>
+      {{ badges.status_badge("Enabled" if fallback_enabled else "Inactive") }}
+    </div>
+    <input type="hidden" name="upstream_url" value="{{ upstream_url }}">
+    <div class="form-grid two-col">
+      <label class="form-field">
+        <span>Default provider</span>
+        <select name="default_provider_slug">
+          <option value="">No default provider</option>
+          {% for provider in providers %}
+          <option value="{{ provider.slug }}" {% if default_provider_slug == provider.slug %}selected{% endif %}>{{ provider.name }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label class="form-field">
+        <span>Default model</span>
+        <input name="default_model" value="{{ default_model }}" placeholder="qwen/qwen3.6-35b">
+      </label>
+      <label class="check switch-line">
+        <input type="hidden" name="fallback_enabled" value="no">
+        <input type="checkbox" name="fallback_enabled" value="yes" {% if fallback_enabled %}checked{% endif %}>
+        <span>Enable fallback routing</span>
+      </label>
+    </div>
+    <div class="button-row">
+      <button class="button primary button-primary" type="submit">Save fallback defaults</button>
+    </div>
+  </form>
+
+  <article class="card diagnostics-card">
+    <div class="card-header">
+      <div>
+        <h2>Provider Health / Diagnostics</h2>
+        <p>Lightweight checks call each configured provider's <code>/models</code> endpoint.</p>
+      </div>
+      <button class="button ghost button-ghost" type="button" data-provider-health>Run health checks</button>
+    </div>
+    <div class="table-shell">
+      <table class="data-table" data-provider-health-table>
+        <thead>
+          <tr>
+            <th scope="col">Provider</th>
+            <th scope="col">Last check</th>
+            <th scope="col">Latency</th>
+            <th scope="col">Auth</th>
+            <th scope="col">Result</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for provider in providers %}
+          {% set health = health_results.get(provider.slug, {}) %}
+          <tr>
+            <td>{{ provider.name }}</td>
+            <td>{{ health.checked_at | default("Not checked", true) }}</td>
+            <td>{{ health.latency_ms | default("-", true) }}</td>
+            <td>{{ health.auth_state | default(provider.api_key_env | default("not configured", true), true) }}</td>
+            <td>{{ badges.status_badge(health.status | default("Warning", true)) }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </article>
+
+  <article class="card usage-card">
+    <div class="card-header">
+      <div>
+        <h2>Recent Provider Usage</h2>
+        <p>Requests, estimated cost, and active routes since local midnight.</p>
+      </div>
+      <a class="button ghost button-ghost" href="/admin">View requests</a>
+    </div>
+    <div class="table-shell">
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th scope="col">Provider</th>
+            <th scope="col">Requests today</th>
+            <th scope="col">Estimated cost</th>
+            <th scope="col">Active routes</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in provider_usage %}
+          <tr>
+            <td>{{ row.provider_name }}</td>
+            <td>{{ row.requests_today | compact_number }}</td>
+            <td>{{ row.estimated_cost_usd | usd }}</td>
+            <td>{{ row.active_routes | compact_number }}</td>
+          </tr>
+          {% else %}
+          <tr><td colspan="4" class="empty">No provider usage recorded today.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </article>
+</section>
+{% endblock %}

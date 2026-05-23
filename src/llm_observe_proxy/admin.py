@@ -8,7 +8,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import Annotated, Any
-from urllib.parse import urlencode
+from urllib.parse import unquote, urlencode
 
 import httpx
 from fastapi import APIRouter, Form, Query, Request
@@ -28,7 +28,7 @@ from llm_observe_proxy.compatibility import (
     fix_ids_text,
     normalize_fix_ids,
 )
-from llm_observe_proxy.config import ModelRoute, normalize_upstream_url
+from llm_observe_proxy.config import normalize_upstream_url
 from llm_observe_proxy.costing import RunCostEstimate, estimate_run_cost
 from llm_observe_proxy.database import (
     ModelPrice,
@@ -54,7 +54,6 @@ from llm_observe_proxy.database import (
     get_provider_usage_summary,
     get_route_usage_summary,
     get_task_run_stats,
-    get_ui_model_routes,
     get_upstream_url,
     list_model_prices,
     list_model_providers,
@@ -72,7 +71,6 @@ from llm_observe_proxy.database import (
     upsert_model_price_tier,
     upsert_model_provider,
     upsert_model_route_db,
-    upsert_ui_model_route,
 )
 from llm_observe_proxy.rendering import escape_preview, render_payload
 from llm_observe_proxy.routing import (
@@ -535,6 +533,68 @@ async def end_run(request: Request) -> HTMLResponse:
 
 @router.get("/settings", response_class=HTMLResponse)
 async def settings(request: Request, days: int = Query(30, ge=1, le=3650)) -> HTMLResponse:
+    return RedirectResponse("/admin/settings/server", status_code=303)
+
+
+@router.get("/settings/server", response_class=HTMLResponse)
+async def settings_server(
+    request: Request,
+    days: int = Query(30, ge=1, le=3650),
+) -> HTMLResponse:
+    return _settings_tab_response(request, "settings_server.html", "server", days=days)
+
+
+@router.get("/settings/routing", response_class=HTMLResponse)
+async def settings_routing(
+    request: Request,
+    days: int = Query(30, ge=1, le=3650),
+) -> HTMLResponse:
+    return _settings_tab_response(request, "settings_routing.html", "routing", days=days)
+
+
+@router.get("/settings/providers", response_class=HTMLResponse)
+async def settings_providers(
+    request: Request,
+    days: int = Query(30, ge=1, le=3650),
+) -> HTMLResponse:
+    return _settings_tab_response(request, "settings_providers.html", "providers", days=days)
+
+
+@router.get("/settings/pricing", response_class=HTMLResponse)
+async def settings_pricing(
+    request: Request,
+    days: int = Query(30, ge=1, le=3650),
+) -> HTMLResponse:
+    return _settings_tab_response(request, "settings_pricing.html", "pricing", days=days)
+
+
+@router.get("/settings/diagnostics", response_class=HTMLResponse)
+async def settings_diagnostics(
+    request: Request,
+    days: int = Query(30, ge=1, le=3650),
+) -> HTMLResponse:
+    return _settings_tab_response(request, "settings_diagnostics.html", "diagnostics", days=days)
+
+
+@router.get("/settings/data", response_class=HTMLResponse)
+async def settings_data(
+    request: Request,
+    days: int = Query(30, ge=1, le=3650),
+) -> HTMLResponse:
+    return _settings_tab_response(request, "settings_data.html", "data", days=days)
+
+
+def _settings_tab_response(
+    request: Request,
+    template_name: str,
+    settings_tab: str,
+    *,
+    days: int = 30,
+    error: str | None = None,
+    test_result: dict[str, Any] | None = None,
+    test_model: str = "gpt-test",
+    test_prompt: str = TEST_PROMPT_DEFAULT,
+) -> HTMLResponse:
     session_factory: SessionFactory = request.app.state.session_factory
     cutoff = datetime.now(UTC) - timedelta(days=days)
     with session_scope(session_factory) as session:
@@ -542,11 +602,34 @@ async def settings(request: Request, days: int = Query(30, ge=1, le=3650)) -> HT
         trim_count = session.scalar(
             select(func.count()).where(RequestRecord.created_at < cutoff)
         ) or 0
-        context = _settings_context(request, session, total=total, trim_count=trim_count, days=days)
+        context = _settings_context(
+            request,
+            session,
+            total=total,
+            trim_count=trim_count,
+            days=days,
+            error=error,
+            test_result=test_result,
+            test_model=test_model,
+            test_prompt=test_prompt,
+        )
+        context.update(
+            {
+                "settings_tab": settings_tab,
+                "active_nav": "settings",
+                "app_version": "v0.5.0",
+                "summary": _api_settings_summary(request, session, days=days),
+                "fallback": get_fallback_summary(session),
+                "provider_usage": get_provider_usage_summary(session),
+                "route_usage": get_route_usage_summary(session),
+                "health_results": getattr(request.app.state, "provider_health_results", {}),
+                "storage_stats": _storage_stats(request, session),
+            }
+        )
 
     return templates.TemplateResponse(
         request,
-        "settings.html",
+        template_name,
         context,
     )
 
@@ -563,7 +646,7 @@ async def update_incoming(
     session_factory: SessionFactory = request.app.state.session_factory
     with session_scope(session_factory) as session:
         set_incoming_server(session, incoming_port, expose_all_ips == "yes")
-    return RedirectResponse("/admin/settings", status_code=303)
+    return RedirectResponse("/admin/settings/server", status_code=303)
 
 
 @router.post("/settings/upstream", response_class=HTMLResponse)
@@ -576,7 +659,31 @@ async def update_upstream(request: Request, upstream_url: str = Form(...)) -> HT
     session_factory: SessionFactory = request.app.state.session_factory
     with session_scope(session_factory) as session:
         set_setting(session, "upstream_url", normalized)
-    return RedirectResponse("/admin/settings", status_code=303)
+    return RedirectResponse("/admin/settings/server", status_code=303)
+
+
+@router.post("/settings/upstream-defaults", response_class=HTMLResponse)
+async def update_upstream_defaults(
+    request: Request,
+    upstream_url: str = Form(...),
+    default_provider_slug: str = Form(""),
+    default_model: str = Form(""),
+    fallback_enabled: str | None = Form("yes"),
+) -> HTMLResponse:
+    try:
+        normalized = normalize_upstream_url(upstream_url)
+        form = await request.form()
+        fallback_values = {str(value) for value in form.getlist("fallback_enabled")}
+        fallback_is_enabled = True if not fallback_values else "yes" in fallback_values
+        session_factory: SessionFactory = request.app.state.session_factory
+        with session_scope(session_factory) as session:
+            set_setting(session, "upstream_url", normalized)
+            set_default_provider_slug(session, default_provider_slug or None)
+            set_default_model(session, default_model)
+            set_fallback_enabled(session, fallback_is_enabled)
+    except ValueError as exc:
+        return await _settings_with_error(request, str(exc))
+    return RedirectResponse("/admin/settings/server", status_code=303)
 
 
 @router.post("/settings/compat-fixes", response_class=HTMLResponse)
@@ -588,7 +695,7 @@ async def update_default_compat_fixes(request: Request, fixes: str = Form("")) -
             set_default_compat_fixes(session, parsed_fixes)
     except ValueError as exc:
         return await _settings_with_error(request, str(exc))
-    return RedirectResponse("/admin/settings", status_code=303)
+    return RedirectResponse("/admin/settings/server", status_code=303)
 
 
 @router.post("/settings/model-routes", response_class=HTMLResponse)
@@ -600,31 +707,70 @@ async def upsert_model_route(
     provider_slug: str = Form(""),
     api_key_env: str = Form(""),
     fixes: str = Form(""),
+    match_type: str = Form("exact"),
+    priority: int = Form(50),
+    active: str | None = Form("yes"),
+    override_fallback: str | None = Form(None),
+    route_id: int | None = Form(None),
 ) -> HTMLResponse:
     settings = request.app.state.settings
     try:
-        route = ModelRoute(
-            model=model,
-            upstream_url=upstream_url,
-            upstream_model=upstream_model,
-            provider_slug=provider_slug,
-            api_key_env=api_key_env,
-            fixes=normalize_fix_ids(fixes),
-        )
+        parsed_fixes = normalize_fix_ids(fixes)
+        if not model.strip():
+            raise ValueError("Model route model is required.")
+        if model.strip() in {configured.model for configured in settings.model_routes}:
+            raise ValueError("Model route already exists in startup configuration.")
     except ValueError as exc:
         return await _settings_with_error(request, str(exc))
 
     session_factory: SessionFactory = request.app.state.session_factory
+    form = await request.form()
+    active_values = {str(value) for value in form.getlist("active")}
+    route_active = True if not active_values else "yes" in active_values
+    route_override_fallback = "yes" in {
+        str(value) for value in form.getlist("override_fallback")
+    }
     with session_scope(session_factory) as session:
         try:
-            upsert_ui_model_route(session, settings, route)
+            resolved_route_id = route_id
+            if resolved_route_id is None:
+                existing_route_id = session.scalar(
+                    select(ModelRouteDB.id).where(
+                        ModelRouteDB.incoming_model == model.strip(),
+                        ModelRouteDB.match_type == match_type.strip().lower(),
+                    )
+                )
+                resolved_route_id = int(existing_route_id) if existing_route_id else None
+            upsert_model_route_db(
+                session,
+                route_id=resolved_route_id,
+                incoming_model=model,
+                match_type=match_type,
+                upstream_url=upstream_url,
+                upstream_model=upstream_model,
+                provider_slug=provider_slug,
+                api_key_env=api_key_env,
+                compatibility_fixes=parsed_fixes,
+                override_fallback=route_override_fallback,
+                priority=priority,
+                active=route_active,
+            )
         except ValueError as exc:
             return await _settings_with_error(request, str(exc))
-    return RedirectResponse("/admin/settings", status_code=303)
+    return RedirectResponse("/admin/settings/routing", status_code=303)
 
 
 @router.post("/settings/model-routes/delete", response_class=HTMLResponse)
-async def delete_model_route(request: Request, model: str = Form(...)) -> HTMLResponse:
+async def delete_model_route(request: Request, model: str = Form("")) -> HTMLResponse:
+    form = await request.form()
+    route_id_value = form.get("route_id")
+    if route_id_value:
+        session_factory: SessionFactory = request.app.state.session_factory
+        with session_scope(session_factory) as session:
+            if not delete_model_route_db(session, int(str(route_id_value))):
+                return await _settings_with_error(request, "UI model route was not found.")
+        return RedirectResponse("/admin/settings/routing", status_code=303)
+
     resolved_model = model.strip()
     settings = request.app.state.settings
     if resolved_model in {route.model for route in settings.model_routes}:
@@ -637,7 +783,7 @@ async def delete_model_route(request: Request, model: str = Form(...)) -> HTMLRe
     with session_scope(session_factory) as session:
         if not delete_ui_model_route(session, resolved_model):
             return await _settings_with_error(request, "UI model route was not found.")
-    return RedirectResponse("/admin/settings", status_code=303)
+    return RedirectResponse("/admin/settings/routing", status_code=303)
 
 
 @router.post("/settings/providers", response_class=HTMLResponse)
@@ -647,8 +793,20 @@ async def upsert_provider(
     name: str = Form(...),
     upstream_url: str = Form(""),
     currency: str = Form("USD"),
+    api_key_env: str = Form(""),
+    active: str | None = Form("yes"),
+    is_default_fallback: str | None = Form(None),
+    capability_text: str | None = Form(None),
+    capability_vision: str | None = Form(None),
+    capability_tool_calling: str | None = Form(None),
 ) -> HTMLResponse:
     session_factory: SessionFactory = request.app.state.session_factory
+    form = await request.form()
+    active_values = {str(value) for value in form.getlist("active")}
+    provider_active = True if not active_values else "yes" in active_values
+    provider_is_default = "yes" in {
+        str(value) for value in form.getlist("is_default_fallback")
+    }
     try:
         with session_scope(session_factory) as session:
             upsert_model_provider(
@@ -657,10 +815,18 @@ async def upsert_provider(
                 name=name,
                 upstream_url=upstream_url,
                 currency=currency,
+                api_key_env=api_key_env,
+                active=provider_active,
+                is_default_fallback=provider_is_default,
+                capabilities={
+                    "text": capability_text == "yes",
+                    "vision": capability_vision == "yes",
+                    "tool_calling": capability_tool_calling == "yes",
+                },
             )
     except ValueError as exc:
         return await _settings_with_error(request, str(exc))
-    return RedirectResponse("/admin/settings", status_code=303)
+    return RedirectResponse("/admin/settings/providers", status_code=303)
 
 
 @router.post("/settings/providers/delete", response_class=HTMLResponse)
@@ -672,7 +838,7 @@ async def delete_provider(request: Request, slug: str = Form(...)) -> HTMLRespon
                 return await _settings_with_error(request, "Provider was not found.")
     except ValueError as exc:
         return await _settings_with_error(request, str(exc))
-    return RedirectResponse("/admin/settings", status_code=303)
+    return RedirectResponse("/admin/settings/providers", status_code=303)
 
 
 @router.post("/settings/model-prices", response_class=HTMLResponse)
@@ -689,6 +855,9 @@ async def upsert_price(
     notes: str = Form(""),
 ) -> HTMLResponse:
     session_factory: SessionFactory = request.app.state.session_factory
+    form = await request.form()
+    active_values = {str(value) for value in form.getlist("active")}
+    price_active = True if not active_values else "yes" in active_values
     try:
         with session_scope(session_factory) as session:
             upsert_model_price(
@@ -700,12 +869,12 @@ async def upsert_price(
                 input_usd_per_million=input_usd_per_million,
                 cached_input_usd_per_million=cached_input_usd_per_million,
                 output_usd_per_million=output_usd_per_million,
-                active=active == "yes",
+                active=price_active,
                 notes=notes,
             )
     except ValueError as exc:
         return await _settings_with_error(request, str(exc))
-    return RedirectResponse("/admin/settings", status_code=303)
+    return RedirectResponse("/admin/settings/pricing", status_code=303)
 
 
 @router.post("/settings/model-prices/delete", response_class=HTMLResponse)
@@ -718,7 +887,7 @@ async def delete_price(
     with session_scope(session_factory) as session:
         if not delete_model_price(session, provider_slug, model):
             return await _settings_with_error(request, "Model price was not found.")
-    return RedirectResponse("/admin/settings", status_code=303)
+    return RedirectResponse("/admin/settings/pricing", status_code=303)
 
 
 @router.post("/settings/model-price-tiers", response_class=HTMLResponse)
@@ -755,7 +924,7 @@ async def upsert_price_tier(
             )
     except ValueError as exc:
         return await _settings_with_error(request, str(exc))
-    return RedirectResponse("/admin/settings", status_code=303)
+    return RedirectResponse("/admin/settings/pricing", status_code=303)
 
 
 @router.post("/settings/model-price-tiers/delete", response_class=HTMLResponse)
@@ -767,7 +936,7 @@ async def delete_price_tier(
     with session_scope(session_factory) as session:
         if not delete_model_price_tier(session, tier_id):
             return await _settings_with_error(request, "Model price tier was not found.")
-    return RedirectResponse("/admin/settings", status_code=303)
+    return RedirectResponse("/admin/settings/pricing", status_code=303)
 
 
 @router.post("/settings/test-upstream", response_class=HTMLResponse)
@@ -811,25 +980,14 @@ async def test_upstream(
         routing_decision.upstream_model,
     )
 
-    days = 30
-    cutoff = datetime.now(UTC) - timedelta(days=days)
-    with session_scope(session_factory) as session:
-        total = session.scalar(select(func.count()).select_from(RequestRecord)) or 0
-        trim_count = session.scalar(
-            select(func.count()).where(RequestRecord.created_at < cutoff)
-        ) or 0
-        context = _settings_context(
-            request,
-            session,
-            total=total,
-            trim_count=trim_count,
-            days=days,
-            test_result=result,
-            test_model=model.strip() or "gpt-test",
-            test_prompt=prompt.strip() or TEST_PROMPT_DEFAULT,
-        )
-
-    return templates.TemplateResponse(request, "settings.html", context)
+    return _settings_tab_response(
+        request,
+        "settings_diagnostics.html",
+        "diagnostics",
+        test_result=result,
+        test_model=model.strip() or "gpt-test",
+        test_prompt=prompt.strip() or TEST_PROMPT_DEFAULT,
+    )
 
 
 @router.post("/trim", response_class=HTMLResponse)
@@ -852,7 +1010,7 @@ async def trim_records(
         deleted = len(records)
         for record in records:
             session.delete(record)
-    return RedirectResponse(f"/admin/settings?days={days}&trimmed={deleted}", status_code=303)
+    return RedirectResponse(f"/admin/settings/data?days={days}&trimmed={deleted}", status_code=303)
 
 
 @router.get("/api/settings/summary", response_model=None)
@@ -1484,6 +1642,7 @@ def _settings_context(
     settings = request.app.state.settings
     providers = list_model_providers(session)
     default_fixes = get_default_compat_fixes(session, settings)
+    fallback = get_fallback_summary(session)
     return {
         "upstream_url": get_upstream_url(session, settings),
         "model_routes": _settings_model_route_rows(session, settings, providers),
@@ -1492,6 +1651,9 @@ def _settings_context(
         "available_compat_fixes": compatibility_fix_rows(),
         "providers": [_provider_row(provider) for provider in providers],
         "model_prices": [_model_price_row(price) for price in list_model_prices(session)],
+        "default_provider_slug": fallback["provider_slug"] or "",
+        "default_model": fallback["model"] or "",
+        "fallback_enabled": bool(fallback["enabled"]),
         "incoming_host": get_incoming_host(session, settings),
         "incoming_port": get_incoming_port(session, settings),
         "expose_all_ips": get_expose_all_ips(session, settings),
@@ -1516,7 +1678,7 @@ def _settings_model_route_rows(session, settings, providers) -> list[dict[str, o
         row["provider_name"] = provider_names.get(route.provider_slug or "")
         row["fixes_text"] = fix_ids_text(route.fixes)
         rows.append(row)
-    for route in get_ui_model_routes(session):
+    for route in list_model_routes_db(session):
         row = model_route_display(route)
         row["source"] = "ui"
         row["editable"] = True
@@ -1527,11 +1689,47 @@ def _settings_model_route_rows(session, settings, providers) -> list[dict[str, o
 
 
 def _provider_row(provider) -> dict[str, object]:
+    try:
+        capabilities = json.loads(provider.capabilities_json or "{}")
+    except json.JSONDecodeError:
+        capabilities = {}
     return {
         "slug": provider.slug,
         "name": provider.name,
         "upstream_url": provider.upstream_url,
         "currency": provider.currency,
+        "api_key_env": provider.api_key_env,
+        "active": bool(provider.active),
+        "is_default_fallback": bool(provider.is_default_fallback),
+        "capabilities": capabilities,
+    }
+
+
+def _storage_stats(request: Request, session) -> dict[str, object]:
+    settings = request.app.state.settings
+    oldest = session.scalar(select(func.min(RequestRecord.created_at)))
+    newest = session.scalar(select(func.max(RequestRecord.created_at)))
+    database_url = settings.database_url
+    db_path: Path | None = None
+    db_file_size = None
+    if database_url.startswith("sqlite:///"):
+        raw_path = unquote(database_url.removeprefix("sqlite:///"))
+        candidate = Path(raw_path)
+        if not candidate.is_absolute():
+            candidate = Path.cwd() / candidate
+        db_path = candidate.resolve()
+        if db_path.exists():
+            db_file_size = db_path.stat().st_size
+    return {
+        "database_url": database_url,
+        "database_path": str(db_path) if db_path else None,
+        "database_file_size": db_file_size,
+        "oldest_record_at": oldest.isoformat().replace("+00:00", "Z")
+        if isinstance(oldest, datetime)
+        else None,
+        "newest_record_at": newest.isoformat().replace("+00:00", "Z")
+        if isinstance(newest, datetime)
+        else None,
     }
 
 

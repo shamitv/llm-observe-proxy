@@ -182,6 +182,38 @@ def test_settings_updates_upstream_url(proxy_client: TestClient, proxy_app: Fast
         assert record.upstream_url == "http://localhost:8080/v1/chat/completions"
 
 
+def test_settings_redirects_to_server_tab(proxy_client: TestClient) -> None:
+    response = proxy_client.get("/admin/settings", follow_redirects=False)
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/admin/settings/server"
+
+
+@pytest.mark.parametrize(
+    ("tab", "heading"),
+    [
+        ("server", "Incoming Server"),
+        ("routing", "Route Registry"),
+        ("providers", "Provider Registry"),
+        ("pricing", "Model Pricing"),
+        ("diagnostics", "Provider Health Overview"),
+        ("data", "Storage Stats"),
+    ],
+)
+def test_settings_tabs_render_new_shell(
+    proxy_client: TestClient,
+    tab: str,
+    heading: str,
+) -> None:
+    response = proxy_client.get(f"/admin/settings/{tab}")
+
+    assert response.status_code == 200
+    assert "settings-sidebar" in response.text
+    assert "connection-summary" in response.text
+    assert f'/admin/settings/{tab}"' in response.text
+    assert heading in response.text
+
+
 def test_settings_renders_model_routes_without_secret_values(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -398,8 +430,12 @@ def test_settings_manages_model_providers_and_prices(
     assert settings.status_code == 200
     assert "Model Providers" in settings.text
     assert "Model Pricing" in settings.text
-    assert "OpenAI" in settings.text
-    assert "gpt-5.4-mini" in settings.text
+    providers_tab = proxy_client.get("/admin/settings/providers")
+    pricing_tab = proxy_client.get("/admin/settings/pricing")
+    assert providers_tab.status_code == 200
+    assert pricing_tab.status_code == 200
+    assert "OpenAI" in providers_tab.text
+    assert "gpt-5.4-mini" in pricing_tab.text
 
     invalid_provider = proxy_client.post(
         "/admin/settings/providers",
@@ -437,14 +473,15 @@ def test_settings_manages_model_providers_and_prices(
     )
     assert response.status_code == 303
 
-    updated = proxy_client.get("/admin/settings")
-    assert "Custom Gateway" in updated.text
-    assert "http://localhost:9000/v1" in updated.text
-    assert "custom-large" in updated.text
-    assert "custom-alias" in updated.text
-    assert "$1.25" in updated.text
-    assert "$0.2500" in updated.text
-    assert "$5.00" in updated.text
+    updated_providers = proxy_client.get("/admin/settings/providers")
+    updated_pricing = proxy_client.get("/admin/settings/pricing")
+    assert "Custom Gateway" in updated_providers.text
+    assert "http://localhost:9000/v1" in updated_providers.text
+    assert "custom-large" in updated_pricing.text
+    assert "custom-alias" in updated_pricing.text
+    assert "$1.25" in updated_pricing.text
+    assert "$0.2500" in updated_pricing.text
+    assert "$5.00" in updated_pricing.text
 
     with proxy_app.state.session_factory() as session:
         provider = session.get(ModelProvider, "custom")
@@ -478,7 +515,7 @@ def test_settings_manages_model_providers_and_prices(
     )
     assert response.status_code == 303
 
-    updated = proxy_client.get("/admin/settings")
+    updated = proxy_client.get("/admin/settings/pricing")
     assert "Short context" in updated.text
     assert "0-999 input tokens" in updated.text
     assert "$0.0750" in updated.text
@@ -510,7 +547,7 @@ def test_settings_manages_model_providers_and_prices(
     )
     assert response.status_code == 303
 
-    updated = proxy_client.get("/admin/settings")
+    updated = proxy_client.get("/admin/settings/pricing")
     assert "Short context" not in updated.text
     assert "Scalar only" in updated.text
 
@@ -527,9 +564,10 @@ def test_settings_manages_model_providers_and_prices(
     )
     assert response.status_code == 303
 
-    deleted = proxy_client.get("/admin/settings")
-    assert "custom-large" not in deleted.text
-    assert "Custom Gateway" not in deleted.text
+    deleted_providers = proxy_client.get("/admin/settings/providers")
+    deleted_pricing = proxy_client.get("/admin/settings/pricing")
+    assert "custom-large" not in deleted_pricing.text
+    assert "Custom Gateway" not in deleted_providers.text
 
 
 def test_settings_test_upstream_uses_configured_model_route(

@@ -1,0 +1,12 @@
+{% macro summary_card(icon, label, value, helper="", highlighted=false) %}
+<div class="summary-card {{ 'highlighted' if highlighted else '' }}">
+  <div class="summary-icon" aria-hidden="true">{{ icon }}</div>
+  <div class="summary-body">
+    <span class="summary-label">{{ label }}</span>
+    <strong class="summary-value">{{ value }}</strong>
+    {% if helper %}
+    <span class="summary-helper">{{ helper }}</span>
+    {% endif %}
+  </div>
+</div>
+{% endmacro %}

@@ -1,0 +1,126 @@
+{% extends "settings_base.html" %}
+{% import "_connection_summary.html" as summaries %}
+{% import "_status_badge.html" as badges %}
+{% block summary_cards %}
+{{ summaries.summary_card("HC", "Provider checks", providers | length | compact_number, "Lightweight /models checks") }}
+{{ summaries.summary_card("RT", "Active routes", summary.active_routes | compact_number, "Available for simulation") }}
+{{ summaries.summary_card("FB", "Fallback", fallback.provider_name | default("No provider", true), fallback.model | default("No model", true), true) }}
+{{ summaries.summary_card("DB", "Stored rows", summary.stored_rows | compact_number, (summary.rows_older_than_retention | compact_number) ~ " older than " ~ summary.retention_days ~ " days") }}
+{% endblock %}
+{% block settings_content %}
+<section class="settings-grid v05-grid">
+  <article class="card diagnostics-card">
+    <div class="card-header">
+      <div>
+        <h2>Provider Health Overview</h2>
+        <p>Read-only status for configured providers.</p>
+      </div>
+      <button class="button ghost button-ghost" type="button" data-provider-health>Run all health checks</button>
+    </div>
+    <div class="table-shell">
+      <table class="data-table" data-provider-health-table>
+        <thead>
+          <tr>
+            <th scope="col">Provider</th>
+            <th scope="col">Last check</th>
+            <th scope="col">Latency</th>
+            <th scope="col">Auth</th>
+            <th scope="col">Result</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for provider in providers %}
+          {% set health = health_results.get(provider.slug, {}) %}
+          <tr>
+            <td>{{ provider.name }}</td>
+            <td>{{ health.checked_at | default("Not checked", true) }}</td>
+            <td>{{ health.latency_ms | default("-", true) }}</td>
+            <td>{{ health.auth_state | default(provider.api_key_env | default("not configured", true), true) }}</td>
+            <td>{{ badges.status_badge(health.status | default("Warning", true)) }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </article>
+
+  <form class="card form-card" method="post" action="/admin/settings/test-upstream">
+    <div class="card-header">
+      <div>
+        <h2>Test Upstream</h2>
+        <p>Send sample chat, image, or tool-call payloads.</p>
+      </div>
+      {{ badges.status_badge("Ready") }}
+    </div>
+    <div class="form-grid two-col">
+      <label class="form-field">
+        <span>Model</span>
+        <input name="model" value="{{ test_model | default('gpt-test', true) }}" required>
+      </label>
+      <label class="form-field">
+        <span>Prompt</span>
+        <textarea name="prompt" rows="4" required>{{ test_prompt | default('Reply with a short upstream connectivity check.', true) }}</textarea>
+      </label>
+    </div>
+    <div class="button-row">
+      <button class="button primary button-primary" type="submit" name="test_kind" value="simple">Simple message</button>
+      <button class="button ghost button-ghost" type="submit" name="test_kind" value="image">Image message</button>
+      <button class="button ghost button-ghost" type="submit" name="test_kind" value="tools">Function call</button>
+    </div>
+    {% if test_result %}
+    <div class="test-result result-panel">
+      <div class="detail-meta">
+        <span class="{{ 'status-200' if test_result.ok else 'status-500' }}">{{ test_result.status_code | default('error', true) }}</span>
+        <span>{{ test_result.kind }}</span>
+        <span>{{ test_result.model_route | default('global fallback', true) }}</span>
+        {% if test_result.upstream_model %}<span>{{ test_result.upstream_model }}</span>{% endif %}
+        <span>{{ test_result.duration_ms | duration_ms }}</span>
+      </div>
+      <code>{{ test_result.url }}</code>
+      {% if test_result.error %}
+      <p class="error-text">{{ test_result.error }}</p>
+      {% else %}
+      <pre class="code compact-code">{{ test_result.body }}</pre>
+      {% endif %}
+    </div>
+    {% endif %}
+  </form>
+
+  <article class="card diagnostics-card">
+    <div class="card-header">
+      <div>
+        <h2>Route Simulator</h2>
+        <p>Resolve a model name without making an upstream call.</p>
+      </div>
+    </div>
+    <form class="inline-tool-form" data-route-simulator>
+      <label class="form-field">
+        <span>Incoming model to test</span>
+        <input name="model" value="{{ test_model | default('gpt-test', true) }}" required>
+      </label>
+      <button class="button primary button-primary" type="submit">Run simulation</button>
+    </form>
+    <div class="result-panel" data-route-simulator-result>
+      <p class="muted">Simulation results will appear here.</p>
+    </div>
+  </article>
+
+  <article class="card usage-card">
+    <div class="card-header">
+      <div>
+        <h2>Recent Test Results</h2>
+        <p>Interactive checks are shown after a test request completes.</p>
+      </div>
+    </div>
+    {% if test_result %}
+    <div class="result-panel">
+      <strong>{{ "Success" if test_result.ok else "Error" }}</strong>
+      <span>{{ test_result.kind }} through {{ test_result.model_route | default("global fallback", true) }}</span>
+      <code>{{ test_result.url }}</code>
+    </div>
+    {% else %}
+    <p class="muted">No diagnostics test has been run in this page view.</p>
+    {% endif %}
+  </article>
+</section>
+{% endblock %}

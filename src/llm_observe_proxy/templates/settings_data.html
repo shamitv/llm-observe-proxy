@@ -1,0 +1,67 @@
+{% extends "settings_base.html" %}
+{% import "_connection_summary.html" as summaries %}
+{% import "_status_badge.html" as badges %}
+{% block summary_cards %}
+{{ summaries.summary_card("DB", "Stored rows", summary.stored_rows | compact_number, "Captured requests") }}
+{{ summaries.summary_card("FS", "Database file", storage_stats.database_file_size | compact_number if storage_stats.database_file_size is not none else "-", "SQLite bytes on disk") }}
+{{ summaries.summary_card("OLD", "Older than " ~ days ~ " days", trim_count | compact_number, "Preview before trimming", true) }}
+{{ summaries.summary_card("FB", "Fallback", fallback.provider_name | default("No provider", true), fallback.model | default("No model", true)) }}
+{% endblock %}
+{% block settings_content %}
+<section class="settings-grid v05-grid">
+  <article class="card">
+    <div class="card-header">
+      <div>
+        <h2>Storage Stats</h2>
+        <p>Current database and request-record range.</p>
+      </div>
+      {{ badges.status_badge("Active") }}
+    </div>
+    <div class="stat-list">
+      <div><span>Total stored rows</span><strong>{{ total | compact_number }}</strong></div>
+      <div><span>Database file size</span><strong>{{ storage_stats.database_file_size | compact_number if storage_stats.database_file_size is not none else "-" }} bytes</strong></div>
+      <div><span>Oldest record date</span><strong>{{ storage_stats.oldest_record_at | default("-", true) }}</strong></div>
+      <div><span>Newest record date</span><strong>{{ storage_stats.newest_record_at | default("-", true) }}</strong></div>
+    </div>
+    {% if storage_stats.database_path %}
+    <p class="muted"><code>{{ storage_stats.database_path }}</code></p>
+    {% endif %}
+  </article>
+
+  <form class="card danger-zone form-card" method="post" action="/admin/trim" data-confirm-trim>
+    <div class="card-header">
+      <div>
+        <h2>Data Retention</h2>
+        <p>Delete captured rows older than the selected retention window.</p>
+      </div>
+      {{ badges.status_badge("Warning") }}
+    </div>
+    <div class="form-grid two-col">
+      <label class="form-field">
+        <span>Retain days</span>
+        <input name="days" value="{{ days }}" min="1" max="3650" type="number" required>
+      </label>
+      <label class="check switch-line">
+        <input type="checkbox" name="confirm" value="yes" required data-enable-danger>
+        <span>I understand this permanently deletes older records</span>
+      </label>
+    </div>
+    <p class="muted">Older than {{ days }} days: {{ trim_count | compact_number }} row{{ "" if trim_count == 1 else "s" }} will be deleted.</p>
+    <div class="button-row">
+      <button class="button danger button-danger" type="submit" data-danger-submit>Trim records</button>
+      <a class="button ghost button-ghost" href="/admin/settings/data?days={{ days }}">Refresh count</a>
+    </div>
+  </form>
+
+  <article class="card">
+    <div class="card-header">
+      <div>
+        <h2>Export Options</h2>
+        <p>Reserved for future snapshot/export workflows.</p>
+      </div>
+      {{ badges.status_badge("Planned") }}
+    </div>
+    <p class="muted">The proxy remains record-only. Export controls will be added separately so local captures can be moved without changing proxy behavior.</p>
+  </article>
+</section>
+{% endblock %}
