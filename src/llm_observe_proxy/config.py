@@ -16,6 +16,7 @@ DEFAULT_INCOMING_PORT = 8080
 DEFAULT_UPSTREAM_URL = "http://localhost:8000/v1"
 EXPOSED_INCOMING_HOST = "0.0.0.0"
 PROVIDER_SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
+VALID_MATCH_TYPES = frozenset({"exact", "prefix"})
 
 
 @dataclass(frozen=True)

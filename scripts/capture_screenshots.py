@@ -19,7 +19,13 @@ SCREENSHOTS = [
     ("tool-calls.png", "/admin/requests/2?mode=tool"),
     ("images.png", "/admin/requests/3?mode=auto"),
     ("streaming.png", "/admin/requests/4?mode=sse"),
-    ("settings.png", "/admin/settings"),
+    ("settings.png", "/admin/settings/server"),
+    ("settings-server.png", "/admin/settings/server"),
+    ("settings-routing.png", "/admin/settings/routing"),
+    ("settings-providers.png", "/admin/settings/providers"),
+    ("settings-pricing.png", "/admin/settings/pricing"),
+    ("settings-diagnostics.png", "/admin/settings/diagnostics"),
+    ("settings-data.png", "/admin/settings/data"),
 ]
 
 

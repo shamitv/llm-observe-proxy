@@ -1,0 +1,240 @@
+{% extends "settings_base.html" %}
+{% import "_status_badge.html" as badges %}
+{% block settings_content %}
+<section class="settings-grid v05-grid">
+  <form class="card form-card" method="post" action="/admin/settings/incoming">
+    <div class="card-header">
+      <div>
+        <h2>Incoming Server</h2>
+        <p>Persisted for the next process startup.</p>
+      </div>
+      {{ badges.status_badge("Active") }}
+    </div>
+    <div class="form-grid two-col">
+      <label class="form-field">
+        <span>Incoming port</span>
+        <input name="incoming_port" value="{{ incoming_port }}" min="1" max="65535" type="number" required>
+      </label>
+      <label class="check switch-line">
+        <input type="checkbox" name="expose_all_ips" value="yes" {% if expose_all_ips %}checked{% endif %}>
+        <span>Expose on LAN / all interfaces</span>
+      </label>
+    </div>
+    {% if expose_all_ips %}
+    <p class="warning-copy">Network exposed. Use only on trusted networks.</p>
+    {% endif %}
+    <div class="button-row">
+      <button class="button primary button-primary" type="submit">Save listener settings</button>
+    </div>
+  </form>
+
+  <article class="card">
+    <div class="card-header">
+      <div>
+        <h2>Settings Areas</h2>
+        <p>Primary registries now live on focused tabs.</p>
+      </div>
+    </div>
+    <div class="button-row">
+      <a class="button ghost button-ghost" href="/admin/settings/providers">Model Providers</a>
+      <a class="button ghost button-ghost" href="/admin/settings/pricing">Model Pricing</a>
+      <a class="button ghost button-ghost" href="/admin/settings/routing">Model Routes</a>
+    </div>
+  </article>
+
+  <form class="card form-card" method="post" action="/admin/settings/upstream-defaults">
+    <div class="card-header">
+      <div>
+        <h2>Global Upstream Fallback Defaults</h2>
+        <p>Used when no exact or prefix route matches a request.</p>
+      </div>
+      {{ badges.status_badge("Enabled" if fallback_enabled else "Inactive") }}
+    </div>
+    <div class="form-grid two-col">
+      <label class="form-field wide">
+        <span>Global upstream URL</span>
+        <input name="upstream_url" value="{{ upstream_url }}" placeholder="http://localhost:8000/v1" required>
+      </label>
+      <label class="form-field">
+        <span>Default provider</span>
+        <select name="default_provider_slug">
+          <option value="">No default provider</option>
+          {% for provider in providers %}
+          <option value="{{ provider.slug }}" {% if default_provider_slug == provider.slug %}selected{% endif %}>{{ provider.name }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label class="form-field">
+        <span>Default model</span>
+        <input name="default_model" value="{{ default_model }}" placeholder="qwen/qwen3.6-35b">
+      </label>
+      <label class="check switch-line">
+        <input type="hidden" name="fallback_enabled" value="no">
+        <input type="checkbox" name="fallback_enabled" value="yes" {% if fallback_enabled %}checked{% endif %}>
+        <span>Enable fallback routing</span>
+      </label>
+    </div>
+    <p class="muted">When no route matches, the proxy can send the request to {{ fallback.provider_name | default("the selected provider", true) }} as {{ default_model | default("the configured model", true) }}.</p>
+    <div class="button-row">
+      <button class="button primary button-primary" type="submit">Save upstream defaults</button>
+    </div>
+  </form>
+
+  <form class="card form-card" method="post" action="/admin/settings/compat-fixes" data-fix-picker>
+    <div class="card-header">
+      <div>
+        <h2>Default Compatibility Fixes</h2>
+        <p>Applied to fallback requests and routes that opt into the default behavior.</p>
+      </div>
+      {{ badges.status_badge("Configured" if default_compat_fixes else "Inactive") }}
+    </div>
+    <input type="hidden" name="fixes" value="{{ default_compat_fixes_text }}" data-fix-target>
+    <div class="fix-list">
+      {% for fix in available_compat_fixes %}
+      <label class="check fix-option">
+        <input type="checkbox" value="{{ fix.id }}" data-fix-id {% if fix.id in default_compat_fixes %}checked{% endif %}>
+        <span>
+          <strong>{{ fix.id }}</strong>
+          <small>{{ fix.description }}</small>
+        </span>
+      </label>
+      {% endfor %}
+    </div>
+    <details class="advanced-section">
+      <summary>Advanced manual edit</summary>
+      <label class="form-field">
+        <span>Ordered fix IDs</span>
+        <textarea rows="4" data-fix-manual>{{ default_compat_fixes_text }}</textarea>
+      </label>
+    </details>
+    <div class="button-row">
+      <button class="button primary button-primary" type="submit">Save fixes</button>
+    </div>
+  </form>
+
+  <article class="card route-summary-card">
+    <div class="card-header">
+      <div>
+        <h2>Model Routes Summary</h2>
+        <p>Showing {{ model_routes | length }} of {{ model_routes | length }} configured routes.</p>
+      </div>
+      <a class="button ghost button-ghost" href="/admin/settings/routing">Add route</a>
+    </div>
+    <div class="table-shell">
+      <table class="data-table model-routes-table">
+        <thead>
+          <tr>
+            <th scope="col">Source</th>
+            <th scope="col">Incoming model</th>
+            <th scope="col">Match</th>
+            <th scope="col">Route upstream URL</th>
+            <th scope="col">Send as model</th>
+            <th scope="col">Provider</th>
+            <th scope="col">Compatibility fixes</th>
+            <th scope="col">API key</th>
+            <th scope="col">Status</th>
+            <th scope="col">Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for route in model_routes %}
+          <tr>
+            <td><span class="source-pill source-{{ route.source }}">{{ "Settings" if route.editable else "Startup" }}</span></td>
+            <td><code>{{ route.model }}</code></td>
+            <td>{{ route.match_type }}</td>
+            <td><code>{{ route.upstream_url }}</code></td>
+            <td><code>{{ route.upstream_model }}</code></td>
+            <td>{{ route.provider_name | default(route.provider_slug | default("Auto", true), true) }}</td>
+            <td>{% if route.fixes %}<code>{{ route.fixes | join(", ") }}</code>{% else %}<span class="muted">Default</span>{% endif %}</td>
+            <td>
+              <span class="key-state key-state-{{ route.api_key_state | replace(' ', '-') }}">{{ route.api_key_state }}</span>
+              {% if route.api_key_env %}<small>{{ route.api_key_env }}</small>{% endif %}
+            </td>
+            <td>{{ badges.status_badge("Active" if route.active else "Inactive") }}</td>
+            <td>
+              {% if route.editable %}
+              <form method="post" action="/admin/settings/model-routes/delete" data-confirm-message="Delete route {{ route.model }}?">
+                <input type="hidden" name="route_id" value="{{ route.id }}">
+                <input type="hidden" name="model" value="{{ route.model }}">
+                <button class="button danger compact-button button-danger" type="submit">Delete</button>
+              </form>
+              {% else %}
+              <span class="muted">Locked</span>
+              {% endif %}
+            </td>
+          </tr>
+          {% else %}
+          <tr><td colspan="10" class="empty">No model routes are configured.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </article>
+
+  <form class="card form-card" method="post" action="/admin/settings/test-upstream">
+    <div class="card-header">
+      <div>
+        <h2>Test Route / Diagnostics</h2>
+        <p>Send a sample chat request through the configured resolution path.</p>
+      </div>
+      <a class="button ghost button-ghost" href="/admin/settings/diagnostics">Diagnostics tab</a>
+    </div>
+    <div class="form-grid two-col">
+      <label class="form-field">
+        <span>Model</span>
+        <input name="model" value="{{ test_model | default('gpt-test', true) }}" required>
+      </label>
+      <label class="form-field">
+        <span>Message</span>
+        <textarea name="prompt" rows="4" required>{{ test_prompt | default('Reply with a short upstream connectivity check.', true) }}</textarea>
+      </label>
+    </div>
+    <div class="button-row">
+      <button class="button primary button-primary" type="submit" name="test_kind" value="simple">Run test</button>
+      <button class="button ghost button-ghost" type="submit" name="test_kind" value="image">Image message</button>
+      <button class="button ghost button-ghost" type="submit" name="test_kind" value="tools">Function call</button>
+    </div>
+    {% if test_result %}
+    <div class="test-result result-panel">
+      <div class="detail-meta">
+        <span class="{{ 'status-200' if test_result.ok else 'status-500' }}">{{ test_result.status_code | default('error', true) }}</span>
+        <span>{{ test_result.kind }}</span>
+        <span>{{ test_result.model_route | default('global fallback', true) }}</span>
+        <span>{{ test_result.duration_ms | duration_ms }}</span>
+      </div>
+      <code>{{ test_result.url }}</code>
+      {% if test_result.error %}
+      <p class="error-text">{{ test_result.error }}</p>
+      {% else %}
+      <pre class="code compact-code">{{ test_result.body }}</pre>
+      {% endif %}
+    </div>
+    {% endif %}
+  </form>
+
+  <form class="card danger-zone form-card" method="post" action="/admin/trim" data-confirm-trim>
+    <div class="card-header">
+      <div>
+        <h2>Data Retention</h2>
+        <p>Delete older request records and attached image payloads.</p>
+      </div>
+      {{ badges.status_badge("Warning") }}
+    </div>
+    <div class="form-grid two-col">
+      <label class="form-field">
+        <span>Retain days</span>
+        <input name="days" value="{{ days }}" min="1" max="3650" type="number" required>
+      </label>
+      <label class="check switch-line">
+        <input type="checkbox" name="confirm" value="yes" required data-enable-danger>
+        <span>I understand this permanently deletes older records</span>
+      </label>
+    </div>
+    <p class="muted">Older than {{ days }} days: <strong>{{ trim_count | compact_number }}</strong> row{{ "" if trim_count == 1 else "s" }} will be deleted.</p>
+    <div class="button-row">
+      <button class="button danger button-danger" type="submit" data-danger-submit>Trim records</button>
+      <a class="button ghost button-ghost" href="/admin/settings/server?days={{ days }}">Refresh count</a>
+    </div>
+  </form>
+</section>
+{% endblock %}

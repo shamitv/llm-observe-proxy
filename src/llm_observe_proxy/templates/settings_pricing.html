@@ -1,0 +1,183 @@
+{% extends "settings_base.html" %}
+{% import "_connection_summary.html" as summaries %}
+{% import "_status_badge.html" as badges %}
+{% block summary_cards %}
+{{ summaries.summary_card("$", "Pricing rows", model_prices | length | compact_number, "Provider/model entries") }}
+{{ summaries.summary_card("PV", "Providers", providers | length | compact_number, "Available registries") }}
+{{ summaries.summary_card("FB", "Default provider", fallback.provider_name | default("No provider", true), "Fallback billing context", true) }}
+{{ summaries.summary_card("DB", "Stored rows", summary.stored_rows | compact_number, (summary.rows_older_than_retention | compact_number) ~ " older than " ~ summary.retention_days ~ " days") }}
+{% endblock %}
+{% block settings_content %}
+<section class="settings-grid v05-grid">
+  <article class="card registry-card">
+    <div class="card-header">
+      <div>
+        <h2>Model Pricing</h2>
+        <p>Scalar rates plus optional token-count tiers for what-if cost comparisons.</p>
+      </div>
+      <a class="button primary button-primary" href="#price-editor">Add price</a>
+    </div>
+    <div class="filter-row">
+      <label class="search-bar">
+        <span>Search pricing</span>
+        <input data-table-filter="pricing-table" placeholder="Search models, providers, aliases..." aria-label="Search pricing">
+      </label>
+      <label>
+        <span>Provider</span>
+        <select data-table-provider-filter="pricing-table">
+          <option value="">All providers</option>
+          {% for provider in providers %}
+          <option value="{{ provider.slug }}">{{ provider.name }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>
+        <span>Status</span>
+        <select data-table-status-filter="pricing-table">
+          <option value="">All status</option>
+          <option value="active">Active</option>
+          <option value="inactive">Inactive</option>
+        </select>
+      </label>
+    </div>
+    <div class="table-shell">
+      <table class="data-table model-routes-table" id="pricing-table">
+        <thead>
+          <tr>
+            <th scope="col">Provider</th>
+            <th scope="col">Model</th>
+            <th scope="col">Display name</th>
+            <th scope="col">Input / 1M</th>
+            <th scope="col">Cached input / 1M</th>
+            <th scope="col">Output / 1M</th>
+            <th scope="col">Aliases</th>
+            <th scope="col">Tiers</th>
+            <th scope="col">Active</th>
+            <th scope="col">Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for price in model_prices %}
+          <tr data-search-text="{{ price.provider_name }} {{ price.model }} {{ price.display_name }} {{ price.aliases }}" data-provider="{{ price.provider_slug }}" data-status="{{ 'active' if price.active else 'inactive' }}">
+            <td>{{ price.provider_name }}</td>
+            <td><code>{{ price.model }}</code></td>
+            <td>{{ price.display_name | default("-", true) }}</td>
+            <td>{{ price.input_usd_per_million | usd }}</td>
+            <td>{{ price.cached_input_usd_per_million | usd }}</td>
+            <td>{{ price.output_usd_per_million | usd }}</td>
+            <td>{{ price.aliases | default("-", true) }}</td>
+            <td>
+              <details class="tier-drawer">
+                <summary>{{ price.tiers | length }} tier{{ "" if price.tiers | length == 1 else "s" }}</summary>
+                {% if price.tiers %}
+                <div class="tier-list">
+                  {% for tier in price.tiers %}
+                  <div class="tier-row">
+                    <div>
+                      <strong>{{ tier.label | default(tier.range, true) }}</strong>
+                      <span class="muted">{{ tier.range }}</span>
+                      <span class="muted">In {{ tier.input_usd_per_million | usd }} / Cached {{ tier.cached_input_usd_per_million | usd }} / Out {{ tier.output_usd_per_million | usd }}</span>
+                      {% if tier.checked_at or tier.release_date %}
+                      <span class="muted">{{ tier.checked_at | default("", true) }} {{ tier.release_date | default("", true) }}</span>
+                      {% endif %}
+                    </div>
+                    <form method="post" action="/admin/settings/model-price-tiers/delete" data-confirm-message="Delete tier {{ tier.label | default(tier.range, true) }} for {{ price.model }}?">
+                      <input type="hidden" name="tier_id" value="{{ tier.id }}">
+                      <button class="button danger compact-button button-danger" type="submit">Delete</button>
+                    </form>
+                  </div>
+                  {% endfor %}
+                </div>
+                {% else %}
+                <p class="muted">Scalar only</p>
+                {% endif %}
+                <form class="tier-form" method="post" action="/admin/settings/model-price-tiers">
+                  <input type="hidden" name="model_price_id" value="{{ price.id }}">
+                  <label><span>Label</span><input name="label" placeholder="Tier label"></label>
+                  <label><span>Min tokens</span><input name="min_input_tokens" placeholder="0" type="number" min="0" step="1"></label>
+                  <label><span>Max tokens</span><input name="max_input_tokens" placeholder="1000" type="number" min="1" step="1"></label>
+                  <label><span>Input / 1M</span><input name="input_usd_per_million" placeholder="0.75" type="number" min="0" step="0.000001" required></label>
+                  <label><span>Cached / 1M</span><input name="cached_input_usd_per_million" placeholder="0.075" type="number" min="0" step="0.000001"></label>
+                  <label><span>Output / 1M</span><input name="output_usd_per_million" placeholder="2.50" type="number" min="0" step="0.000001" required></label>
+                  <label><span>Source URL</span><input name="source_url" placeholder="https://example.com/pricing"></label>
+                  <label><span>Checked at</span><input name="checked_at" placeholder="YYYY-MM-DD"></label>
+                  <label><span>Released</span><input name="release_date" placeholder="YYYY-MM-DD"></label>
+                  <label class="wide"><span>Notes</span><input name="notes" placeholder="Tier note"></label>
+                  <button class="button ghost compact-button button-ghost" type="submit">Add tier</button>
+                </form>
+              </details>
+            </td>
+            <td>{{ badges.status_badge("Active" if price.active else "Inactive") }}</td>
+            <td>
+              <form method="post" action="/admin/settings/model-prices/delete" data-confirm-message="Delete pricing for {{ price.provider_name }}/{{ price.model }}?">
+                <input type="hidden" name="provider_slug" value="{{ price.provider_slug }}">
+                <input type="hidden" name="model" value="{{ price.model }}">
+                <button class="button danger compact-button button-danger" type="submit">Delete</button>
+              </form>
+            </td>
+          </tr>
+          {% else %}
+          <tr><td colspan="10" class="empty">No model pricing entries are configured.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </article>
+
+  <form class="card form-card" id="price-editor" method="post" action="/admin/settings/model-prices">
+    <div class="card-header">
+      <div>
+        <h2>Add Or Update Price</h2>
+        <p>Used for request cost estimates and run what-if comparisons.</p>
+      </div>
+      {{ badges.status_badge("Editable") }}
+    </div>
+    <div class="form-grid three-col">
+      <label class="form-field">
+        <span>Provider</span>
+        <select name="provider_slug" required>
+          {% for provider in providers %}
+          <option value="{{ provider.slug }}">{{ provider.name }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label class="form-field">
+        <span>Model</span>
+        <input name="model" placeholder="gpt-5.4-mini" required>
+      </label>
+      <label class="form-field">
+        <span>Display name</span>
+        <input name="display_name" placeholder="GPT-5.4 Mini">
+      </label>
+      <label class="form-field">
+        <span>Input USD / 1M</span>
+        <input name="input_usd_per_million" placeholder="0.75" type="number" min="0" step="0.000001" required>
+      </label>
+      <label class="form-field">
+        <span>Cached input USD / 1M</span>
+        <input name="cached_input_usd_per_million" placeholder="0.075" type="number" min="0" step="0.000001">
+      </label>
+      <label class="form-field">
+        <span>Output USD / 1M</span>
+        <input name="output_usd_per_million" placeholder="4.50" type="number" min="0" step="0.000001" required>
+      </label>
+      <label class="form-field">
+        <span>Aliases</span>
+        <input name="aliases" placeholder="alternate-model-id">
+      </label>
+      <label class="form-field wide">
+        <span>Notes</span>
+        <input name="notes" placeholder="Standard paid text pricing">
+      </label>
+      <label class="check switch-line">
+        <input type="hidden" name="active" value="no">
+        <input type="checkbox" name="active" value="yes" checked>
+        <span>Active</span>
+      </label>
+    </div>
+    <div class="button-row">
+      <button class="button primary button-primary" type="submit">Save price</button>
+    </div>
+  </form>
+</section>
+{% endblock %}

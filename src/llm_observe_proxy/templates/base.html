@@ -4,27 +4,32 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{{ page_title }} - LLM Observe Proxy</title>
-  <link rel="stylesheet" href="{{ url_for('admin_static', path='/styles.css') }}?v=what-if-client-1">
+  <link rel="stylesheet" href="{{ url_for('admin_static', path='/styles.css') }}?v=v05-admin-ui">
 </head>
 <body>
   <header class="topbar">
     <a class="brand" href="/admin">
-      <span class="brand-mark">LO</span>
-      <span>
+      <span class="brand-mark brand-icon">LO</span>
+      <span class="brand-text">
         <strong>LLM Observe Proxy</strong>
         <small>{{ upstream_url | default('local capture') }}</small>
       </span>
     </a>
-    <nav class="nav">
-      <a href="/admin">Requests</a>
-      <a href="/admin/runs">Runs</a>
-      <a href="/admin/settings">Settings</a>
+    <nav class="nav main-nav" aria-label="Main navigation">
+      <a href="/admin" class="{{ 'active' if active_nav | default('') == 'requests' else '' }}">Requests</a>
+      <a href="/admin/runs" class="{{ 'active' if active_nav | default('') == 'runs' else '' }}">Runs</a>
+      <a href="/admin/settings" class="{{ 'active' if active_nav | default('') == 'settings' else '' }}">Settings</a>
       <a href="/healthz">Health</a>
     </nav>
+    <div class="user-avatar" aria-label="Local admin">LA</div>
   </header>
-  <main class="page">
-    {% block content %}{% endblock %}
-  </main>
-  <script src="{{ url_for('admin_static', path='/app.js') }}?v=what-if-client-1"></script>
+  <div class="app-shell">
+    {% block app_body %}
+    <main class="page">
+      {% block content %}{% endblock %}
+    </main>
+    {% endblock %}
+  </div>
+  <script src="{{ url_for('admin_static', path='/app.js') }}?v=v05-admin-ui"></script>
 </body>
 </html>

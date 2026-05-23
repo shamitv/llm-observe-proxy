@@ -1,0 +1,4 @@
+{% macro status_badge(status) %}
+{% set normalized = (status | default('unknown', true) | lower | replace(' ', '-') | replace('_', '-')) %}
+<span class="status-badge status-{{ normalized }}">{{ status }}</span>
+{% endmacro %}
