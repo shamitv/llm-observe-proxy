@@ -11,6 +11,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
+import llm_observe_proxy.admin as admin_module
 from llm_observe_proxy.admin import templates
 from llm_observe_proxy.app import create_app
 from llm_observe_proxy.compatibility import QWEN_TAGGED_TOOL_CALL_REWRITE
@@ -24,6 +25,7 @@ from llm_observe_proxy.database import (
     upsert_model_price,
     upsert_model_price_tier,
 )
+from llm_observe_proxy.pricing_catalog import PricingCatalogRow
 
 GLOBAL_UPSTREAM_URL = "http://localhost:8080/v1"
 ROUTE_UPSTREAM_URL = "http://127.0.0.1:8080/v1"
@@ -563,6 +565,8 @@ def test_settings_manages_model_providers_and_prices(
     assert '<option value="local-llm"' in providers_tab.text
     assert "OpenAI" in providers_tab.text
     assert "gpt-5.4-mini" in pricing_tab.text
+    assert 'data-pricing-catalog' in pricing_tab.text
+    assert "/admin/api/pricing/catalog/preview" in pricing_tab.text
 
     invalid_provider = proxy_client.post(
         "/admin/settings/providers",
@@ -695,6 +699,138 @@ def test_settings_manages_model_providers_and_prices(
     deleted_pricing = proxy_client.get("/admin/settings/pricing")
     assert "custom-large" not in deleted_pricing.text
     assert "Custom Gateway" not in deleted_providers.text
+
+
+def test_pricing_catalog_preview_apply_and_reprice_missing_costs(
+    proxy_client: TestClient,
+    proxy_app: FastAPI,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_fetch_catalog_rows(*_args, **_kwargs):
+        return [
+            PricingCatalogRow(
+                source="openrouter",
+                provider_slug="openrouter",
+                model="catalog/model",
+                display_name="Catalog Model",
+                aliases=("catalog-alias",),
+                input_usd_per_million=Decimal("1"),
+                output_usd_per_million=Decimal("2"),
+                source_url="https://openrouter.ai/api/v1/models",
+                checked_at="2026-05-23",
+                notes="Catalog test row.",
+            )
+        ]
+
+    monkeypatch.setattr(admin_module, "fetch_catalog_rows", fake_fetch_catalog_rows)
+
+    with proxy_app.state.session_factory() as session:
+        upsert_model_price(
+            session,
+            provider_slug="openrouter",
+            model="manual-row",
+            input_usd_per_million="9",
+            output_usd_per_million="9",
+        )
+        session.add(
+            RequestRecord(
+                completed_at=datetime.now(UTC),
+                method="POST",
+                path="/v1/chat/completions",
+                endpoint="/v1/chat/completions",
+                model="catalog/model",
+                upstream_url="https://openrouter.ai/api/v1/chat/completions",
+                request_headers_json="{}",
+                request_body=b'{"model":"catalog/model"}',
+                response_status=200,
+                response_body=json.dumps(
+                    {
+                        "model": "catalog/model",
+                        "usage": {
+                            "prompt_tokens": 6,
+                            "completion_tokens": 3,
+                            "total_tokens": 9,
+                        },
+                    }
+                ).encode(),
+            )
+        )
+        session.add(
+            RequestRecord(
+                completed_at=datetime.now(UTC),
+                method="POST",
+                path="/v1/chat/completions",
+                endpoint="/v1/chat/completions",
+                model="catalog/model",
+                upstream_url="https://openrouter.ai/api/v1/chat/completions",
+                request_headers_json="{}",
+                request_body=b'{"model":"catalog/model"}',
+                response_status=200,
+                response_body=json.dumps(
+                    {
+                        "model": "catalog/model",
+                        "usage": {
+                            "prompt_tokens": 6,
+                            "completion_tokens": 3,
+                            "total_tokens": 9,
+                        },
+                    }
+                ).encode(),
+                billing_total_cost_usd=Decimal("0.99000000"),
+            )
+        )
+        session.commit()
+
+    preview = proxy_client.post(
+        "/admin/api/pricing/catalog/preview",
+        json={"source": "openrouter", "limit": 5},
+    )
+    assert preview.status_code == 200
+    preview_data = preview.json()
+    assert preview_data["counts"]["new"] == 1
+    assert preview_data["items"][0]["key"] == "openrouter:catalog/model"
+
+    invalid = proxy_client.post(
+        "/admin/api/pricing/catalog/apply",
+        json={"source": "openrouter", "keys": ["openrouter:missing"]},
+    )
+    assert invalid.status_code == 400
+
+    applied = proxy_client.post(
+        "/admin/api/pricing/catalog/apply",
+        json={
+            "source": "openrouter",
+            "keys": ["openrouter:catalog/model"],
+            "reprice_missing": True,
+        },
+    )
+    assert applied.status_code == 200
+    applied_data = applied.json()
+    assert applied_data["created"] == 1
+    assert applied_data["repriced_missing"] == 1
+
+    with proxy_app.state.session_factory() as session:
+        imported = session.scalars(
+            select(ModelPrice).where(
+                ModelPrice.provider_slug == "openrouter",
+                ModelPrice.model == "catalog/model",
+            )
+        ).one()
+        manual = session.scalars(
+            select(ModelPrice).where(
+                ModelPrice.provider_slug == "openrouter",
+                ModelPrice.model == "manual-row",
+            )
+        ).one()
+        records = session.scalars(select(RequestRecord).order_by(RequestRecord.id)).all()
+        snapshots = [json.loads(record.pricing_snapshot_json or "{}") for record in records]
+
+    assert imported.display_name == "Catalog Model"
+    assert manual.input_usd_per_million == Decimal("9.000000")
+    assert records[0].billing_total_cost_usd == Decimal("0.00001200")
+    assert records[1].billing_total_cost_usd == Decimal("0.99000000")
+    assert snapshots[0]["pricing_catalog_backfill"] == "pricing-catalog-missing-cost-v0.5"
+    assert snapshots[1] == {}
 
 
 def test_settings_test_upstream_uses_configured_model_route(

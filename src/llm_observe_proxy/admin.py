@@ -29,7 +29,11 @@ from llm_observe_proxy.compatibility import (
     normalize_fix_ids,
 )
 from llm_observe_proxy.config import normalize_upstream_url
-from llm_observe_proxy.costing import RunCostEstimate, estimate_run_cost
+from llm_observe_proxy.costing import (
+    RunCostEstimate,
+    backfill_missing_cost_estimates,
+    estimate_run_cost,
+)
 from llm_observe_proxy.database import (
     ModelPrice,
     ModelProvider,
@@ -71,6 +75,11 @@ from llm_observe_proxy.database import (
     upsert_model_price_tier,
     upsert_model_provider,
     upsert_model_route_db,
+)
+from llm_observe_proxy.pricing_catalog import (
+    CatalogFetchError,
+    PricingCatalogRow,
+    fetch_catalog_rows,
 )
 from llm_observe_proxy.rendering import escape_preview, render_payload
 from llm_observe_proxy.routing import (
@@ -1103,6 +1112,81 @@ async def api_trim_records(request: Request):
     return {"deleted": deleted}
 
 
+@router.post("/api/pricing/catalog/preview", response_model=None)
+async def api_pricing_catalog_preview(request: Request):
+    payload = await _json_payload(request)
+    try:
+        rows, options = await _pricing_catalog_rows(request, payload)
+    except CatalogFetchError as exc:
+        return JSONResponse({"detail": str(exc)}, status_code=400)
+    session_factory: SessionFactory = request.app.state.session_factory
+    with session_scope(session_factory) as session:
+        return _pricing_catalog_preview(session, rows, options)
+
+
+@router.post("/api/pricing/catalog/apply", response_model=None)
+async def api_pricing_catalog_apply(request: Request):
+    payload = await _json_payload(request)
+    selected_keys = _pricing_catalog_selected_keys(payload)
+    if not selected_keys:
+        return JSONResponse({"detail": "Choose at least one catalog row to apply."}, 400)
+    try:
+        rows, options = await _pricing_catalog_rows(request, payload)
+    except CatalogFetchError as exc:
+        return JSONResponse({"detail": str(exc)}, status_code=400)
+
+    rows_by_key = {row.key: row for row in rows}
+    missing_keys = [key for key in selected_keys if key not in rows_by_key]
+    if missing_keys:
+        return JSONResponse(
+            {
+                "detail": "Selected catalog rows are no longer available.",
+                "missing_keys": missing_keys,
+            },
+            status_code=400,
+        )
+
+    session_factory: SessionFactory = request.app.state.session_factory
+    counts: Counter[str] = Counter()
+    with session_scope(session_factory) as session:
+        for key in selected_keys:
+            row = rows_by_key[key]
+            status = _pricing_catalog_row_status(session, row)
+            upsert_model_price(
+                session,
+                provider_slug=row.provider_slug,
+                model=row.model,
+                display_name=row.display_name,
+                aliases=list(row.aliases),
+                input_usd_per_million=row.input_usd_per_million,
+                cached_input_usd_per_million=(
+                    row.cached_input_usd_per_million
+                    if row.cached_input_usd_per_million is not None
+                    else ""
+                ),
+                output_usd_per_million=row.output_usd_per_million,
+                active=True,
+                source_url=row.source_url,
+                checked_at=row.checked_at,
+                notes=row.notes,
+            )
+            counts[status] += 1
+        repriced_missing = (
+            backfill_missing_cost_estimates(session)
+            if _truthy_default(payload, "reprice_missing", True)
+            else 0
+        )
+        preview = _pricing_catalog_preview(session, rows, options)
+    return {
+        "applied": len(selected_keys),
+        "created": counts["new"],
+        "updated": counts["update"],
+        "unchanged": counts["unchanged"],
+        "repriced_missing": repriced_missing,
+        "preview": preview,
+    }
+
+
 @router.get("/api/providers", response_model=None)
 async def api_list_providers(
     request: Request,
@@ -1400,6 +1484,166 @@ def _truthy(value: object) -> bool:
     if value is None:
         return False
     return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _truthy_default(payload: dict[str, Any], key: str, default: bool) -> bool:
+    if key not in payload:
+        return default
+    return _truthy(payload.get(key))
+
+
+async def _pricing_catalog_rows(
+    request: Request,
+    payload: dict[str, Any],
+) -> tuple[list[PricingCatalogRow], dict[str, object]]:
+    source = str(payload.get("source") or "huggingface-router").strip()
+    search = str(payload.get("search") or "").strip()
+    try:
+        limit = int(payload.get("limit") or 25)
+    except (TypeError, ValueError):
+        limit = 25
+    include_base_rows = _truthy_default(payload, "include_base_rows", True)
+    include_provider_rows = _truthy_default(payload, "include_provider_rows", True)
+    api_key = _pricing_catalog_api_key(request, source)
+    rows = await fetch_catalog_rows(
+        request.app.state.http_client,
+        source=source,
+        search=search,
+        limit=limit,
+        include_base_rows=include_base_rows,
+        include_provider_rows=include_provider_rows,
+        api_key=api_key,
+    )
+    options = {
+        "source": source,
+        "search": search,
+        "limit": max(1, min(limit, 100)),
+        "include_base_rows": include_base_rows,
+        "include_provider_rows": include_provider_rows,
+    }
+    return rows, options
+
+
+def _pricing_catalog_api_key(request: Request, source: str) -> str | None:
+    session_factory: SessionFactory = request.app.state.session_factory
+    with session_scope(session_factory) as session:
+        provider = session.get(ModelProvider, source)
+        if provider is None:
+            raise CatalogFetchError("Catalog source provider is not configured.")
+        env_name = provider.api_key_env
+    if not env_name:
+        return None
+    value = os.getenv(env_name)
+    return value.strip() if value and value.strip() else None
+
+
+def _pricing_catalog_selected_keys(payload: dict[str, Any]) -> list[str]:
+    values = payload.get("keys", payload.get("selected_keys", []))
+    if isinstance(values, str):
+        candidates = [chunk.strip() for chunk in values.splitlines() for chunk in chunk.split(",")]
+    elif isinstance(values, list):
+        candidates = [str(value).strip() for value in values]
+    else:
+        candidates = []
+    selected: list[str] = []
+    for key in candidates:
+        if key and key not in selected:
+            selected.append(key)
+    return selected
+
+
+def _pricing_catalog_preview(
+    session,
+    rows: list[PricingCatalogRow],
+    options: dict[str, object],
+) -> dict[str, object]:
+    items = [
+        _pricing_catalog_row_payload(row, _pricing_catalog_row_status(session, row))
+        for row in rows
+    ]
+    counts = Counter(str(item["status"]) for item in items)
+    return {
+        **options,
+        "items": items,
+        "total": len(items),
+        "counts": {
+            "new": counts["new"],
+            "update": counts["update"],
+            "unchanged": counts["unchanged"],
+        },
+    }
+
+
+def _pricing_catalog_row_status(session, row: PricingCatalogRow) -> str:
+    existing = session.scalar(
+        select(ModelPrice).where(
+            ModelPrice.provider_slug == row.provider_slug,
+            ModelPrice.model == row.model,
+        )
+    )
+    if existing is None:
+        return "new"
+    if not existing.active:
+        return "update"
+    comparisons = (
+        existing.display_name == (row.display_name or None),
+        tuple(_model_price_aliases(existing)) == tuple(row.aliases),
+        existing.input_usd_per_million == row.input_usd_per_million,
+        existing.cached_input_usd_per_million == row.cached_input_usd_per_million,
+        existing.output_usd_per_million == row.output_usd_per_million,
+        (existing.source_url or "") == (row.source_url or ""),
+        (existing.checked_at or "") == (row.checked_at or ""),
+        (existing.notes or "") == (row.notes or ""),
+    )
+    return "unchanged" if all(comparisons) else "update"
+
+
+def _pricing_catalog_row_payload(row: PricingCatalogRow, status: str) -> dict[str, object]:
+    return {
+        "key": row.key,
+        "source": row.source,
+        "provider_slug": row.provider_slug,
+        "model": row.model,
+        "display_name": row.display_name,
+        "aliases": list(row.aliases),
+        "input_usd_per_million": str(row.input_usd_per_million),
+        "cached_input_usd_per_million": (
+            str(row.cached_input_usd_per_million)
+            if row.cached_input_usd_per_million is not None
+            else None
+        ),
+        "output_usd_per_million": str(row.output_usd_per_million),
+        "source_url": row.source_url,
+        "checked_at": row.checked_at,
+        "notes": row.notes,
+        "row_kind": row.row_kind,
+        "external_provider": row.external_provider,
+        "context_length": row.context_length,
+        "supports_tools": row.supports_tools,
+        "status": status,
+        "selected": status in {"new", "update"},
+        "display": {
+            "input_usd_per_million": format_usd(row.input_usd_per_million),
+            "cached_input_usd_per_million": format_usd(row.cached_input_usd_per_million),
+            "output_usd_per_million": format_usd(row.output_usd_per_million),
+            "context_length": format_compact_number(row.context_length),
+            "supports_tools": (
+                "Yes" if row.supports_tools else "No" if row.supports_tools is False else "-"
+            ),
+        },
+    }
+
+
+def _model_price_aliases(price: ModelPrice) -> list[str]:
+    if not price.aliases_json:
+        return []
+    try:
+        aliases = json.loads(price.aliases_json)
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(aliases, list):
+        return []
+    return [alias for alias in aliases if isinstance(alias, str)]
 
 
 def _optional_query_int(value: object, field_name: str) -> int | None:

@@ -1546,6 +1546,7 @@ fieldset legend,
 .status-active,
 .status-healthy,
 .status-success,
+.status-new,
 .status-ready,
 .status-enabled,
 .status-editable {
@@ -1556,6 +1557,7 @@ fieldset legend,
 
 .status-inactive,
 .status-warning,
+.status-update,
 .status-missing-key,
 .status-missing-api-key,
 .status-planned {
@@ -1576,6 +1578,36 @@ fieldset legend,
   gap: 12px;
   align-items: end;
   margin-bottom: 12px;
+}
+
+.catalog-sync-form {
+  display: grid;
+  grid-template-columns: minmax(170px, 220px) minmax(220px, 1fr) minmax(110px, 150px) repeat(3, minmax(120px, auto));
+  gap: 12px;
+  align-items: end;
+}
+
+.catalog-sync-actions {
+  grid-column: 1 / -1;
+  margin-top: 0;
+}
+
+.catalog-sync-message {
+  margin: 0;
+  font-weight: 700;
+}
+
+.catalog-preview-shell {
+  margin-top: 12px;
+}
+
+.catalog-preview-table {
+  min-width: 1120px;
+}
+
+.catalog-preview-table code {
+  white-space: normal;
+  word-break: break-word;
 }
 
 .data-table {
@@ -1818,6 +1850,7 @@ summary:focus-visible {
   .two-col,
   .three-col,
   .filter-row,
+  .catalog-sync-form,
   .inline-tool-form {
     grid-template-columns: 1fr;
   }

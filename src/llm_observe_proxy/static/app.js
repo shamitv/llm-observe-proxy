@@ -482,6 +482,171 @@ document.querySelectorAll("[data-table-filter], [data-table-status-filter], [dat
   control.addEventListener("change", () => applyTableFilters(tableId));
 });
 
+document.querySelectorAll("[data-pricing-catalog]").forEach((panel) => {
+  const previewUrl = panel.dataset.previewUrl;
+  const applyUrl = panel.dataset.applyUrl;
+  const form = panel.querySelector("[data-pricing-catalog-form]");
+  const tbody = panel.querySelector("[data-pricing-catalog-rows]");
+  const message = panel.querySelector("[data-pricing-catalog-message]");
+  const applyButton = panel.querySelector("[data-pricing-catalog-apply]");
+  let previewItems = [];
+
+  const setCatalogMessage = (text, isError = false) => {
+    if (!message) {
+      return;
+    }
+    message.textContent = text || "";
+    message.hidden = !text;
+    message.classList.toggle("error-text", isError);
+  };
+
+  const catalogPayload = () => ({
+    source: form?.querySelector("[name='source']")?.value || "huggingface-router",
+    search: form?.querySelector("[name='search']")?.value || "",
+    limit: form?.querySelector("[name='limit']")?.value || "25",
+    include_base_rows: Boolean(form?.querySelector("[name='include_base_rows']")?.checked),
+    include_provider_rows: Boolean(form?.querySelector("[name='include_provider_rows']")?.checked),
+    reprice_missing: Boolean(form?.querySelector("[name='reprice_missing']")?.checked),
+  });
+
+  const selectedCatalogKeys = () => Array.from(
+    panel.querySelectorAll("[data-pricing-catalog-key]:checked"),
+  ).map((checkbox) => checkbox.value);
+
+  const updateCatalogApplyState = () => {
+    if (applyButton) {
+      applyButton.disabled = selectedCatalogKeys().length === 0;
+    }
+  };
+
+  const appendCatalogCell = (row, text) => {
+    const cell = document.createElement("td");
+    cell.textContent = text || "-";
+    row.append(cell);
+    return cell;
+  };
+
+  const renderCatalogStatus = (row, status) => {
+    const cell = document.createElement("td");
+    const badge = document.createElement("span");
+    badge.className = `status-badge status-${(status || "unknown").replaceAll("_", "-")}`;
+    badge.textContent = status || "unknown";
+    cell.append(badge);
+    row.append(cell);
+  };
+
+  const renderCatalogRows = (items) => {
+    if (!tbody) {
+      return;
+    }
+    tbody.replaceChildren();
+    previewItems = Array.isArray(items) ? items : [];
+    if (!previewItems.length) {
+      const row = document.createElement("tr");
+      const cell = document.createElement("td");
+      cell.className = "empty";
+      cell.colSpan = 10;
+      cell.textContent = "No catalog pricing rows matched.";
+      row.append(cell);
+      tbody.append(row);
+      updateCatalogApplyState();
+      return;
+    }
+
+    previewItems.forEach((item) => {
+      const row = document.createElement("tr");
+      const selectCell = document.createElement("td");
+      const checkbox = document.createElement("input");
+      checkbox.type = "checkbox";
+      checkbox.value = item.key || "";
+      checkbox.checked = Boolean(item.selected);
+      checkbox.dataset.pricingCatalogKey = item.key || "";
+      checkbox.setAttribute("aria-label", `Apply ${item.display_name || item.model}`);
+      checkbox.addEventListener("change", updateCatalogApplyState);
+      selectCell.append(checkbox);
+      row.append(selectCell);
+
+      renderCatalogStatus(row, item.status);
+
+      const modelCell = document.createElement("td");
+      const model = document.createElement("code");
+      model.textContent = item.model || "-";
+      const name = document.createElement("small");
+      name.textContent = item.display_name || "";
+      modelCell.append(model, name);
+      row.append(modelCell);
+
+      appendCatalogCell(row, item.external_provider || item.row_kind);
+      appendCatalogCell(row, item.display?.input_usd_per_million);
+      appendCatalogCell(row, item.display?.cached_input_usd_per_million);
+      appendCatalogCell(row, item.display?.output_usd_per_million);
+      appendCatalogCell(row, item.display?.context_length);
+      appendCatalogCell(row, item.display?.supports_tools);
+      appendCatalogCell(row, item.checked_at);
+      tbody.append(row);
+    });
+    updateCatalogApplyState();
+  };
+
+  const postCatalog = async (url, payload) => {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.detail || `Pricing catalog returned ${response.status}`);
+    }
+    return data;
+  };
+
+  form?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    if (!previewUrl) {
+      return;
+    }
+    setCatalogMessage("Loading catalog...");
+    renderCatalogRows([]);
+    try {
+      const data = await postCatalog(previewUrl, catalogPayload());
+      renderCatalogRows(data.items || []);
+      setCatalogMessage(
+        `${data.total || 0} rows: ${data.counts?.new || 0} new, ${data.counts?.update || 0} updates, ${data.counts?.unchanged || 0} unchanged.`,
+      );
+    } catch (error) {
+      renderCatalogRows([]);
+      setCatalogMessage(error.message || "Catalog preview failed.", true);
+    }
+  });
+
+  applyButton?.addEventListener("click", async () => {
+    if (!applyUrl) {
+      return;
+    }
+    const keys = selectedCatalogKeys();
+    if (!keys.length) {
+      setCatalogMessage("Choose at least one catalog row to apply.", true);
+      return;
+    }
+    const payload = { ...catalogPayload(), keys };
+    applyButton.disabled = true;
+    setCatalogMessage("Applying selected rows...");
+    try {
+      const data = await postCatalog(applyUrl, payload);
+      renderCatalogRows(data.preview?.items || previewItems);
+      setCatalogMessage(
+        `${data.applied || 0} applied: ${data.created || 0} created, ${data.updated || 0} updated, ${data.unchanged || 0} unchanged. ${data.repriced_missing || 0} missing-cost requests repriced.`,
+      );
+    } catch (error) {
+      setCatalogMessage(error.message || "Catalog apply failed.", true);
+      updateCatalogApplyState();
+    }
+  });
+
+  updateCatalogApplyState();
+});
+
 const closeEnhancedSelects = (except = null) => {
   document.querySelectorAll(".enhanced-select").forEach((wrapper) => {
     if (wrapper === except) {

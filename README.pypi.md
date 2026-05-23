@@ -10,8 +10,9 @@ or external database.
 
 Project repository: https://github.com/shamitv/llm-observe-proxy
 
-Current release includes editable scalar and tiered model pricing, cached-token
-cost snapshots, router fallback seed data, and run what-if comparisons.
+Current release includes editable scalar and tiered model pricing, catalog sync for
+router providers, cached-token cost snapshots, router fallback seed data, and run
+what-if comparisons.
 
 ## Features
 
@@ -26,6 +27,8 @@ cost snapshots, router fallback seed data, and run what-if comparisons.
   tokens/sec, model and endpoint breakdowns, and signal/error counts.
 - Run what-if pricing for comparing captured usage against other configured scalar or
   tiered model prices.
+- Pricing catalog preview/apply for Hugging Face Router and OpenRouter model/provider
+  combinations.
 - Detail pages with response render modes for JSON, plain text, Markdown, tool calls,
   and raw SSE streams.
 - Request image gallery for data URL and remote image references.
@@ -221,10 +224,12 @@ $env:LLM_OBSERVE_DEFAULT_FIXES_JSON = '["qwen-tagged-tool-call-rewrite"]'
 
 Cost estimates are snapshotted when a response is captured. The proxy stores the billing
 provider, billing model, token counts, input/output rate snapshot, and estimated USD cost
-on the request row. Historical rows are not generally recalculated when pricing changes,
-but you can run `llm-observe-proxy --backfill-cached-costs` to reprice older rows that
-already report cached input tokens and lack cached-pricing snapshot metadata. Those rows
-are repriced with the current configured cached-input rates and marked with
+on the request row. Existing estimated costs are not overwritten when pricing changes.
+The Pricing tab can preview and apply current Hugging Face Router and OpenRouter catalog
+rows, then fill only captured requests that are still missing estimated cost. You can
+also run `llm-observe-proxy --backfill-cached-costs` to reprice older rows that already
+report cached input tokens and lack cached-pricing snapshot metadata. Those rows are
+repriced with the current configured cached-input rates and marked with
 `historical_cost_backfill` in the pricing snapshot.
 
 Token counts are extracted from OpenAI-compatible `usage` objects, including the shapes
@@ -247,10 +252,12 @@ separate cache-write dimension.
 
 Billing identity is resolved from the routed upstream model when a model route rewrites
 the request, otherwise from the upstream response model when present, otherwise from the
-client request model. Provider identity comes from a route's optional `provider_slug`,
-then falls back to a provider whose configured upstream URL exactly matches the active
-upstream base. Historical cached-cost backfills can also infer the provider when a
-stored upstream request URL starts with a configured provider URL.
+client request model. Provider-specific router rows are matched when HF Router model
+suffixes are preserved or when OpenRouter requests pin exactly one endpoint with
+fallbacks disabled. Provider identity comes from a route's optional `provider_slug`, then
+falls back to a provider whose configured upstream URL exactly matches the active
+upstream base. Historical cached-cost backfills can also infer the provider when a stored
+upstream request URL starts with a configured provider URL.
 
 SQLite is seeded with editable standard paid text rates for legacy OpenAI, Anthropic, and
 Google Gemini rows plus a broader current catalog checked on May 23, 2026. The v0.4 seed
@@ -261,6 +268,12 @@ cached-input rates where available, and Qwen-style request-size tiers. Seeds are
 only when missing, so UI edits are preserved.
 The provider catalog also seeds `Local LLM` as an editable no-key local endpoint for
 fallback routing.
+
+Catalog sync uses the configured provider API key environment variables when present:
+`HF_TOKEN` for Hugging Face Router and `OPENROUTER_API_KEY` for OpenRouter. OpenRouter
+per-token catalog prices are converted to this app's USD-per-1M-token rows. Cache-write,
+image, fixed request, discount, and other non-text-token prices are stored in notes but
+are not included in cost math.
 
 Tier ranges use `[min_input_tokens, max_input_tokens)`, and tier selection happens per
 captured request. Run what-if comparisons estimate each request independently and then sum
@@ -322,6 +335,8 @@ https://github.com/shamitv/llm-observe-proxy
 - `GET/POST /admin/api/routes`: route registry JSON list/create endpoints.
 - `GET/PUT/DELETE /admin/api/routes/{route_id}`: route JSON read/update/delete endpoints.
 - `POST /admin/api/routes/simulate`: simulate route resolution for a model name.
+- `POST /admin/api/pricing/catalog/preview`: preview current HF Router or OpenRouter pricing rows.
+- `POST /admin/api/pricing/catalog/apply`: apply selected catalog pricing rows and optionally fill missing cost estimates.
 - `POST /admin/settings/incoming`: update incoming host/port settings for next startup.
 - `POST /admin/settings/upstream`: update upstream URL.
 - `POST /admin/settings/upstream-defaults`: update upstream fallback provider/model behavior.

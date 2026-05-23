@@ -10,6 +10,7 @@ from sqlalchemy import Text, and_, cast, inspect, or_, select
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, defer
 
+from llm_observe_proxy.billing import resolve_billing_model
 from llm_observe_proxy.capture import (
     ExtractedTokenUsage,
     decode_json_bytes,
@@ -23,6 +24,7 @@ from llm_observe_proxy.database import ModelPrice, ModelPriceTier, ModelProvider
 
 TOKENS_PER_MILLION = Decimal("1000000")
 HISTORICAL_CACHED_COST_BACKFILL = "cached-input-v0.4"
+CATALOG_MISSING_COST_BACKFILL = "pricing-catalog-missing-cost-v0.5"
 
 
 @dataclass(frozen=True)
@@ -305,7 +307,7 @@ def backfill_historical_cached_cost_estimates(engine: Engine) -> int:
                 provider_slug = _record_provider_slug(record, providers_by_slug, provider_urls)
                 if provider_slug is None:
                     continue
-                billing_model = _record_billing_model(record)
+                billing_model = _record_billing_model(record, provider_slug)
                 if billing_model is None:
                     continue
                 usage = _record_usage_for_backfill(record)
@@ -347,6 +349,53 @@ def backfill_historical_cached_cost_estimates(engine: Engine) -> int:
                 updated += 1
         if updated:
             session.commit()
+    return updated
+
+
+def backfill_missing_cost_estimates(session: Session) -> int:
+    """Fill missing cost estimates after catalog pricing rows are imported."""
+    providers = session.scalars(select(ModelProvider)).all()
+    providers_by_slug = {provider.slug: provider for provider in providers}
+    provider_urls = tuple(
+        (provider.slug, provider.upstream_url.rstrip("/"))
+        for provider in providers
+        if provider.upstream_url
+    )
+    records = session.scalars(
+        select(RequestRecord)
+        .where(RequestRecord.billing_total_cost_usd.is_(None))
+        .where(RequestRecord.response_body.is_not(None))
+        .where(RequestRecord.response_status.is_not(None))
+        .execution_options(yield_per=200)
+    )
+    updated = 0
+    for record in records:
+        provider_slug = _record_provider_slug(record, providers_by_slug, provider_urls)
+        if provider_slug is None:
+            continue
+        billing_model = _record_billing_model(record, provider_slug)
+        if billing_model is None:
+            continue
+        usage = _record_usage_for_backfill(record)
+        if usage.input_tokens is None or usage.output_tokens is None:
+            continue
+        estimate = estimate_cost(
+            session,
+            usage=usage,
+            billing_model=billing_model,
+            provider_slug=provider_slug,
+        )
+        if estimate.total_cost_usd is None or estimate.snapshot is None:
+            continue
+        apply_cost_estimate(record, estimate)
+        snapshot = dict(estimate.snapshot)
+        snapshot["pricing_catalog_backfill"] = CATALOG_MISSING_COST_BACKFILL
+        record.pricing_snapshot_json = json.dumps(
+            snapshot,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        updated += 1
     return updated
 
 
@@ -448,16 +497,16 @@ def _record_provider_slug(
     return None
 
 
-def _record_billing_model(record: RequestRecord) -> str | None:
-    for value in (
-        record.billing_model,
-        record.upstream_model,
-        _body_model(record),
-        record.model,
-    ):
-        if value and value.strip():
-            return value.strip()
-    return None
+def _record_billing_model(record: RequestRecord, provider_slug: str | None = None) -> str | None:
+    request_payload = decode_json_bytes(record.request_body)
+    existing_billing_model = record.billing_model if record.billing_model else None
+    return resolve_billing_model(
+        provider_slug=provider_slug,
+        request_payload=request_payload,
+        upstream_model=record.upstream_model or existing_billing_model,
+        response_model=_body_model(record),
+        record_model=record.model,
+    )
 
 
 def _body_model(record: RequestRecord) -> str | None:

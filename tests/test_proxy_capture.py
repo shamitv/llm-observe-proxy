@@ -200,6 +200,97 @@ def test_configured_model_route_rewrites_injects_key_and_records_metadata(
         assert "route-secret" not in record.request_headers_json
 
 
+def test_openrouter_provider_order_uses_endpoint_specific_pricing(
+    tmp_path: Path,
+    fake_upstream,
+) -> None:
+    route = ModelRoute(
+        model="qwen/qwen3-coder",
+        upstream_url=ROUTE_UPSTREAM_URL,
+        provider_slug="openrouter",
+    )
+    app = _create_routed_app(tmp_path, route)
+
+    with TestClient(app) as client:
+        with session_scope(app.state.session_factory) as session:
+            upsert_model_price(
+                session,
+                provider_slug="openrouter",
+                model="qwen/qwen3-coder",
+                input_usd_per_million="10",
+                output_usd_per_million="20",
+            )
+            upsert_model_price(
+                session,
+                provider_slug="openrouter",
+                model="qwen/qwen3-coder@google-vertex/us-south1",
+                input_usd_per_million="1",
+                output_usd_per_million="2",
+            )
+        response = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "qwen/qwen3-coder",
+                "provider": {
+                    "order": ["google-vertex/us-south1"],
+                    "allow_fallbacks": False,
+                },
+                "messages": [{"role": "user", "content": "hello"}],
+            },
+        )
+
+    assert response.status_code == 200
+    with app.state.session_factory() as session:
+        record = session.scalars(select(RequestRecord)).one()
+        assert record.billing_provider_slug == "openrouter"
+        assert record.billing_model == "qwen/qwen3-coder@google-vertex/us-south1"
+        assert record.billing_total_cost_usd == Decimal("0.00001200")
+
+
+def test_openrouter_ambiguous_provider_order_uses_base_pricing(
+    tmp_path: Path,
+    fake_upstream,
+) -> None:
+    route = ModelRoute(
+        model="qwen/qwen3-coder",
+        upstream_url=ROUTE_UPSTREAM_URL,
+        provider_slug="openrouter",
+    )
+    app = _create_routed_app(tmp_path, route)
+
+    with TestClient(app) as client:
+        with session_scope(app.state.session_factory) as session:
+            upsert_model_price(
+                session,
+                provider_slug="openrouter",
+                model="qwen/qwen3-coder",
+                input_usd_per_million="10",
+                output_usd_per_million="20",
+            )
+            upsert_model_price(
+                session,
+                provider_slug="openrouter",
+                model="qwen/qwen3-coder@google-vertex/us-south1",
+                input_usd_per_million="1",
+                output_usd_per_million="2",
+            )
+        response = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "qwen/qwen3-coder",
+                "provider": {"order": ["google-vertex/us-south1", "deepinfra"]},
+                "messages": [{"role": "user", "content": "hello"}],
+            },
+        )
+
+    assert response.status_code == 200
+    with app.state.session_factory() as session:
+        record = session.scalars(select(RequestRecord)).one()
+        assert record.billing_provider_slug == "openrouter"
+        assert record.billing_model == "qwen/qwen3-coder"
+        assert record.billing_total_cost_usd == Decimal("0.00012000")
+
+
 def test_ui_model_route_rewrites_injects_key_and_records_metadata(
     tmp_path: Path,
     fake_upstream,

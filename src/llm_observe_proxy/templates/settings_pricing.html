@@ -10,6 +10,71 @@
 {% endblock %}
 {% block settings_content %}
 <section class="settings-grid v05-grid">
+  <article class="card registry-card catalog-sync-card" data-pricing-catalog data-preview-url="/admin/api/pricing/catalog/preview" data-apply-url="/admin/api/pricing/catalog/apply">
+    <div class="card-header">
+      <div>
+        <h2>Catalog Sync</h2>
+        <p>Preview current router catalog rows before updating local pricing.</p>
+      </div>
+      {{ badges.status_badge("Review") }}
+    </div>
+    <form class="catalog-sync-form" data-pricing-catalog-form>
+      <label class="form-field">
+        <span>Source</span>
+        <select name="source">
+          <option value="huggingface-router">Hugging Face Router</option>
+          <option value="openrouter">OpenRouter</option>
+        </select>
+      </label>
+      <label class="form-field">
+        <span>Search</span>
+        <span class="field-with-icon">{{ icons.icon("search", class_name="field-icon") }}<input name="search" placeholder="qwen, deepseek, gpt-oss" aria-label="Search catalog"></span>
+      </label>
+      <label class="form-field">
+        <span>Model limit</span>
+        <input name="limit" type="number" min="1" max="100" step="1" value="25">
+      </label>
+      <label class="check switch-line">
+        <input type="checkbox" name="include_base_rows" value="yes" checked>
+        <span>Base rows</span>
+      </label>
+      <label class="check switch-line">
+        <input type="checkbox" name="include_provider_rows" value="yes" checked>
+        <span>Provider rows</span>
+      </label>
+      <label class="check switch-line">
+        <input type="checkbox" name="reprice_missing" value="yes" checked>
+        <span>Reprice missing</span>
+      </label>
+      <div class="button-row catalog-sync-actions">
+        <button class="button ghost button-ghost" type="submit">{{ icons.icon("search", class_name="button-icon") }}<span>Preview</span></button>
+        <button class="button primary button-primary" type="button" data-pricing-catalog-apply disabled>{{ icons.icon("settings", class_name="button-icon") }}<span>Apply selected</span></button>
+      </div>
+    </form>
+    <p class="muted catalog-sync-message" data-pricing-catalog-message hidden></p>
+    <div class="table-shell catalog-preview-shell">
+      <table class="data-table model-routes-table catalog-preview-table">
+        <thead>
+          <tr>
+            <th scope="col">Apply</th>
+            <th scope="col">Status</th>
+            <th scope="col">Model</th>
+            <th scope="col">Endpoint</th>
+            <th scope="col">Input / 1M</th>
+            <th scope="col">Cached / 1M</th>
+            <th scope="col">Output / 1M</th>
+            <th scope="col">Context</th>
+            <th scope="col">Tools</th>
+            <th scope="col">Checked</th>
+          </tr>
+        </thead>
+        <tbody data-pricing-catalog-rows>
+          <tr><td colspan="10" class="empty">Preview catalog rows before applying updates.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </article>
+
   <article class="card registry-card">
     <div class="card-header">
       <div>
