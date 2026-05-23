@@ -640,6 +640,49 @@ td:first-child a {
   margin: 0;
 }
 
+.tier-cell {
+  min-width: 420px;
+}
+
+.tier-list {
+  display: grid;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.tier-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface-2);
+}
+
+.tier-row div,
+.tier-form {
+  min-width: 0;
+}
+
+.tier-row strong,
+.tier-row span {
+  display: block;
+}
+
+.tier-form {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(90px, 1fr));
+  gap: 6px;
+}
+
+.tier-form input {
+  min-height: 30px;
+  padding: 5px 8px;
+  font-size: 12px;
+}
+
 .what-if-form {
   display: flex;
   align-items: flex-start;

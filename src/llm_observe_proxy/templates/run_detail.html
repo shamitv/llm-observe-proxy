@@ -84,9 +84,15 @@
           <td>{{ scenario.input_tokens | compact_number }}</td>
           <td>{{ scenario.cached_input_tokens | compact_number }}</td>
           <td>{{ scenario.output_tokens | compact_number }}</td>
+          {% if scenario.mixed_tiers %}
+          <td>Mixed tiers</td>
+          <td>Mixed tiers</td>
+          <td>Mixed tiers</td>
+          {% else %}
           <td>{{ scenario.input_usd_per_million | usd }}</td>
           <td>{{ scenario.cached_input_usd_per_million | usd }}</td>
           <td>{{ scenario.output_usd_per_million | usd }}</td>
+          {% endif %}
           <td>{{ scenario.input_cost_usd | usd }}</td>
           <td>{{ scenario.output_cost_usd | usd }}</td>
           <td><strong>{{ scenario.total_cost_usd | usd }}</strong></td>

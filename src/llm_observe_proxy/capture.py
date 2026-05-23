@@ -25,6 +25,7 @@ class ExtractedTokenUsage:
     output_tokens: int | None = None
     total_tokens: int | None = None
     cached_input_tokens: int | None = None
+    cache_write_input_tokens: int | None = None
 
 
 STREAM_USAGE_MARKERS = (
@@ -38,7 +39,10 @@ STREAM_USAGE_MARKERS = (
     b'"prompt_eval_count"',
     b'"cached_tokens"',
     b'"cache_read_tokens"',
+    b'"cache_write_tokens"',
     b'"cache_n"',
+    b'"prompt_cache_hit_tokens"',
+    b'"prompt_cache_miss_tokens"',
     b'"output_tokens"',
     b'"completion_tokens"',
     b'"predicted_n"',
@@ -273,15 +277,25 @@ def _parse_openai_usage(value: dict[str, Any]) -> ExtractedTokenUsage | None:
             "output_tokens",
             "completion_tokens",
             "total_tokens",
+            "prompt_cache_hit_tokens",
+            "prompt_cache_miss_tokens",
         ),
     ):
         return None
 
+    input_tokens = _first_int(value, "input_tokens", "prompt_tokens")
+    if input_tokens is None:
+        input_tokens = _sum_known(
+            _first_int(value, "prompt_cache_hit_tokens"),
+            _first_int(value, "prompt_cache_miss_tokens"),
+        )
+
     return _build_token_usage(
-        input_tokens=_first_int(value, "input_tokens", "prompt_tokens"),
+        input_tokens=input_tokens,
         output_tokens=_first_int(value, "output_tokens", "completion_tokens"),
         total_tokens=_first_int(value, "total_tokens"),
         cached_input_tokens=_cached_input_tokens(value),
+        cache_write_input_tokens=_cache_write_input_tokens(value),
     )
 
 
@@ -327,6 +341,7 @@ def _build_token_usage(
     output_tokens: int | None,
     total_tokens: int | None = None,
     cached_input_tokens: int | None = None,
+    cache_write_input_tokens: int | None = None,
 ) -> ExtractedTokenUsage:
     if total_tokens is None and input_tokens is not None and output_tokens is not None:
         total_tokens = input_tokens + output_tokens
@@ -341,6 +356,7 @@ def _build_token_usage(
         output_tokens=output_tokens,
         total_tokens=total_tokens,
         cached_input_tokens=cached_input_tokens,
+        cache_write_input_tokens=cache_write_input_tokens,
     )
 
 
@@ -370,7 +386,17 @@ def _cached_input_tokens(usage: dict[str, Any]) -> int | None:
             value = _first_int(details, "cached_tokens", "cache_read_tokens")
             if value is not None:
                 return value
-    return _first_int(usage, "cached_input_tokens")
+    return _first_int(usage, "cached_input_tokens", "prompt_cache_hit_tokens")
+
+
+def _cache_write_input_tokens(usage: dict[str, Any]) -> int | None:
+    for details_key in ("input_tokens_details", "prompt_tokens_details"):
+        details = usage.get(details_key)
+        if isinstance(details, dict):
+            value = _first_int(details, "cache_write_tokens")
+            if value is not None:
+                return value
+    return _first_int(usage, "cache_write_tokens")
 
 
 def _has_token_usage(usage: ExtractedTokenUsage | None) -> bool:
@@ -379,6 +405,7 @@ def _has_token_usage(usage: ExtractedTokenUsage | None) -> bool:
         for value in (
             usage.input_tokens,
             usage.cached_input_tokens,
+            usage.cache_write_input_tokens,
             usage.output_tokens,
             usage.total_tokens,
         )

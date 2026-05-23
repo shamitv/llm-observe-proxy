@@ -1,0 +1,5 @@
+data: {"id":"gen_fixture","object":"chat.completion.chunk","created":1770000000,"model":"meta-llama/llama-3.1-8b-instruct","provider":"ExampleProvider","choices":[{"index":0,"delta":{"role":"assistant","content":"ok"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen_fixture","object":"chat.completion.chunk","created":1770000000,"model":"meta-llama/llama-3.1-8b-instruct","provider":"ExampleProvider","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":"stop","native_finish_reason":"stop"}],"usage":{"prompt_tokens":15,"completion_tokens":2,"total_tokens":17,"prompt_tokens_details":{"cached_tokens":3,"cache_write_tokens":7,"audio_tokens":0,"video_tokens":0},"cost":0.0000004,"is_byok":false,"cost_details":{"upstream_inference_cost":0.0000004,"upstream_inference_prompt_cost":0.0000003,"upstream_inference_completions_cost":0.0000001},"completion_tokens_details":{"reasoning_tokens":0,"image_tokens":0,"audio_tokens":0}}}
+
+data: [DONE]

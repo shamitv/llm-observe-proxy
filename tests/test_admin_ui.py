@@ -22,6 +22,7 @@ from llm_observe_proxy.database import (
     RequestRecord,
     TaskRun,
     upsert_model_price,
+    upsert_model_price_tier,
 )
 
 GLOBAL_UPSTREAM_URL = "http://localhost:8080/v1"
@@ -456,6 +457,62 @@ def test_settings_manages_model_providers_and_prices(
         assert provider.upstream_url == "http://localhost:9000/v1"
         assert price.active is True
         assert price.cached_input_usd_per_million == Decimal("0.250000")
+        price_id = price.id
+
+    response = proxy_client.post(
+        "/admin/settings/model-price-tiers",
+        data={
+            "model_price_id": str(price_id),
+            "label": "Short context",
+            "min_input_tokens": "",
+            "max_input_tokens": "1000",
+            "input_usd_per_million": "0.75",
+            "cached_input_usd_per_million": "0.075",
+            "output_usd_per_million": "2.50",
+            "source_url": "https://example.com/custom-pricing",
+            "checked_at": "2026-05-23",
+            "release_date": "2026-01-15",
+            "notes": "Tier note",
+        },
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+
+    updated = proxy_client.get("/admin/settings")
+    assert "Short context" in updated.text
+    assert "0-999 input tokens" in updated.text
+    assert "$0.0750" in updated.text
+    assert "https://example.com/custom-pricing" not in updated.text
+
+    with proxy_app.state.session_factory() as session:
+        price = session.get(ModelPrice, price_id)
+        tier_id = price.tiers[0].id
+        assert price.tiers[0].label == "Short context"
+        assert price.tiers[0].max_input_tokens == 1000
+
+    invalid_tier = proxy_client.post(
+        "/admin/settings/model-price-tiers",
+        data={
+            "model_price_id": str(price_id),
+            "min_input_tokens": "999",
+            "max_input_tokens": "1200",
+            "input_usd_per_million": "1",
+            "output_usd_per_million": "2",
+        },
+    )
+    assert invalid_tier.status_code == 400
+    assert "overlaps" in invalid_tier.text
+
+    response = proxy_client.post(
+        "/admin/settings/model-price-tiers/delete",
+        data={"tier_id": str(tier_id)},
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+
+    updated = proxy_client.get("/admin/settings")
+    assert "Short context" not in updated.text
+    assert "Scalar only" in updated.text
 
     response = proxy_client.post(
         "/admin/settings/model-prices/delete",
@@ -740,6 +797,65 @@ def test_run_detail_paginates_traffic_without_limiting_what_if_totals(
     assert "$0.0704" in detail.text
     assert "44k" in detail.text
     assert "<td>55</td>" in detail.text
+
+
+def test_run_detail_marks_mixed_tier_what_if_rates(
+    proxy_client: TestClient,
+    proxy_app: FastAPI,
+) -> None:
+    with proxy_app.state.session_factory() as session:
+        price = upsert_model_price(
+            session,
+            provider_slug="openai",
+            model="tiered-run",
+            display_name="Tiered Run",
+            input_usd_per_million="9",
+            output_usd_per_million="9",
+        )
+        upsert_model_price_tier(
+            session,
+            model_price_id=price.id,
+            max_input_tokens="1000",
+            input_usd_per_million="1",
+            output_usd_per_million="2",
+            label="short",
+        )
+        upsert_model_price_tier(
+            session,
+            model_price_id=price.id,
+            min_input_tokens="1000",
+            input_usd_per_million="3",
+            output_usd_per_million="6",
+            label="long",
+        )
+        task_run = TaskRun(name="Tiered run", started_at=datetime(2026, 5, 1, tzinfo=UTC))
+        session.add(task_run)
+        session.flush()
+        _add_request_record(
+            session,
+            created_at=task_run.started_at,
+            model=price.model,
+            task_run_id=task_run.id,
+            input_tokens=999,
+            output_tokens=100,
+        )
+        _add_request_record(
+            session,
+            created_at=task_run.started_at + timedelta(seconds=1),
+            model=price.model,
+            task_run_id=task_run.id,
+            input_tokens=1000,
+            output_tokens=100,
+        )
+        session.commit()
+        run_id = task_run.id
+
+    detail = proxy_client.get(f"/admin/runs/{run_id}?what_if=openai:tiered-run")
+
+    assert detail.status_code == 200
+    assert "Tiered Run" in detail.text
+    assert "Mixed tiers" in detail.text
+    assert "$0.004799" in detail.text
 
 
 def test_run_detail_shows_default_what_if_costs_without_mutating_snapshots(

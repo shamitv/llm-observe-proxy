@@ -1,0 +1,36 @@
+{
+  "id": "chatcmpl_fixture",
+  "object": "chat.completion",
+  "created": 1770000000,
+  "model": "gpt-4.1-nano",
+  "choices": [
+    {
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "content": "ok",
+        "refusal": null,
+        "annotations": []
+      },
+      "logprobs": null,
+      "finish_reason": "stop"
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 12,
+    "completion_tokens": 1,
+    "total_tokens": 13,
+    "prompt_tokens_details": {
+      "cached_tokens": 4,
+      "audio_tokens": 0
+    },
+    "completion_tokens_details": {
+      "reasoning_tokens": 0,
+      "audio_tokens": 0,
+      "accepted_prediction_tokens": 0,
+      "rejected_prediction_tokens": 0
+    }
+  },
+  "service_tier": "default",
+  "system_fingerprint": "fp_fixture"
+}

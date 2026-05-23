@@ -483,7 +483,8 @@ should be captured separately only after their billing semantics are clear.
 
 - Do not invent cached-token counts when the upstream does not report them.
 - Do not assume provider cache discounts without a configured cached-input rate.
-- Do not recalculate historical request cost snapshots automatically.
+- Do not broadly recalculate historical request cost snapshots automatically; v0.4's
+  cached-token backfill is the narrow exception for stale cached-pricing metadata.
 - Do not add image/audio/tool-specific pricing in this feature.
 
 ### Implementation Plan

@@ -1,0 +1,27 @@
+{
+  "id": "chatcmpl_hf_fixture",
+  "object": "chat.completion",
+  "created": 1770000000,
+  "model": "llama3.1-8b",
+  "choices": [
+    {
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "content": "ok"
+      },
+      "finish_reason": "stop"
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 40,
+    "completion_tokens": 2,
+    "total_tokens": 42,
+    "prompt_tokens_details": {
+      "cached_tokens": 6
+    },
+    "completion_tokens_details": {
+      "reasoning_tokens": 0
+    }
+  }
+}

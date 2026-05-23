@@ -4,6 +4,7 @@ import json
 import subprocess
 import sys
 from decimal import Decimal
+from pathlib import Path
 
 import pytest
 from sqlalchemy import inspect, select, text
@@ -19,19 +20,37 @@ from llm_observe_proxy.config import (
     EXPOSED_INCOMING_HOST,
     Settings,
 )
-from llm_observe_proxy.costing import estimate_cost, estimate_run_cost
+from llm_observe_proxy.costing import (
+    HISTORICAL_CACHED_COST_BACKFILL,
+    estimate_cost,
+    estimate_run_cost,
+)
 from llm_observe_proxy.database import (
     ModelPrice,
+    ModelPriceTier,
     ModelProvider,
+    RequestRecord,
     create_db_engine,
     create_session_factory,
+    delete_model_price_tier,
     init_db,
     session_scope,
     set_incoming_server,
     upsert_model_price,
+    upsert_model_price_tier,
 )
 from llm_observe_proxy.rendering import render_payload
 from llm_observe_proxy.token_estimation import estimate_input_tokens
+
+FIXTURES = Path(__file__).parent / "fixtures" / "usage_shapes"
+
+
+def _load_fixture_json(name: str):
+    return json.loads((FIXTURES / name).read_text(encoding="utf-8"))
+
+
+def _load_fixture_bytes(name: str) -> bytes:
+    return (FIXTURES / name).read_bytes()
 
 
 def test_app_factory_exposes_health_route() -> None:
@@ -169,6 +188,65 @@ def test_extract_token_usage_supports_chat_responses_and_responses_api() -> None
     assert input_cached_usage.total_tokens == 25
 
 
+def test_extract_token_usage_supports_live_provider_fixtures() -> None:
+    openai_chat = extract_token_usage(_load_fixture_json("openai_chat_completion.json"))
+    assert openai_chat.input_tokens == 12
+    assert openai_chat.cached_input_tokens == 4
+    assert openai_chat.output_tokens == 1
+    assert openai_chat.total_tokens == 13
+
+    openai_responses = extract_token_usage(_load_fixture_json("openai_responses.json"))
+    assert openai_responses.input_tokens == 12
+    assert openai_responses.cached_input_tokens == 5
+    assert openai_responses.output_tokens == 2
+    assert openai_responses.total_tokens == 14
+
+    hf_router = extract_token_usage(_load_fixture_json("hf_router_chat_completion.json"))
+    assert hf_router.input_tokens == 40
+    assert hf_router.cached_input_tokens == 6
+    assert hf_router.output_tokens == 2
+    assert hf_router.total_tokens == 42
+
+    openrouter = extract_token_usage(_load_fixture_json("openrouter_chat_completion.json"))
+    assert openrouter.input_tokens == 15
+    assert openrouter.cached_input_tokens == 3
+    assert openrouter.cache_write_input_tokens == 7
+    assert openrouter.output_tokens == 2
+    assert openrouter.total_tokens == 17
+
+
+def test_extract_token_usage_supports_deepseek_cache_counters() -> None:
+    usage = extract_token_usage(
+        {
+            "usage": {
+                "prompt_cache_hit_tokens": 90,
+                "prompt_cache_miss_tokens": 10,
+                "completion_tokens": 25,
+            }
+        }
+    )
+
+    assert usage.input_tokens == 100
+    assert usage.cached_input_tokens == 90
+    assert usage.output_tokens == 25
+    assert usage.total_tokens == 125
+
+    explicit_prompt_total = extract_token_usage(
+        {
+            "usage": {
+                "prompt_tokens": 150,
+                "prompt_cache_hit_tokens": 90,
+                "prompt_cache_miss_tokens": 10,
+                "completion_tokens": 25,
+            }
+        }
+    )
+
+    assert explicit_prompt_total.input_tokens == 150
+    assert explicit_prompt_total.cached_input_tokens == 90
+    assert explicit_prompt_total.output_tokens == 25
+
+
 def test_extract_token_usage_prefers_openai_usage_over_provider_fallbacks() -> None:
     usage = extract_token_usage(
         {
@@ -255,6 +333,21 @@ def test_stream_token_usage_reads_final_sse_usage_event(monkeypatch: pytest.Monk
     assert usage.cached_input_tokens == 900
     assert usage.output_tokens == 25
     assert usage.total_tokens == 1025
+
+
+def test_stream_token_usage_reads_fixture_usage_events() -> None:
+    openai_usage = _stream_token_usage(_load_fixture_bytes("openai_chat_stream.sse"))
+    assert openai_usage.input_tokens == 12
+    assert openai_usage.cached_input_tokens == 4
+    assert openai_usage.output_tokens == 1
+    assert openai_usage.total_tokens == 13
+
+    openrouter_usage = _stream_token_usage(_load_fixture_bytes("openrouter_chat_stream.sse"))
+    assert openrouter_usage.input_tokens == 15
+    assert openrouter_usage.cached_input_tokens == 3
+    assert openrouter_usage.cache_write_input_tokens == 7
+    assert openrouter_usage.output_tokens == 2
+    assert openrouter_usage.total_tokens == 17
 
 
 def test_stream_token_usage_reads_final_sse_timings_event(
@@ -396,6 +489,44 @@ def test_init_db_seeds_model_pricing_without_overwriting_edits(tmp_path) -> None
             )
         ).one()
         openai_price.input_usd_per_million = Decimal("123")
+        qwen_price = session.scalars(
+            select(ModelPrice).where(
+                ModelPrice.provider_slug == "alibaba",
+                ModelPrice.model == "qwen3-coder-plus",
+            )
+        ).one()
+        openrouter_price = session.scalars(
+            select(ModelPrice).where(
+                ModelPrice.provider_slug == "openrouter",
+                ModelPrice.model == "openai/gpt-oss-120b",
+            )
+        ).one()
+        openrouter_price.input_usd_per_million = Decimal("999")
+
+        assert qwen_price.source_url == (
+            "https://www.alibabacloud.com/help/en/model-studio/model-pricing"
+        )
+        assert qwen_price.checked_at == "2026-05-23"
+        assert qwen_price.release_date == "2025-09-23"
+        assert "qwen/qwen3-coder-plus" in json.loads(qwen_price.aliases_json)
+        assert len(qwen_price.tiers) == 4
+        assert qwen_price.tiers[0].cached_input_usd_per_million == Decimal("0.114800")
+
+        deepseek_price = session.scalars(
+            select(ModelPrice).where(
+                ModelPrice.provider_slug == "deepseek",
+                ModelPrice.model == "deepseek-v4-flash",
+            )
+        ).one()
+        assert deepseek_price.cached_input_usd_per_million == Decimal("0.002800")
+
+        hf_price = session.scalars(
+            select(ModelPrice).where(
+                ModelPrice.provider_slug == "huggingface-router",
+                ModelPrice.model == "openai/gpt-oss-120b",
+            )
+        ).one()
+        assert hf_price.output_usd_per_million == Decimal("0.250000")
 
     init_db(engine)
 
@@ -406,12 +537,358 @@ def test_init_db_seeds_model_pricing_without_overwriting_edits(tmp_path) -> None
                 ModelPrice.model == "gpt-5.4-mini",
             )
         ).one()
+        edited_openrouter_price = session.scalars(
+            select(ModelPrice).where(
+                ModelPrice.provider_slug == "openrouter",
+                ModelPrice.model == "openai/gpt-oss-120b",
+            )
+        ).one()
         price_count = session.scalar(text("SELECT count(*) FROM model_prices"))
     engine.dispose()
 
-    assert providers == ["anthropic", "google", "openai"]
+    assert {"alibaba", "deepseek", "huggingface-router", "moonshot", "openrouter"} <= set(
+        providers
+    )
     assert edited_price.input_usd_per_million == Decimal("123.000000")
-    assert price_count >= 15
+    assert edited_openrouter_price.input_usd_per_million == Decimal("999.000000")
+    assert price_count >= 40
+
+
+def test_init_db_backfills_historical_cached_token_costs(tmp_path) -> None:
+    db_path = tmp_path / "historical-cached-cost.sqlite3"
+    settings = Settings(database_url=f"sqlite:///{db_path.as_posix()}")
+    engine = create_db_engine(settings.database_url)
+    init_db(engine)
+    session_factory = create_session_factory(engine)
+
+    with session_scope(session_factory) as session:
+        session.add(ModelProvider(slug="local-null-url", name="Local Null URL"))
+        upsert_model_price(
+            session,
+            provider_slug="openai",
+            model="historical-cached-model",
+            input_usd_per_million="1",
+            cached_input_usd_per_million="0.1",
+            output_usd_per_million="2",
+        )
+        session.add(
+            RequestRecord(
+                method="POST",
+                path="/v1/chat/completions",
+                endpoint="/v1/chat/completions",
+                model="historical-cached-model",
+                upstream_url="https://api.openai.com/v1/chat/completions",
+                request_headers_json="{}",
+                request_body=b'{"model":"historical-cached-model"}',
+                response_body=json.dumps(
+                    {
+                        "model": "historical-cached-model",
+                        "usage": {
+                            "prompt_tokens": 1000,
+                            "completion_tokens": 25,
+                            "total_tokens": 1025,
+                            "prompt_tokens_details": {"cached_tokens": 800},
+                        },
+                    }
+                ).encode(),
+                response_status=200,
+                billing_input_tokens=1000,
+                billing_cached_input_tokens=800,
+                billing_output_tokens=25,
+                billing_total_tokens=1025,
+                billing_input_cost_usd=Decimal("0.00100000"),
+                billing_output_cost_usd=Decimal("0.00005000"),
+                billing_total_cost_usd=Decimal("0.00105000"),
+                pricing_snapshot_json=json.dumps(
+                    {
+                        "provider_slug": "openai",
+                        "billing_model": "historical-cached-model",
+                    }
+                ),
+            )
+        )
+        session.add(
+            RequestRecord(
+                method="POST",
+                path="/v1/chat/completions",
+                endpoint="/v1/chat/completions",
+                model="historical-cached-model",
+                upstream_url="https://api.openai.com/v1/chat/completions",
+                request_headers_json="{}",
+                request_body=b'{"model":"historical-cached-model"}',
+                response_body=json.dumps(
+                    {
+                        "model": "historical-cached-model",
+                        "usage": {
+                            "prompt_tokens": 1000,
+                            "completion_tokens": 25,
+                            "total_tokens": 1025,
+                            "prompt_tokens_details": {"cached_tokens": 800},
+                        },
+                    }
+                ).encode(),
+                response_status=200,
+                billing_total_cost_usd=Decimal("0.00105000"),
+                pricing_snapshot_json=json.dumps(
+                    {
+                        "provider_slug": "openai",
+                        "billing_model": "historical-cached-model",
+                    }
+                ),
+            )
+        )
+        session.add(
+            RequestRecord(
+                method="POST",
+                path="/v1/chat/completions",
+                endpoint="/v1/chat/completions",
+                model="historical-cached-model",
+                upstream_url="https://api.openai.com/v1/chat/completions",
+                request_headers_json="{}",
+                request_body=b'{"model":"historical-cached-model"}',
+                response_body=json.dumps(
+                    {
+                        "model": "historical-cached-model",
+                        "usage": {
+                            "prompt_tokens": 1000,
+                            "completion_tokens": 25,
+                            "total_tokens": 1025,
+                            "prompt_tokens_details": {"cached_tokens": 800},
+                        },
+                    }
+                ).encode(),
+                response_status=200,
+                billing_input_tokens=1000,
+                billing_cached_input_tokens=800,
+                billing_output_tokens=25,
+                billing_total_tokens=1025,
+                billing_input_cost_usd=Decimal("0.00028000"),
+                billing_output_cost_usd=Decimal("0.00005000"),
+                billing_total_cost_usd=Decimal("0.00033000"),
+                pricing_snapshot_json=json.dumps(
+                    {
+                        "provider_slug": "openai",
+                        "billing_model": "historical-cached-model",
+                        "cached_input_pricing": "cached_input_rate",
+                    }
+                ),
+            )
+        )
+        session.add(
+            RequestRecord(
+                method="POST",
+                path="/v1/chat/completions",
+                endpoint="/v1/chat/completions",
+                upstream_url="https://api.openai.com/v1/chat/completions",
+                request_headers_json="{}",
+                request_body=b'{"model":"historical-cached-model","stream":true}',
+                response_body=(
+                    b'data: {"model":"historical-cached-model","usage":'
+                    b'{"prompt_tokens":1000,"completion_tokens":25,'
+                    b'"total_tokens":1025,"prompt_tokens_details":'
+                    b'{"cached_tokens":800}}}\n\n'
+                ),
+                response_status=200,
+                is_stream=True,
+                billing_total_cost_usd=Decimal("0.00105000"),
+                pricing_snapshot_json=json.dumps(
+                    {
+                        "provider_slug": "openai",
+                        "billing_model": "historical-cached-model",
+                    }
+                ),
+            )
+        )
+
+    init_db(engine)
+
+    with session_scope(session_factory) as session:
+        rows = session.scalars(select(RequestRecord).order_by(RequestRecord.id)).all()
+        snapshots = [json.loads(row.pricing_snapshot_json or "{}") for row in rows]
+    engine.dispose()
+
+    assert [row.billing_total_cost_usd for row in rows] == [
+        Decimal("0.00033000"),
+        Decimal("0.00033000"),
+        Decimal("0.00033000"),
+        Decimal("0.00033000"),
+    ]
+    assert [row.billing_cached_input_tokens for row in rows] == [800, 800, 800, 800]
+    assert snapshots[0]["cached_input_pricing"] == "cached_input_rate"
+    assert snapshots[0]["historical_cost_backfill"] == HISTORICAL_CACHED_COST_BACKFILL
+    assert snapshots[0]["previous_total_cost_usd"] == "0.00105000"
+    assert snapshots[1]["historical_cost_backfill"] == HISTORICAL_CACHED_COST_BACKFILL
+    assert snapshots[2].get("historical_cost_backfill") is None
+    assert snapshots[3]["historical_cost_backfill"] == HISTORICAL_CACHED_COST_BACKFILL
+
+
+def test_model_price_tiers_validate_bounds_and_preserve_relationships(tmp_path) -> None:
+    db_path = tmp_path / "tiered-pricing.sqlite3"
+    settings = Settings(database_url=f"sqlite:///{db_path.as_posix()}")
+    engine = create_db_engine(settings.database_url)
+    init_db(engine)
+    session_factory = create_session_factory(engine)
+
+    with session_scope(session_factory) as session:
+        price = upsert_model_price(
+            session,
+            provider_slug="openai",
+            model="tiered-model",
+            display_name="Tiered Model",
+            input_usd_per_million="1",
+            cached_input_usd_per_million="0.1",
+            output_usd_per_million="2",
+            source_url="https://example.com/pricing",
+            checked_at="2026-05-23",
+            release_date="2026-01-15",
+            notes="source metadata",
+        )
+        low = upsert_model_price_tier(
+            session,
+            model_price_id=price.id,
+            min_input_tokens="",
+            max_input_tokens="1000",
+            input_usd_per_million="0.5",
+            cached_input_usd_per_million="0.05",
+            output_usd_per_million="1",
+            label="short",
+            source_url="https://example.com/tier",
+            checked_at="2026-05-23",
+            release_date="2026-01-15",
+        )
+        high = upsert_model_price_tier(
+            session,
+            model_price_id=price.id,
+            min_input_tokens="1000",
+            max_input_tokens="",
+            input_usd_per_million="1",
+            output_usd_per_million="2",
+            label="long",
+        )
+
+        with pytest.raises(ValueError, match="overlaps"):
+            upsert_model_price_tier(
+                session,
+                model_price_id=price.id,
+                min_input_tokens="999",
+                max_input_tokens="2000",
+                input_usd_per_million="1",
+                output_usd_per_million="2",
+            )
+        with pytest.raises(ValueError, match="greater than"):
+            upsert_model_price_tier(
+                session,
+                model_price_id=price.id,
+                min_input_tokens="10",
+                max_input_tokens="10",
+                input_usd_per_million="1",
+                output_usd_per_million="2",
+            )
+        with pytest.raises(ValueError, match="greater than"):
+            upsert_model_price_tier(
+                session,
+                model_price_id=price.id,
+                min_input_tokens="",
+                max_input_tokens="0",
+                input_usd_per_million="1",
+                output_usd_per_million="2",
+            )
+
+        assert price.source_url == "https://example.com/pricing"
+        assert price.checked_at == "2026-05-23"
+        assert price.release_date == "2026-01-15"
+        assert low.min_input_tokens is None
+        assert low.max_input_tokens == 1000
+        assert low.cached_input_usd_per_million == Decimal("0.050000")
+        assert high.max_input_tokens is None
+        assert delete_model_price_tier(session, low.id) is True
+        assert delete_model_price_tier(session, low.id) is False
+        session.flush()
+        assert session.get(ModelPriceTier, low.id) is None
+
+        price_id = price.id
+        session.delete(price)
+        session.flush()
+        assert session.scalars(
+            select(ModelPriceTier).where(ModelPriceTier.model_price_id == price_id)
+        ).all() == []
+    engine.dispose()
+
+
+def test_init_db_upgrades_existing_sqlite_model_prices_with_source_and_tiers(
+    tmp_path,
+) -> None:
+    db_path = tmp_path / "old-pricing.sqlite3"
+    settings = Settings(database_url=f"sqlite:///{db_path.as_posix()}")
+    engine = create_db_engine(settings.database_url)
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "CREATE TABLE model_providers ("
+                "slug VARCHAR(64) PRIMARY KEY, "
+                "name VARCHAR(128), "
+                "upstream_url TEXT, "
+                "currency VARCHAR(16), "
+                "created_at DATETIME, "
+                "updated_at DATETIME)"
+            )
+        )
+        connection.execute(
+            text(
+                "CREATE TABLE model_prices ("
+                "id INTEGER PRIMARY KEY, "
+                "provider_slug VARCHAR(64), "
+                "model VARCHAR(256), "
+                "aliases_json TEXT, "
+                "display_name VARCHAR(256), "
+                "input_usd_per_million NUMERIC, "
+                "output_usd_per_million NUMERIC, "
+                "active BOOLEAN, "
+                "notes TEXT, "
+                "created_at DATETIME, "
+                "updated_at DATETIME)"
+            )
+        )
+        connection.execute(
+            text(
+                "INSERT INTO model_providers "
+                "(slug, name, upstream_url, currency) "
+                "VALUES ('legacy', 'Legacy', 'http://localhost:9000/v1', 'USD')"
+            )
+        )
+        connection.execute(
+            text(
+                "INSERT INTO model_prices "
+                "(id, provider_slug, model, input_usd_per_million, "
+                "output_usd_per_million, active) "
+                "VALUES (1, 'legacy', 'legacy-model', 1, 2, 1)"
+            )
+        )
+
+    init_db(engine)
+
+    inspector = inspect(engine)
+    price_columns = {column["name"] for column in inspector.get_columns("model_prices")}
+    tier_columns = {column["name"] for column in inspector.get_columns("model_price_tiers")}
+    tier_indexes = {index["name"] for index in inspector.get_indexes("model_price_tiers")}
+    with engine.connect() as connection:
+        legacy_model = connection.execute(
+            text("SELECT model FROM model_prices WHERE provider_slug = 'legacy'")
+        ).scalar_one()
+    engine.dispose()
+
+    assert {"source_url", "checked_at", "release_date"}.issubset(price_columns)
+    assert {
+        "model_price_id",
+        "min_input_tokens",
+        "max_input_tokens",
+        "cached_input_usd_per_million",
+        "source_url",
+        "checked_at",
+        "release_date",
+    }.issubset(tier_columns)
+    assert "ix_model_price_tiers_model_price_id" in tier_indexes
+    assert legacy_model == "legacy-model"
 
 
 def test_cost_estimator_handles_rates_aliases_unknowns_and_missing_usage(tmp_path) -> None:
@@ -499,6 +976,98 @@ def test_cost_estimator_handles_rates_aliases_unknowns_and_missing_usage(tmp_pat
     assert cached_fallback.snapshot["cached_input_pricing"] == "standard_input_rate"
 
 
+def test_cost_estimator_uses_matching_model_price_tier_per_request(tmp_path) -> None:
+    db_path = tmp_path / "tier-estimator.sqlite3"
+    settings = Settings(database_url=f"sqlite:///{db_path.as_posix()}")
+    engine = create_db_engine(settings.database_url)
+    init_db(engine)
+    session_factory = create_session_factory(engine)
+
+    with session_scope(session_factory) as session:
+        price = upsert_model_price(
+            session,
+            provider_slug="openai",
+            model="tiered-cost-model",
+            input_usd_per_million="10",
+            cached_input_usd_per_million="1",
+            output_usd_per_million="20",
+            source_url="https://example.com/scalar",
+            checked_at="2026-05-23",
+        )
+        low = upsert_model_price_tier(
+            session,
+            model_price_id=price.id,
+            max_input_tokens="1000",
+            input_usd_per_million="1",
+            cached_input_usd_per_million="0.1",
+            output_usd_per_million="2",
+            label="short",
+            source_url="https://example.com/short",
+            checked_at="2026-05-23",
+            notes="short tier",
+        )
+        high = upsert_model_price_tier(
+            session,
+            model_price_id=price.id,
+            min_input_tokens="1000",
+            input_usd_per_million="3",
+            cached_input_usd_per_million="0.3",
+            output_usd_per_million="6",
+            label="long",
+        )
+
+        low_estimate = estimate_cost(
+            session,
+            usage=ExtractedTokenUsage(
+                input_tokens=999,
+                cached_input_tokens=900,
+                cache_write_input_tokens=25,
+                output_tokens=100,
+                total_tokens=1099,
+            ),
+            billing_model=price.model,
+            provider_slug="openai",
+        )
+        boundary_estimate = estimate_cost(
+            session,
+            usage=ExtractedTokenUsage(input_tokens=1000, output_tokens=100),
+            billing_model=price.model,
+            provider_slug="openai",
+        )
+        run_estimate = estimate_run_cost(
+            [
+                ExtractedTokenUsage(
+                    input_tokens=999,
+                    cached_input_tokens=900,
+                    cache_write_input_tokens=25,
+                    output_tokens=100,
+                ),
+                ExtractedTokenUsage(input_tokens=1000, output_tokens=100),
+            ],
+            price,
+        )
+    engine.dispose()
+
+    assert low_estimate.input_cost_usd == Decimal("0.000189")
+    assert low_estimate.output_cost_usd == Decimal("0.0002")
+    assert low_estimate.total_cost_usd == Decimal("0.000389")
+    assert low_estimate.cached_input_cost_usd == Decimal("0.00009")
+    assert low_estimate.snapshot["pricing_source_kind"] == "model_price_tier"
+    assert low_estimate.snapshot["tier_id"] == low.id
+    assert low_estimate.snapshot["tier_label"] == "short"
+    assert low_estimate.snapshot["source_url"] == "https://example.com/short"
+    assert low_estimate.snapshot["cache_write_input_tokens"] == 25
+    assert boundary_estimate.snapshot["tier_id"] == high.id
+    assert boundary_estimate.input_cost_usd == Decimal("0.003")
+    assert boundary_estimate.output_cost_usd == Decimal("0.0006")
+    assert run_estimate.input_cost_usd == Decimal("0.003189")
+    assert run_estimate.output_cost_usd == Decimal("0.0008")
+    assert run_estimate.total_cost_usd == Decimal("0.003989")
+    assert run_estimate.cached_input_cost_usd == Decimal("0.00009")
+    assert run_estimate.cache_write_input_tokens == 25
+    assert run_estimate.mixed_tiers is True
+
+
 def test_run_cost_estimator_sums_usage_and_counts_missing_requests(tmp_path) -> None:
     db_path = tmp_path / "run-estimator.sqlite3"
     settings = Settings(database_url=f"sqlite:///{db_path.as_posix()}")
@@ -552,6 +1121,7 @@ def test_init_db_upgrades_existing_sqlite_request_records_with_route_metadata(tm
     inspector = inspect(engine)
     columns = {column["name"] for column in inspector.get_columns("request_records")}
     price_columns = {column["name"] for column in inspector.get_columns("model_prices")}
+    tier_columns = {column["name"] for column in inspector.get_columns("model_price_tiers")}
     indexes = {index["name"] for index in inspector.get_indexes("request_records")}
     with engine.connect() as connection:
         ids = connection.execute(text("SELECT id FROM request_records")).scalars().all()
@@ -578,6 +1148,18 @@ def test_init_db_upgrades_existing_sqlite_request_records_with_route_metadata(tm
         "estimated_input_model",
     }.issubset(columns)
     assert "cached_input_usd_per_million" in price_columns
+    assert {"source_url", "checked_at", "release_date"}.issubset(price_columns)
+    assert {
+        "model_price_id",
+        "min_input_tokens",
+        "max_input_tokens",
+        "input_usd_per_million",
+        "cached_input_usd_per_million",
+        "output_usd_per_million",
+        "source_url",
+        "checked_at",
+        "release_date",
+    }.issubset(tier_columns)
     assert {
         "ix_request_records_task_run_id",
         "ix_request_records_upstream_model",

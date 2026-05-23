@@ -35,6 +35,7 @@ from llm_observe_proxy.database import (
     SessionFactory,
     TaskRun,
     delete_model_price,
+    delete_model_price_tier,
     delete_model_provider,
     delete_ui_model_route,
     end_active_task_run,
@@ -56,6 +57,7 @@ from llm_observe_proxy.database import (
     set_setting,
     start_task_run,
     upsert_model_price,
+    upsert_model_price_tier,
     upsert_model_provider,
     upsert_ui_model_route,
 )
@@ -693,6 +695,55 @@ async def delete_price(
     return RedirectResponse("/admin/settings", status_code=303)
 
 
+@router.post("/settings/model-price-tiers", response_class=HTMLResponse)
+async def upsert_price_tier(
+    request: Request,
+    model_price_id: int = Form(...),
+    min_input_tokens: str = Form(""),
+    max_input_tokens: str = Form(""),
+    label: str = Form(""),
+    input_usd_per_million: str = Form(...),
+    cached_input_usd_per_million: str = Form(""),
+    output_usd_per_million: str = Form(...),
+    source_url: str = Form(""),
+    checked_at: str = Form(""),
+    release_date: str = Form(""),
+    notes: str = Form(""),
+) -> HTMLResponse:
+    session_factory: SessionFactory = request.app.state.session_factory
+    try:
+        with session_scope(session_factory) as session:
+            upsert_model_price_tier(
+                session,
+                model_price_id=model_price_id,
+                min_input_tokens=min_input_tokens,
+                max_input_tokens=max_input_tokens,
+                label=label,
+                input_usd_per_million=input_usd_per_million,
+                cached_input_usd_per_million=cached_input_usd_per_million,
+                output_usd_per_million=output_usd_per_million,
+                source_url=source_url,
+                checked_at=checked_at,
+                release_date=release_date,
+                notes=notes,
+            )
+    except ValueError as exc:
+        return await _settings_with_error(request, str(exc))
+    return RedirectResponse("/admin/settings", status_code=303)
+
+
+@router.post("/settings/model-price-tiers/delete", response_class=HTMLResponse)
+async def delete_price_tier(
+    request: Request,
+    tier_id: int = Form(...),
+) -> HTMLResponse:
+    session_factory: SessionFactory = request.app.state.session_factory
+    with session_scope(session_factory) as session:
+        if not delete_model_price_tier(session, tier_id):
+            return await _settings_with_error(request, "Model price tier was not found.")
+    return RedirectResponse("/admin/settings", status_code=303)
+
+
 @router.post("/settings/test-upstream", response_class=HTMLResponse)
 async def test_upstream(
     request: Request,
@@ -942,6 +993,7 @@ def _model_price_row(price) -> dict[str, object]:
         if isinstance(value, list):
             aliases = [item for item in value if isinstance(item, str)]
     return {
+        "id": price.id,
         "provider_slug": price.provider_slug,
         "provider_name": price.provider.name,
         "model": price.model,
@@ -951,8 +1003,36 @@ def _model_price_row(price) -> dict[str, object]:
         "cached_input_usd_per_million": price.cached_input_usd_per_million,
         "output_usd_per_million": price.output_usd_per_million,
         "active": price.active,
+        "source_url": price.source_url,
+        "checked_at": price.checked_at,
+        "release_date": price.release_date,
         "notes": price.notes,
+        "tiers": [_model_price_tier_row(tier) for tier in price.tiers],
     }
+
+
+def _model_price_tier_row(tier) -> dict[str, object]:
+    return {
+        "id": tier.id,
+        "label": tier.label,
+        "range": _tier_range_label(tier.min_input_tokens, tier.max_input_tokens),
+        "min_input_tokens": tier.min_input_tokens,
+        "max_input_tokens": tier.max_input_tokens,
+        "input_usd_per_million": tier.input_usd_per_million,
+        "cached_input_usd_per_million": tier.cached_input_usd_per_million,
+        "output_usd_per_million": tier.output_usd_per_million,
+        "source_url": tier.source_url,
+        "checked_at": tier.checked_at,
+        "release_date": tier.release_date,
+        "notes": tier.notes,
+    }
+
+
+def _tier_range_label(min_input_tokens: int | None, max_input_tokens: int | None) -> str:
+    lower = min_input_tokens if min_input_tokens is not None else 0
+    if max_input_tokens is None:
+        return f"{lower:,}+ input tokens"
+    return f"{lower:,}-{max_input_tokens - 1:,} input tokens"
 
 
 def _run_what_if_context(
@@ -1025,8 +1105,10 @@ def _run_cost_estimate_row(estimate: RunCostEstimate) -> dict[str, object]:
         "input_usd_per_million": estimate.input_usd_per_million,
         "cached_input_usd_per_million": estimate.cached_input_usd_per_million,
         "output_usd_per_million": estimate.output_usd_per_million,
+        "mixed_tiers": estimate.mixed_tiers,
         "input_tokens": estimate.input_tokens,
         "cached_input_tokens": estimate.cached_input_tokens,
+        "cache_write_input_tokens": estimate.cache_write_input_tokens,
         "output_tokens": estimate.output_tokens,
         "total_tokens": estimate.total_tokens,
         "input_cost_usd": estimate.input_cost_usd,

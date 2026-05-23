@@ -44,8 +44,9 @@ Implemented behavior:
   model.
 - If no route metadata is available, provider resolution falls back to an exact upstream
   base URL match.
-- Historical request rows keep their original pricing snapshot and are not recalculated
-  when settings change.
+- Historical request rows generally keep their original pricing snapshot when settings
+  change. v0.4 adds a narrow startup backfill for older rows that already report cached
+  input tokens but lack cached-pricing snapshot metadata.
 - The admin settings page can create, update, and delete providers and model prices.
 - Request tables, request detail pages, and run detail pages expose captured token and
   cost totals where available.
@@ -224,7 +225,7 @@ Possible follow-ups after run what-if:
 - Saved named comparison sets, such as `OpenAI default comparison`.
 - Per-request what-if deltas for the most expensive requests in a run.
 - CSV export for run what-if comparisons.
-- Optional recalculation command for historical rows, clearly separated from immutable
+- Optional broader recalculation command for historical rows, clearly separated from
   capture-time snapshots.
 - More detailed pricing dimensions for cached input, batch tiers, image/audio, and
   provider-specific surcharges.
