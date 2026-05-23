@@ -1096,7 +1096,11 @@ class RequestRecord(Base):
     billing_provider_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
     billing_model: Mapped[str | None] = mapped_column(String(256), nullable=True, index=True)
     billing_input_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    billing_cached_input_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    billing_cached_input_tokens: Mapped[int | None] = mapped_column(
+        Integer,
+        nullable=True,
+        index=True,
+    )
     billing_output_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
     billing_total_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
     billing_input_cost_usd: Mapped[Decimal | None] = mapped_column(
@@ -1269,16 +1273,11 @@ def create_session_factory(engine: Engine) -> SessionFactory:
     return sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
 
 
-def init_db(engine: Engine, *, run_backfills: bool = True) -> None:
+def init_db(engine: Engine) -> None:
     Base.metadata.create_all(engine)
     _ensure_sqlite_request_record_schema(engine)
     _ensure_sqlite_model_price_schema(engine)
     seed_default_model_pricing(engine)
-    if not run_backfills:
-        return
-    from llm_observe_proxy.costing import backfill_historical_cached_cost_estimates
-
-    backfill_historical_cached_cost_estimates(engine)
 
 
 @contextmanager
@@ -1858,6 +1857,13 @@ def _ensure_sqlite_request_record_schema(engine: Engine) -> None:
             text(
                 "CREATE INDEX IF NOT EXISTS "
                 "ix_request_records_billing_model ON request_records (billing_model)"
+            )
+        )
+        connection.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS "
+                "ix_request_records_billing_cached_input_tokens "
+                "ON request_records (billing_cached_input_tokens)"
             )
         )
         connection.execute(

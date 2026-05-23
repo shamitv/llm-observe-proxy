@@ -12,7 +12,7 @@ from sqlalchemy import inspect, select, text
 from llm_observe_proxy import create_app
 from llm_observe_proxy.admin import _stream_token_usage
 from llm_observe_proxy.capture import ExtractedTokenUsage, extract_token_usage, has_tool_payload
-from llm_observe_proxy.cli import resolve_bind
+from llm_observe_proxy.cli import resolve_bind, run_historical_cached_cost_backfill
 from llm_observe_proxy.config import (
     DEFAULT_INCOMING_HOST,
     DEFAULT_INCOMING_PORT,
@@ -453,9 +453,29 @@ def test_module_cli_help_smoke() -> None:
     assert "--expose-all-ips" in completed.stdout
     assert "--upstream-url" in completed.stdout
     assert "--models-file" in completed.stdout
+    assert "--backfill-cached-costs" in completed.stdout
     assert DEFAULT_INCOMING_HOST == "localhost"
     assert DEFAULT_INCOMING_PORT == 8080
     assert DEFAULT_UPSTREAM_URL == "http://localhost:8000/v1"
+
+
+def test_module_cli_backfill_cached_costs_exits(tmp_path) -> None:
+    db_path = tmp_path / "backfill-cli.sqlite3"
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "llm_observe_proxy",
+            "--database-url",
+            f"sqlite:///{db_path.as_posix()}",
+            "--backfill-cached-costs",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert "Historical cached-cost backfill updated 0 request record(s)." in completed.stdout
 
 
 def test_cli_resolve_bind_uses_saved_incoming_settings(tmp_path) -> None:
@@ -703,7 +723,7 @@ def test_init_db_refreshes_only_seed_owned_model_pricing_rows(tmp_path) -> None:
     assert preserved_edit.source_url is None
 
 
-def test_init_db_backfills_historical_cached_token_costs(tmp_path) -> None:
+def test_manual_backfill_reprices_historical_cached_token_costs(tmp_path) -> None:
     db_path = tmp_path / "historical-cached-cost.sqlite3"
     settings = Settings(database_url=f"sqlite:///{db_path.as_posix()}")
     engine = create_db_engine(settings.database_url)
@@ -849,7 +869,7 @@ def test_init_db_backfills_historical_cached_token_costs(tmp_path) -> None:
             )
         )
 
-    init_db(engine)
+    assert run_historical_cached_cost_backfill(settings) == 3
 
     with session_scope(session_factory) as session:
         rows = session.scalars(select(RequestRecord).order_by(RequestRecord.id)).all()
@@ -1369,6 +1389,7 @@ def test_init_db_upgrades_existing_sqlite_request_records_with_route_metadata(tm
         "ix_request_records_model_route",
         "ix_request_records_billing_provider_slug",
         "ix_request_records_billing_model",
+        "ix_request_records_billing_cached_input_tokens",
         "ix_request_records_response_was_rewritten",
     }.issubset(indexes)
     assert ids == [42]

@@ -33,6 +33,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--database-url", help="SQLite SQLAlchemy URL.")
     parser.add_argument("--upstream-url", help="Default upstream /v1 URL.")
     parser.add_argument("--models-file", help="JSON file containing configured model routes.")
+    parser.add_argument(
+        "--backfill-cached-costs",
+        action="store_true",
+        help="Run the historical cached-cost backfill and exit.",
+    )
     return parser
 
 
@@ -48,6 +53,11 @@ def main() -> None:
         os.environ["LLM_OBSERVE_MODELS_FILE"] = args.models_file
 
     settings = get_settings()
+    if args.backfill_cached_costs:
+        updated = run_historical_cached_cost_backfill(settings)
+        print(f"Historical cached-cost backfill updated {updated} request record(s).")
+        return
+
     host, port = resolve_bind(args.host, args.port, args.expose_all_ips, settings)
     uvicorn.run(
         "llm_observe_proxy.app:create_app",
@@ -66,7 +76,7 @@ def resolve_bind(
     settings: Settings,
 ) -> tuple[str, int]:
     engine = create_db_engine(settings.database_url)
-    init_db(engine, run_backfills=False)
+    init_db(engine)
     session_factory = create_session_factory(engine)
     try:
         with session_scope(session_factory) as session:
@@ -83,3 +93,14 @@ def resolve_bind(
         host = saved_host
 
     return host, port_arg or saved_port
+
+
+def run_historical_cached_cost_backfill(settings: Settings) -> int:
+    from llm_observe_proxy.costing import backfill_historical_cached_cost_estimates
+
+    engine = create_db_engine(settings.database_url)
+    try:
+        init_db(engine)
+        return backfill_historical_cached_cost_estimates(engine)
+    finally:
+        engine.dispose()
