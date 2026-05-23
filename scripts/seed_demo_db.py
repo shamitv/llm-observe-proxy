@@ -7,7 +7,8 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from llm_observe_proxy.capture import compact_json, extract_images
-from llm_observe_proxy.config import ModelRoute, Settings
+from llm_observe_proxy.compatibility import QWEN_TAGGED_TOOL_CALL_REWRITE
+from llm_observe_proxy.config import Settings
 from llm_observe_proxy.database import (
     ImageAsset,
     RequestRecord,
@@ -15,8 +16,13 @@ from llm_observe_proxy.database import (
     create_session_factory,
     init_db,
     session_scope,
+    set_default_compat_fixes,
+    set_default_model,
+    set_default_provider_slug,
+    set_fallback_enabled,
     set_setting,
-    upsert_ui_model_route,
+    upsert_model_provider,
+    upsert_model_route_db,
 )
 
 
@@ -35,14 +41,39 @@ def main() -> None:
     session_factory = create_session_factory(engine)
     with session_scope(session_factory) as session:
         set_setting(session, "upstream_url", "http://localhost:8000/v1")
-        upsert_ui_model_route(
+        set_fallback_enabled(session, True)
+        upsert_model_provider(
             session,
-            settings,
-            ModelRoute(
-                model="local-qwen",
-                upstream_url="http://localhost:8000/v1",
-                upstream_model="qwen3-coder-30b",
-            ),
+            slug="local-vllm",
+            name="Local vLLM",
+            upstream_url="http://localhost:8000/v1",
+            currency="USD",
+            api_key_env="",
+            capabilities={"text": True, "vision": False, "tool_calling": True},
+        )
+        set_default_provider_slug(session, "huggingface-router")
+        set_default_model(session, "Qwen/Qwen3.6-35B-Instruct")
+        set_default_compat_fixes(session, [QWEN_TAGGED_TOOL_CALL_REWRITE])
+        upsert_model_route_db(
+            session,
+            incoming_model="local-qwen",
+            match_type="exact",
+            upstream_url="http://localhost:8000/v1",
+            upstream_model="qwen3-coder-30b",
+            provider_slug="local-vllm",
+            compatibility_fixes=[QWEN_TAGGED_TOOL_CALL_REWRITE],
+            priority=10,
+            active=True,
+        )
+        upsert_model_route_db(
+            session,
+            incoming_model="local-*",
+            match_type="prefix",
+            upstream_url="http://localhost:8000/v1",
+            upstream_model="qwen3-coder-30b",
+            provider_slug="local-vllm",
+            priority=40,
+            active=True,
         )
         _add_simple_chat(session)
         _add_tool_call(session)

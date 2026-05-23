@@ -29,9 +29,10 @@ cost snapshots, router fallback seed data, and run what-if comparisons.
 - Detail pages with response render modes for JSON, plain text, Markdown, tool calls,
   and raw SSE streams.
 - Request image gallery for data URL and remote image references.
-- Settings UI for upstream URL, model upstream routes, model provider/pricing config,
-  price tiers, response compatibility fixes, incoming host/port preferences, all-IPs
-  exposure, and retention trimming.
+- Settings UI with Server, Routing, Providers, Pricing, Diagnostics, and Data tabs for
+  upstream fallback defaults, editable exact/prefix routes, provider health checks, price
+  tiers, response compatibility fixes, incoming host/port preferences, all-IPs exposure,
+  route simulation, and retention trimming.
 - Config-driven model routes for sending selected proxy-facing model names to different
   upstream `/v1` endpoints with optional upstream model rewrites, provider selection,
   and API key injection.
@@ -130,16 +131,18 @@ Load model-specific upstream routes from a JSON file:
 llm-observe-proxy --models-file .\models.json
 ```
 
-You can also change the upstream URL, model upstream routes, response compatibility
-fixes, model provider pricing, and next-start incoming host/port settings from
-`/admin/settings`.
+You can also change the upstream URL, fallback provider/model, model upstream routes,
+response compatibility fixes, model provider pricing, and next-start incoming host/port
+settings from `/admin/settings/server` and the other Settings tabs.
 
 ## Model Routes
 
 Model routes let one proxy endpoint send different client-facing models to different
-OpenAI-compatible upstreams. Routes match the request payload's top-level `model`
-exactly. Unknown models, requests without a JSON model, and generic calls such as
-`GET /v1/models` use the global upstream fallback.
+OpenAI-compatible upstreams. Routes match the request payload's top-level `model` by
+exact value or by a suffix-`*` prefix pattern. Startup routes have first priority, then
+SQLite-managed routes are resolved by priority and specificity. Unknown models, requests
+without a JSON model, and generic calls such as `GET /v1/models` use the global upstream
+fallback when a default provider/model is enabled.
 
 Example route file:
 
@@ -187,10 +190,11 @@ llm-observe-proxy --models-file .\models.json
 You can also set `LLM_OBSERVE_MODELS_JSON` to the same JSON array. If both
 `LLM_OBSERVE_MODELS_FILE` and `LLM_OBSERVE_MODELS_JSON` are set, the file wins.
 
-You can add, update, and delete UI-managed model routes from `/admin/settings`.
-UI-managed routes are stored in SQLite and take effect immediately. Routes loaded from
-`--models-file`, `LLM_OBSERVE_MODELS_FILE`, or `LLM_OBSERVE_MODELS_JSON` remain read-only
-in the UI, and duplicate model names are rejected.
+You can add, update, simulate, and delete UI-managed model routes from
+`/admin/settings/routing`. UI-managed routes are stored in SQLite and take effect
+immediately. Routes loaded from `--models-file`, `LLM_OBSERVE_MODELS_FILE`, or
+`LLM_OBSERVE_MODELS_JSON` remain read-only in the UI, and duplicate startup model names
+are rejected.
 
 When a route has an API key, the proxy injects `Authorization: Bearer <key>` for the
 upstream request. Captured request headers remain the original client headers; injected
@@ -209,7 +213,8 @@ does not execute tools. Malformed or ambiguous blocks pass through unchanged and
 recorded as warnings. When a fix rewrites or warns, the request detail page stores and
 shows both the client-visible response and the raw upstream response.
 
-Configure fixes from `/admin/settings`, per model route, or with environment variables:
+Configure fixes from `/admin/settings/server`, per model route, or with environment
+variables:
 
 ```powershell
 $env:LLM_OBSERVE_DEFAULT_FIXES_JSON = '["qwen-tagged-tool-call-rewrite"]'
@@ -308,6 +313,9 @@ Additional screenshots:
 
 - [Simple request detail](docs/screenshots/simple-request.png)
 - [Streaming SSE detail](docs/screenshots/streaming.png)
+- [Settings routing tab](docs/screenshots/settings-routing.png)
+- [Settings providers tab](docs/screenshots/settings-providers.png)
+- [Settings pricing tab](docs/screenshots/settings-pricing.png)
 
 Regenerate screenshots:
 
@@ -325,9 +333,23 @@ Regenerate screenshots:
 - `GET /admin/runs/{id}`: run metrics, what-if cost comparison, and associated request list.
 - `POST /admin/runs/start`: start a named run, ending any active run first.
 - `POST /admin/runs/end`: end the active run.
-- `GET /admin/settings`: upstream settings and retention tools.
+- `GET /admin/settings`: redirects to the Server settings tab.
+- `GET /admin/settings/server`: listener, upstream fallback, default fixes, route summary, test, and retention controls.
+- `GET /admin/settings/routing`: editable exact/prefix routes, fallback behavior, simulator, and usage summary.
+- `GET /admin/settings/providers`: provider registry, capabilities, fallback provider, health checks, and usage summary.
+- `GET /admin/settings/pricing`: model pricing registry, tiers, aliases, and active-state controls.
+- `GET /admin/settings/diagnostics`: provider health, upstream test, route simulator, and latest test result.
+- `GET /admin/settings/data`: storage stats, retention trimming, and data-management placeholders.
+- `GET /admin/api/settings/summary`: listener/upstream/route/provider/storage JSON summary.
+- `GET/POST /admin/api/providers`: provider registry JSON list/create endpoints.
+- `GET/PUT/DELETE /admin/api/providers/{slug}`: provider JSON read/update/delete endpoints.
+- `POST /admin/api/providers/health-checks`: run lightweight provider health checks.
+- `GET/POST /admin/api/routes`: route registry JSON list/create endpoints.
+- `GET/PUT/DELETE /admin/api/routes/{route_id}`: route JSON read/update/delete endpoints.
+- `POST /admin/api/routes/simulate`: simulate route resolution for a model name.
 - `POST /admin/settings/incoming`: update incoming host/port settings for next startup.
 - `POST /admin/settings/upstream`: update upstream URL.
+- `POST /admin/settings/upstream-defaults`: update upstream fallback provider/model behavior.
 - `POST /admin/settings/compat-fixes`: update default-upstream compatibility fixes.
 - `POST /admin/settings/model-routes`: create or update a UI-managed model route.
 - `POST /admin/settings/model-routes/delete`: delete a UI-managed model route.
