@@ -32,30 +32,27 @@
   </div>
 </section>
 
-<section class="panel what-if-panel">
+<section class="panel what-if-panel" data-what-if-panel data-api-url="{{ what_if_api_url }}">
   <header>
     <h2>What-if cost</h2>
-    <span>{{ what_if.scenarios | length }} compared</span>
+    <span data-what-if-count>Loading</span>
   </header>
-  <form class="what-if-form" method="get" action="/admin/runs/{{ run.id }}">
-    <div class="what-if-options">
-      {% for option in what_if.options %}
-      <label class="what-if-option">
-        <input type="checkbox" name="what_if" value="{{ option.key }}" {% if option.checked %}checked{% endif %}>
-        <span><strong>{{ option.label }}</strong><small>{{ option.provider_name }}</small></span>
-      </label>
-      {% else %}
-      <p class="muted">No active model prices configured.</p>
-      {% endfor %}
-    </div>
-    {% if what_if.options %}
+  <form class="what-if-form" data-what-if-form>
+    <label class="what-if-picker">
+      <span>Compare model</span>
+      <input
+        data-what-if-input
+        list="what-if-model-options"
+        name="what_if_model"
+        autocomplete="off"
+        placeholder="Search models or providers"
+      >
+    </label>
+    <datalist id="what-if-model-options" data-what-if-options></datalist>
     <button class="button primary compact-button" type="submit">Compare</button>
-    {% endif %}
   </form>
-  {% if what_if.message %}
-  <p class="muted">{{ what_if.message }}</p>
-  {% endif %}
-  {% if what_if.scenarios %}
+  <p class="muted what-if-hint">Models/providers like OpenAI, Anthropic, Gemini, Qwen</p>
+  <p class="muted what-if-message" data-what-if-message hidden></p>
   <div class="table-shell compact-table">
     <table class="model-routes-table what-if-table">
       <thead>
@@ -74,36 +71,13 @@
           <th>Missing Usage</th>
         </tr>
       </thead>
-      <tbody>
-        {% for scenario in what_if.scenarios %}
+      <tbody data-what-if-scenarios>
         <tr>
-          <td>
-            <strong>{{ scenario.label }}</strong>
-            <span class="muted">{{ scenario.provider_name }} / {{ scenario.model }}</span>
-          </td>
-          <td>{{ scenario.input_tokens | compact_number }}</td>
-          <td>{{ scenario.cached_input_tokens | compact_number }}</td>
-          <td>{{ scenario.output_tokens | compact_number }}</td>
-          {% if scenario.mixed_tiers %}
-          <td>Mixed tiers</td>
-          <td>Mixed tiers</td>
-          <td>Mixed tiers</td>
-          {% else %}
-          <td>{{ scenario.input_usd_per_million | usd }}</td>
-          <td>{{ scenario.cached_input_usd_per_million | usd }}</td>
-          <td>{{ scenario.output_usd_per_million | usd }}</td>
-          {% endif %}
-          <td>{{ scenario.input_cost_usd | usd }}</td>
-          <td>{{ scenario.output_cost_usd | usd }}</td>
-          <td><strong>{{ scenario.total_cost_usd | usd }}</strong></td>
-          <td>{{ scenario.included_request_count | compact_number }}</td>
-          <td>{{ scenario.missing_usage_request_count | compact_number }}</td>
+          <td class="empty" colspan="12">Loading comparisons...</td>
         </tr>
-        {% endfor %}
       </tbody>
     </table>
   </div>
-  {% endif %}
 </section>
 
 <section class="split">

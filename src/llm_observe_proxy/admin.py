@@ -6,12 +6,12 @@ from collections import Counter
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any
 from urllib.parse import urlencode
 
 import httpx
 from fastapi import APIRouter, Form, Query, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from jinja2 import Undefined, pass_context
 from sqlalchemy import desc, func, select
 from starlette.templating import Jinja2Templates
@@ -430,7 +430,6 @@ async def run_detail(
     per_page: int = Query(50, ge=1, le=200),
 ) -> HTMLResponse:
     session_factory: SessionFactory = request.app.state.session_factory
-    what_if = request.query_params.getlist("what_if") or None
     with session_scope(session_factory) as session:
         task_run = session.get(TaskRun, run_id)
         if task_run is None:
@@ -456,11 +455,6 @@ async def run_detail(
         rendered_at = datetime.now(UTC)
         records = [_record_list_item(record, now=rendered_at) for record in request_records]
         stats = _task_run_stats_detail(task_run, session)
-        what_if_costs = _run_what_if_context(
-            _run_billing_usages(session, run_id),
-            session,
-            requested_keys=what_if,
-        )
         active_run = _task_run_summary(get_active_task_run(session), session)
         upstream_url = get_upstream_url(session, request.app.state.settings)
 
@@ -471,13 +465,31 @@ async def run_detail(
             "run": _task_run_summary(task_run, session=None),
             "records": records,
             "stats": stats,
-            "what_if": what_if_costs,
+            "what_if_api_url": f"/admin/api/runs/{run_id}/what-if",
             "pagination": pagination,
             "active_run": active_run,
             "upstream_url": upstream_url,
             "page_title": f"Run: {task_run.name}",
         },
     )
+
+
+@router.get("/api/runs/{run_id}/what-if", response_model=None)
+async def run_what_if_api(
+    request: Request,
+    run_id: int,
+    key: Annotated[list[str] | None, Query()] = None,
+) -> dict[str, object] | JSONResponse:
+    session_factory: SessionFactory = request.app.state.session_factory
+    with session_scope(session_factory) as session:
+        task_run = session.get(TaskRun, run_id)
+        if task_run is None:
+            return JSONResponse({"detail": "Run not found."}, status_code=404)
+        return _run_what_if_context(
+            _run_billing_usages(session, run_id),
+            session,
+            requested_keys=key,
+        )
 
 
 @router.post("/runs/start", response_class=HTMLResponse)
@@ -1065,6 +1077,8 @@ def _run_what_if_context(
             for price in active_prices
         ],
         "scenarios": scenarios,
+        "selected_keys": selected_keys,
+        "compared_count": len(scenarios),
         "message": message,
     }
 
@@ -1085,40 +1099,96 @@ def _selected_run_what_if_keys(
 
 def _run_what_if_option(price: ModelPrice, *, checked: bool) -> dict[str, object]:
     key = _model_price_key(price)
+    label = price.display_name or price.model
     return {
         "key": key,
+        "provider_slug": price.provider_slug,
         "provider_name": price.provider.name,
         "model": price.model,
         "display_name": price.display_name,
-        "label": price.display_name or price.model,
+        "label": label,
+        "search_text": " ".join(
+            part
+            for part in (label, price.provider.name, price.provider_slug, price.model)
+            if part
+        ),
         "checked": checked,
     }
 
 
 def _run_cost_estimate_row(estimate: RunCostEstimate) -> dict[str, object]:
+    mixed_rate_display = "Mixed tiers"
+    input_rate_display = (
+        mixed_rate_display
+        if estimate.mixed_tiers
+        else format_usd(estimate.input_usd_per_million)
+    )
+    cached_input_rate_display = (
+        mixed_rate_display
+        if estimate.mixed_tiers
+        else format_usd(estimate.cached_input_usd_per_million)
+    )
+    output_rate_display = (
+        mixed_rate_display
+        if estimate.mixed_tiers
+        else format_usd(estimate.output_usd_per_million)
+    )
     return {
         "key": f"{estimate.provider_slug}:{estimate.model}",
         "provider_name": estimate.provider_name,
         "model": estimate.model,
         "display_name": estimate.display_name,
         "label": estimate.display_name or estimate.model,
-        "input_usd_per_million": estimate.input_usd_per_million,
-        "cached_input_usd_per_million": estimate.cached_input_usd_per_million,
-        "output_usd_per_million": estimate.output_usd_per_million,
+        "input_usd_per_million": _json_safe_number(estimate.input_usd_per_million),
+        "cached_input_usd_per_million": _json_safe_number(
+            estimate.cached_input_usd_per_million
+        ),
+        "output_usd_per_million": _json_safe_number(estimate.output_usd_per_million),
         "mixed_tiers": estimate.mixed_tiers,
         "input_tokens": estimate.input_tokens,
         "cached_input_tokens": estimate.cached_input_tokens,
         "cache_write_input_tokens": estimate.cache_write_input_tokens,
         "output_tokens": estimate.output_tokens,
         "total_tokens": estimate.total_tokens,
-        "input_cost_usd": estimate.input_cost_usd,
-        "cached_input_cost_usd": estimate.cached_input_cost_usd,
-        "output_cost_usd": estimate.output_cost_usd,
-        "total_cost_usd": estimate.total_cost_usd,
+        "input_cost_usd": _json_safe_number(estimate.input_cost_usd),
+        "cached_input_cost_usd": _json_safe_number(estimate.cached_input_cost_usd),
+        "output_cost_usd": _json_safe_number(estimate.output_cost_usd),
+        "total_cost_usd": _json_safe_number(estimate.total_cost_usd),
         "included_request_count": estimate.included_request_count,
         "missing_usage_request_count": estimate.missing_usage_request_count,
         "notes": estimate.notes,
+        "display": {
+            "input_tokens": format_compact_number(estimate.input_tokens),
+            "cached_input_tokens": format_compact_number(estimate.cached_input_tokens),
+            "output_tokens": format_compact_number(estimate.output_tokens),
+            "input_usd_per_million": input_rate_display,
+            "cached_input_usd_per_million": cached_input_rate_display,
+            "output_usd_per_million": output_rate_display,
+            "input_cost_usd": format_usd(estimate.input_cost_usd),
+            "output_cost_usd": format_usd(estimate.output_cost_usd),
+            "total_cost_usd": format_usd(estimate.total_cost_usd),
+            "included_request_count": format_compact_number(
+                estimate.included_request_count
+            ),
+            "missing_usage_request_count": format_compact_number(
+                estimate.missing_usage_request_count
+            ),
+        },
     }
+
+
+def _json_safe_number(value: object) -> int | float | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    if isinstance(value, Decimal):
+        return float(value)
+    return None
 
 
 def _model_price_key(price: ModelPrice) -> str:

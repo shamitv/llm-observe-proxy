@@ -703,6 +703,10 @@ def test_run_detail_uses_compact_header_for_active_run(proxy_client: TestClient)
     assert "Output tok/s" in detail.text
     assert "End run" in detail.text
     assert detail.text.index("run-summary-header") < detail.text.index("What-if cost")
+    assert 'data-api-url="/admin/api/runs/1/what-if"' in detail.text
+    assert "Models/providers like OpenAI, Anthropic, Gemini, Qwen" in detail.text
+    assert 'type="checkbox" name="what_if"' not in detail.text
+    assert 'class="what-if-options"' not in detail.text
 
 
 def test_run_filter_detail_and_badges_show_associated_requests(
@@ -783,9 +787,7 @@ def test_run_detail_paginates_traffic_without_limiting_what_if_totals(
         session.commit()
         run_id = task_run.id
 
-    detail = proxy_client.get(
-        f"/admin/runs/{run_id}?what_if=openai:custom-full-run&per_page=10"
-    )
+    detail = proxy_client.get(f"/admin/runs/{run_id}?per_page=10")
 
     assert detail.status_code == 200
     assert "Showing <strong>1-10</strong>" in detail.text
@@ -793,10 +795,20 @@ def test_run_detail_paginates_traffic_without_limiting_what_if_totals(
     assert "#55" in detail.text
     assert "#46" in detail.text
     assert "#45" not in detail.text
-    assert "Custom Full Run" in detail.text
-    assert "$0.0704" in detail.text
-    assert "44k" in detail.text
-    assert "<td>55</td>" in detail.text
+    assert "Custom Full Run" not in detail.text
+
+    api = proxy_client.get(
+        f"/admin/api/runs/{run_id}/what-if?key=openai:custom-full-run"
+    )
+    data = api.json()
+    assert api.status_code == 200
+    assert data["selected_keys"] == ["openai:custom-full-run"]
+    assert data["compared_count"] == 1
+    scenario = data["scenarios"][0]
+    assert scenario["label"] == "Custom Full Run"
+    assert scenario["display"]["total_cost_usd"] == "$0.0704"
+    assert scenario["display"]["cached_input_tokens"] == "44k"
+    assert scenario["included_request_count"] == 55
 
 
 def test_run_detail_marks_mixed_tier_what_if_rates(
@@ -850,12 +862,15 @@ def test_run_detail_marks_mixed_tier_what_if_rates(
         session.commit()
         run_id = task_run.id
 
-    detail = proxy_client.get(f"/admin/runs/{run_id}?what_if=openai:tiered-run")
+    api = proxy_client.get(f"/admin/api/runs/{run_id}/what-if?key=openai:tiered-run")
+    data = api.json()
 
-    assert detail.status_code == 200
-    assert "Tiered Run" in detail.text
-    assert "Mixed tiers" in detail.text
-    assert "$0.004799" in detail.text
+    assert api.status_code == 200
+    scenario = data["scenarios"][0]
+    assert scenario["label"] == "Tiered Run"
+    assert scenario["display"]["input_usd_per_million"] == "Mixed tiers"
+    assert scenario["display"]["output_usd_per_million"] == "Mixed tiers"
+    assert scenario["display"]["total_cost_usd"] == "$0.004799"
 
 
 def test_run_detail_shows_default_what_if_costs_without_mutating_snapshots(
@@ -877,13 +892,29 @@ def test_run_detail_shows_default_what_if_costs_without_mutating_snapshots(
 
     assert detail.status_code == 200
     assert "What-if cost" in detail.text
-    assert "GPT-5.5" in detail.text
-    assert "GPT-5.4 Mini" in detail.text
-    assert 'value="openai:gpt-5.5" checked' in detail.text
-    assert 'value="openai:gpt-5.4-mini" checked' in detail.text
-    assert "$0.000120" in detail.text
-    assert "$0.000018" in detail.text
+    assert 'data-api-url="/admin/api/runs/1/what-if"' in detail.text
+    assert 'data-what-if-input' in detail.text
+    assert 'data-what-if-options' in detail.text
+    assert "Loading comparisons..." in detail.text
+    assert "Models/providers like OpenAI, Anthropic, Gemini, Qwen" in detail.text
+    assert 'type="checkbox" name="what_if"' not in detail.text
+    assert "GPT-5.5" not in detail.text
+    assert "GPT-5.4 Mini" not in detail.text
     assert "Missing Usage" in detail.text
+
+    api = proxy_client.get("/admin/api/runs/1/what-if")
+    data = api.json()
+
+    assert api.status_code == 200
+    assert data["selected_keys"] == ["openai:gpt-5.5", "openai:gpt-5.4-mini"]
+    assert data["compared_count"] == 2
+    labels = [scenario["label"] for scenario in data["scenarios"]]
+    assert labels == ["GPT-5.5", "GPT-5.4 Mini"]
+    totals = [scenario["display"]["total_cost_usd"] for scenario in data["scenarios"]]
+    assert totals == ["$0.000120", "$0.000018"]
+    option_labels = {option["label"] for option in data["options"]}
+    assert "GPT-5.5" in option_labels
+    assert "GPT-5.4 Mini" in option_labels
 
     with proxy_app.state.session_factory() as session:
         record = session.scalars(select(RequestRecord)).one()
@@ -919,18 +950,21 @@ def test_run_detail_accepts_repeated_what_if_params(
         )
         session.commit()
 
-    detail = proxy_client.get(
-        "/admin/runs/1?what_if=openai:custom-low&what_if=openai:custom-high"
+    api = proxy_client.get(
+        "/admin/api/runs/1/what-if?key=openai:custom-low&key=openai:custom-high"
     )
+    data = api.json()
 
-    assert detail.status_code == 200
-    assert "Custom Low" in detail.text
-    assert "Custom High" in detail.text
-    assert 'value="openai:custom-low" checked' in detail.text
-    assert 'value="openai:custom-high" checked' in detail.text
-    assert 'value="openai:gpt-5.5" checked' not in detail.text
-    assert "$0.000012" in detail.text
-    assert "$0.000120" in detail.text
+    assert api.status_code == 200
+    assert data["selected_keys"] == ["openai:custom-low", "openai:custom-high"]
+    assert [scenario["label"] for scenario in data["scenarios"]] == [
+        "Custom Low",
+        "Custom High",
+    ]
+    assert [scenario["display"]["total_cost_usd"] for scenario in data["scenarios"]] == [
+        "$0.000012",
+        "$0.000120",
+    ]
 
 
 def test_run_detail_ignores_unknown_and_inactive_what_if_prices(
@@ -956,13 +990,25 @@ def test_run_detail_ignores_unknown_and_inactive_what_if_prices(
         inactive.active = False
         session.commit()
 
-    detail = proxy_client.get(
-        "/admin/runs/1?what_if=openai:inactive-price&what_if=openai:missing-price"
+    api = proxy_client.get(
+        "/admin/api/runs/1/what-if?key=openai:inactive-price&key=openai:missing-price"
     )
+    data = api.json()
 
-    assert detail.status_code == 200
-    assert "No active model prices matched the selected comparison." in detail.text
-    assert "Inactive Price" not in detail.text
+    assert api.status_code == 200
+    assert data["message"] == "No active model prices matched the selected comparison."
+    assert data["selected_keys"] == []
+    assert data["scenarios"] == []
+    assert "Inactive Price" not in json.dumps(data)
+
+
+def test_run_what_if_api_returns_json_404_for_missing_run(
+    proxy_client: TestClient,
+) -> None:
+    response = proxy_client.get("/admin/api/runs/999/what-if")
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Run not found."}
 
 
 def test_admin_formats_large_numbers_and_durations(
