@@ -8,7 +8,7 @@ from typing import Any
 
 from sqlalchemy import Text, and_, cast, inspect, or_, select
 from sqlalchemy.engine import Engine
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, defer
 
 from llm_observe_proxy.capture import (
     ExtractedTokenUsage,
@@ -290,70 +290,78 @@ def backfill_historical_cached_cost_estimates(engine: Engine) -> int:
             for provider in providers
             if provider.upstream_url
         )
-        candidate_filter = _backfill_candidate_filter(engine)
-        has_candidates = session.scalar(
-            select(RequestRecord.id).where(candidate_filter).limit(1)
-        )
-        if has_candidates is None:
-            return 0
-        records = session.scalars(
-            select(RequestRecord).where(candidate_filter).execution_options(yield_per=200)
-        )
-        for record in records:
-            usage = _record_usage_for_backfill(record)
-            if (
-                usage.input_tokens is None
-                or usage.output_tokens is None
-                or not usage.cached_input_tokens
-            ):
-                continue
-            provider_slug = _record_provider_slug(record, providers_by_slug, provider_urls)
-            billing_model = _record_billing_model(record)
-            if provider_slug is None or billing_model is None:
-                continue
+        for candidate_filter in _backfill_candidate_filters(engine):
+            records = session.scalars(
+                select(RequestRecord)
+                .where(candidate_filter)
+                .options(
+                    defer(RequestRecord.request_body),
+                    defer(RequestRecord.response_body),
+                    defer(RequestRecord.upstream_response_body_raw),
+                )
+                .execution_options(yield_per=200)
+            )
+            for record in records:
+                provider_slug = _record_provider_slug(record, providers_by_slug, provider_urls)
+                if provider_slug is None:
+                    continue
+                billing_model = _record_billing_model(record)
+                if billing_model is None:
+                    continue
+                usage = _record_usage_for_backfill(record)
+                if (
+                    usage.input_tokens is None
+                    or usage.output_tokens is None
+                    or not usage.cached_input_tokens
+                ):
+                    continue
 
-            estimate = estimate_cost(
-                session,
-                usage=usage,
-                billing_model=billing_model,
-                provider_slug=provider_slug,
-            )
-            if (
-                estimate.total_cost_usd is None
-                or estimate.snapshot is None
-                or not _should_backfill_cached_cost(record, estimate.snapshot)
-            ):
-                continue
+                estimate = estimate_cost(
+                    session,
+                    usage=usage,
+                    billing_model=billing_model,
+                    provider_slug=provider_slug,
+                )
+                if (
+                    estimate.total_cost_usd is None
+                    or estimate.snapshot is None
+                    or not _should_backfill_cached_cost(record, estimate.snapshot)
+                ):
+                    continue
 
-            previous_total_cost_usd = (
-                str(record.billing_total_cost_usd)
-                if record.billing_total_cost_usd is not None
-                else None
-            )
-            apply_cost_estimate(record, estimate)
-            snapshot = dict(estimate.snapshot)
-            snapshot["historical_cost_backfill"] = HISTORICAL_CACHED_COST_BACKFILL
-            if previous_total_cost_usd is not None:
-                snapshot["previous_total_cost_usd"] = previous_total_cost_usd
-            record.pricing_snapshot_json = json.dumps(
-                snapshot,
-                ensure_ascii=False,
-                separators=(",", ":"),
-            )
-            updated += 1
+                previous_total_cost_usd = (
+                    str(record.billing_total_cost_usd)
+                    if record.billing_total_cost_usd is not None
+                    else None
+                )
+                apply_cost_estimate(record, estimate)
+                snapshot = dict(estimate.snapshot)
+                snapshot["historical_cost_backfill"] = HISTORICAL_CACHED_COST_BACKFILL
+                if previous_total_cost_usd is not None:
+                    snapshot["previous_total_cost_usd"] = previous_total_cost_usd
+                record.pricing_snapshot_json = json.dumps(
+                    snapshot,
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                )
+                updated += 1
         if updated:
             session.commit()
     return updated
 
 
-def _backfill_candidate_filter(engine: Engine):
+def _backfill_candidate_filters(engine: Engine):
     stale_snapshot = or_(
         RequestRecord.pricing_snapshot_json.is_(None),
         ~RequestRecord.pricing_snapshot_json.like('%"cached_input_pricing"%'),
         RequestRecord.pricing_snapshot_json.like('%"standard_input_rate"%'),
     )
+    cached_tokens_recorded = and_(
+        stale_snapshot,
+        RequestRecord.billing_cached_input_tokens > 0,
+    )
     if engine.dialect.name != "sqlite":
-        return and_(stale_snapshot, RequestRecord.billing_cached_input_tokens > 0)
+        return (cached_tokens_recorded,)
 
     response_body_text = cast(RequestRecord.response_body, Text)
     cached_usage_marker = or_(
@@ -363,7 +371,14 @@ def _backfill_candidate_filter(engine: Engine):
         response_body_text.like('%"cached_input_tokens"%'),
         response_body_text.like('%"prompt_cache_hit_tokens"%'),
     )
-    return and_(stale_snapshot, cached_usage_marker)
+    cached_tokens_not_recorded = or_(
+        RequestRecord.billing_cached_input_tokens.is_(None),
+        RequestRecord.billing_cached_input_tokens <= 0,
+    )
+    return (
+        cached_tokens_recorded,
+        and_(stale_snapshot, cached_tokens_not_recorded, cached_usage_marker),
+    )
 
 
 def _request_records_table_supports_backfill(engine: Engine) -> bool:

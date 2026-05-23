@@ -212,10 +212,10 @@ $env:LLM_OBSERVE_DEFAULT_FIXES_JSON = '["qwen-tagged-tool-call-rewrite"]'
 Cost estimates are snapshotted when a response is captured. The proxy stores the billing
 provider, billing model, token counts, input/output rate snapshot, and estimated USD cost
 on the request row. Historical rows are not generally recalculated when pricing changes,
-but v0.4 performs a startup backfill for older rows that already report cached input
-tokens and lack cached-pricing snapshot metadata. Those rows are repriced with the
-current configured cached-input rates and marked with `historical_cost_backfill` in the
-pricing snapshot.
+but you can run `llm-observe-proxy --backfill-cached-costs` to reprice older rows that
+already report cached input tokens and lack cached-pricing snapshot metadata. Those rows
+are repriced with the current configured cached-input rates and marked with
+`historical_cost_backfill` in the pricing snapshot.
 
 Token counts are extracted from OpenAI-compatible `usage` objects, including the shapes
 used by OpenAI, vLLM, SGLang, and LM Studio. When standard usage is absent, the proxy can
@@ -257,13 +257,9 @@ still ignore non-token charges such as batch/flex/priority discounts, separate c
 fees, tool fees, image/audio prices, and regional premiums.
 
 Run detail pages include what-if cost comparisons. By default they compare captured run
-usage against GPT-5.5 and GPT-5.4 Mini when those prices are active. You can select any
-other active model price from the run page or link directly with repeated query
-parameters:
-
-```text
-/admin/runs/1?what_if=openai:gpt-5.5&what_if=openai:gpt-5.4-mini
-```
+usage against GPT-5.5 and GPT-5.4 Mini when those prices are active. You can add or
+remove other active model prices from a compact typeahead on the run page; those
+selections stay in the current browser session.
 
 What-if comparisons use stored request token counts and do not change captured request
 cost snapshots.

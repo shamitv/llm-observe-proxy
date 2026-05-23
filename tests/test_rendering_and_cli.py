@@ -12,7 +12,7 @@ from sqlalchemy import inspect, select, text
 from llm_observe_proxy import create_app
 from llm_observe_proxy.admin import _stream_token_usage
 from llm_observe_proxy.capture import ExtractedTokenUsage, extract_token_usage, has_tool_payload
-from llm_observe_proxy.cli import resolve_bind
+from llm_observe_proxy.cli import resolve_bind, run_historical_cached_cost_backfill
 from llm_observe_proxy.config import (
     DEFAULT_INCOMING_HOST,
     DEFAULT_INCOMING_PORT,
@@ -453,9 +453,29 @@ def test_module_cli_help_smoke() -> None:
     assert "--expose-all-ips" in completed.stdout
     assert "--upstream-url" in completed.stdout
     assert "--models-file" in completed.stdout
+    assert "--backfill-cached-costs" in completed.stdout
     assert DEFAULT_INCOMING_HOST == "localhost"
     assert DEFAULT_INCOMING_PORT == 8080
     assert DEFAULT_UPSTREAM_URL == "http://localhost:8000/v1"
+
+
+def test_module_cli_backfill_cached_costs_exits(tmp_path) -> None:
+    db_path = tmp_path / "backfill-cli.sqlite3"
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "llm_observe_proxy",
+            "--database-url",
+            f"sqlite:///{db_path.as_posix()}",
+            "--backfill-cached-costs",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert "Historical cached-cost backfill updated 0 request record(s)." in completed.stdout
 
 
 def test_cli_resolve_bind_uses_saved_incoming_settings(tmp_path) -> None:
@@ -488,6 +508,8 @@ def test_init_db_seeds_model_pricing_without_overwriting_edits(tmp_path) -> None
                 ModelPrice.model == "gpt-5.4-mini",
             )
         ).one()
+        assert openai_price.cached_input_usd_per_million == Decimal("0.075000")
+        assert openai_price.checked_at == "2026-05-23"
         openai_price.input_usd_per_million = Decimal("123")
         qwen_price = session.scalars(
             select(ModelPrice).where(
@@ -528,6 +550,61 @@ def test_init_db_seeds_model_pricing_without_overwriting_edits(tmp_path) -> None
         ).one()
         assert hf_price.output_usd_per_million == Decimal("0.250000")
 
+        anthropic_price = session.scalars(
+            select(ModelPrice).where(
+                ModelPrice.provider_slug == "anthropic",
+                ModelPrice.model == "claude-sonnet-4-6",
+            )
+        ).one()
+        assert anthropic_price.cached_input_usd_per_million == Decimal("0.300000")
+
+        google_price = session.scalars(
+            select(ModelPrice).where(
+                ModelPrice.provider_slug == "google",
+                ModelPrice.model == "gemini-2.5-pro",
+            )
+        ).one()
+        assert google_price.cached_input_usd_per_million == Decimal("0.125000")
+        assert len(google_price.tiers) == 2
+
+        new_google_price = session.scalars(
+            select(ModelPrice).where(
+                ModelPrice.provider_slug == "google",
+                ModelPrice.model == "gemini-3.5-flash",
+            )
+        ).one()
+        assert new_google_price.source_url == "https://ai.google.dev/gemini-api/docs/pricing"
+        assert "google/gemini-3.5-flash" in json.loads(new_google_price.aliases_json)
+
+        new_alibaba_price = session.scalars(
+            select(ModelPrice).where(
+                ModelPrice.provider_slug == "alibaba",
+                ModelPrice.model == "qwen3-coder-30b-a3b-instruct",
+            )
+        ).one()
+        assert new_alibaba_price.source_url == (
+            "https://www.alibabacloud.com/help/en/model-studio/model-pricing"
+        )
+        assert "Qwen/Qwen3-Coder-30B-A3B-Instruct" in json.loads(
+            new_alibaba_price.aliases_json
+        )
+
+        zai_successor_price = session.scalars(
+            select(ModelPrice).where(
+                ModelPrice.provider_slug == "zai",
+                ModelPrice.model == "glm-4.7",
+            )
+        ).one()
+        assert zai_successor_price.cached_input_usd_per_million == Decimal("0.110000")
+
+        mistral_successor_price = session.scalars(
+            select(ModelPrice).where(
+                ModelPrice.provider_slug == "mistral",
+                ModelPrice.model == "mistral-medium-2604",
+            )
+        ).one()
+        assert mistral_successor_price.cached_input_usd_per_million == Decimal("0.150000")
+
     init_db(engine)
 
     with session_scope(session_factory) as session:
@@ -551,10 +628,102 @@ def test_init_db_seeds_model_pricing_without_overwriting_edits(tmp_path) -> None
     )
     assert edited_price.input_usd_per_million == Decimal("123.000000")
     assert edited_openrouter_price.input_usd_per_million == Decimal("999.000000")
-    assert price_count >= 40
+    assert price_count >= 51
 
 
-def test_init_db_backfills_historical_cached_token_costs(tmp_path) -> None:
+def test_init_db_refreshes_only_seed_owned_model_pricing_rows(tmp_path) -> None:
+    db_path = tmp_path / "pricing-refresh.sqlite3"
+    settings = Settings(database_url=f"sqlite:///{db_path.as_posix()}")
+    engine = create_db_engine(settings.database_url)
+    init_db(engine)
+    session_factory = create_session_factory(engine)
+
+    legacy_models = [
+        ("openai", "gpt-5.4-mini", "GPT-5.4 Mini", "0.75", "4.50"),
+        ("anthropic", "claude-sonnet-4-6", "Claude Sonnet 4.6", "3.00", "15.00"),
+        ("google", "gemini-2.5-pro", "Gemini 2.5 Pro", "1.25", "10.00"),
+    ]
+    with session_scope(session_factory) as session:
+        for provider_slug, model, display_name, input_rate, output_rate in legacy_models:
+            price = session.scalars(
+                select(ModelPrice).where(
+                    ModelPrice.provider_slug == provider_slug,
+                    ModelPrice.model == model,
+                )
+            ).one()
+            price.display_name = display_name
+            price.aliases_json = None
+            price.input_usd_per_million = Decimal(input_rate)
+            price.cached_input_usd_per_million = None
+            price.output_usd_per_million = Decimal(output_rate)
+            price.active = True
+            price.source_url = None
+            price.checked_at = None
+            price.release_date = None
+            price.notes = "Legacy scalar seed from v0.3."
+            price.tiers.clear()
+
+        edited_price = session.scalars(
+            select(ModelPrice).where(
+                ModelPrice.provider_slug == "openai",
+                ModelPrice.model == "gpt-5.5",
+            )
+        ).one()
+        edited_price.cached_input_usd_per_million = None
+        edited_price.source_url = None
+        edited_price.checked_at = None
+        edited_price.release_date = None
+        edited_price.notes = "Legacy scalar seed from v0.3."
+        edited_price.input_usd_per_million = Decimal("123")
+
+    init_db(engine)
+
+    with session_scope(session_factory) as session:
+        refreshed_openai = session.scalars(
+            select(ModelPrice).where(
+                ModelPrice.provider_slug == "openai",
+                ModelPrice.model == "gpt-5.4-mini",
+            )
+        ).one()
+        refreshed_anthropic = session.scalars(
+            select(ModelPrice).where(
+                ModelPrice.provider_slug == "anthropic",
+                ModelPrice.model == "claude-sonnet-4-6",
+            )
+        ).one()
+        refreshed_google = session.scalars(
+            select(ModelPrice).where(
+                ModelPrice.provider_slug == "google",
+                ModelPrice.model == "gemini-2.5-pro",
+            )
+        ).one()
+        preserved_edit = session.scalars(
+            select(ModelPrice).where(
+                ModelPrice.provider_slug == "openai",
+                ModelPrice.model == "gpt-5.5",
+            )
+        ).one()
+        refreshed_google_tier_count = len(refreshed_google.tiers)
+        refreshed_google_high_tier_min = refreshed_google.tiers[1].min_input_tokens
+        refreshed_google_high_tier_cached = refreshed_google.tiers[
+            1
+        ].cached_input_usd_per_million
+    engine.dispose()
+
+    assert refreshed_openai.cached_input_usd_per_million == Decimal("0.075000")
+    assert refreshed_openai.source_url == "https://developers.openai.com/api/docs/models/gpt-5.4-mini"
+    assert refreshed_anthropic.cached_input_usd_per_million == Decimal("0.300000")
+    assert refreshed_anthropic.source_url == "https://platform.claude.com/docs/en/about-claude/pricing"
+    assert refreshed_google.cached_input_usd_per_million == Decimal("0.125000")
+    assert refreshed_google_tier_count == 2
+    assert refreshed_google_high_tier_min == 200001
+    assert refreshed_google_high_tier_cached == Decimal("0.250000")
+    assert preserved_edit.input_usd_per_million == Decimal("123.000000")
+    assert preserved_edit.cached_input_usd_per_million is None
+    assert preserved_edit.source_url is None
+
+
+def test_manual_backfill_reprices_historical_cached_token_costs(tmp_path) -> None:
     db_path = tmp_path / "historical-cached-cost.sqlite3"
     settings = Settings(database_url=f"sqlite:///{db_path.as_posix()}")
     engine = create_db_engine(settings.database_url)
@@ -700,7 +869,7 @@ def test_init_db_backfills_historical_cached_token_costs(tmp_path) -> None:
             )
         )
 
-    init_db(engine)
+    assert run_historical_cached_cost_backfill(settings) == 3
 
     with session_scope(session_factory) as session:
         rows = session.scalars(select(RequestRecord).order_by(RequestRecord.id)).all()
@@ -972,8 +1141,9 @@ def test_cost_estimator_handles_rates_aliases_unknowns_and_missing_usage(tmp_pat
     assert cached_estimate.cached_input_cost_usd == Decimal("0.00008")
     assert cached_estimate.total_cost_usd == Decimal("0.00128")
     assert cached_estimate.snapshot["cached_input_pricing"] == "cached_input_rate"
-    assert cached_fallback.input_cost_usd == Decimal("0.000750")
-    assert cached_fallback.snapshot["cached_input_pricing"] == "standard_input_rate"
+    assert cached_fallback.input_cost_usd == Decimal("0.000210")
+    assert cached_fallback.cached_input_cost_usd == Decimal("0.000060")
+    assert cached_fallback.snapshot["cached_input_pricing"] == "cached_input_rate"
 
 
 def test_cost_estimator_uses_matching_model_price_tier_per_request(tmp_path) -> None:
@@ -1101,11 +1271,64 @@ def test_run_cost_estimator_sums_usage_and_counts_missing_requests(tmp_path) -> 
     assert estimate.cached_input_tokens == 50
     assert estimate.output_tokens == 600
     assert estimate.total_tokens == 1800
-    assert estimate.input_cost_usd == Decimal("0.000900")
+    assert estimate.input_cost_usd == Decimal("0.00086625")
+    assert estimate.cached_input_cost_usd == Decimal("0.00000375")
     assert estimate.output_cost_usd == Decimal("0.002700")
-    assert estimate.total_cost_usd == Decimal("0.003600")
+    assert estimate.total_cost_usd == Decimal("0.00356625")
     assert estimate.included_request_count == 2
     assert estimate.missing_usage_request_count == 1
+
+
+def test_seeded_google_tiers_apply_prompt_size_thresholds(tmp_path) -> None:
+    db_path = tmp_path / "google-tier-estimator.sqlite3"
+    settings = Settings(database_url=f"sqlite:///{db_path.as_posix()}")
+    engine = create_db_engine(settings.database_url)
+    init_db(engine)
+    session_factory = create_session_factory(engine)
+
+    with session_scope(session_factory) as session:
+        price = session.scalars(
+            select(ModelPrice).where(
+                ModelPrice.provider_slug == "google",
+                ModelPrice.model == "gemini-2.5-pro",
+            )
+        ).one()
+        short_estimate = estimate_run_cost(
+            [
+                ExtractedTokenUsage(
+                    input_tokens=200000,
+                    cached_input_tokens=100000,
+                    output_tokens=1000,
+                    total_tokens=201000,
+                )
+            ],
+            price,
+        )
+        long_estimate = estimate_run_cost(
+            [
+                ExtractedTokenUsage(
+                    input_tokens=250000,
+                    cached_input_tokens=100000,
+                    output_tokens=1000,
+                    total_tokens=251000,
+                )
+            ],
+            price,
+        )
+    engine.dispose()
+
+    assert short_estimate.input_usd_per_million == Decimal("1.250000")
+    assert short_estimate.cached_input_usd_per_million == Decimal("0.125000")
+    assert short_estimate.output_usd_per_million == Decimal("10.000000")
+    assert short_estimate.input_cost_usd == Decimal("0.137500")
+    assert short_estimate.output_cost_usd == Decimal("0.010000")
+    assert short_estimate.total_cost_usd == Decimal("0.147500")
+    assert long_estimate.input_usd_per_million == Decimal("2.500000")
+    assert long_estimate.cached_input_usd_per_million == Decimal("0.250000")
+    assert long_estimate.output_usd_per_million == Decimal("15.000000")
+    assert long_estimate.input_cost_usd == Decimal("0.400000")
+    assert long_estimate.output_cost_usd == Decimal("0.015000")
+    assert long_estimate.total_cost_usd == Decimal("0.415000")
 
 
 def test_init_db_upgrades_existing_sqlite_request_records_with_route_metadata(tmp_path) -> None:
@@ -1166,6 +1389,7 @@ def test_init_db_upgrades_existing_sqlite_request_records_with_route_metadata(tm
         "ix_request_records_model_route",
         "ix_request_records_billing_provider_slug",
         "ix_request_records_billing_model",
+        "ix_request_records_billing_cached_input_tokens",
         "ix_request_records_response_was_rewritten",
     }.issubset(indexes)
     assert ids == [42]
