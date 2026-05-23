@@ -257,13 +257,9 @@ still ignore non-token charges such as batch/flex/priority discounts, separate c
 fees, tool fees, image/audio prices, and regional premiums.
 
 Run detail pages include what-if cost comparisons. By default they compare captured run
-usage against GPT-5.5 and GPT-5.4 Mini when those prices are active. You can select any
-other active model price from the run page or link directly with repeated query
-parameters:
-
-```text
-/admin/runs/1?what_if=openai:gpt-5.5&what_if=openai:gpt-5.4-mini
-```
+usage against GPT-5.5 and GPT-5.4 Mini when those prices are active. You can add or
+remove other active model prices from a compact typeahead on the run page; those
+selections stay in the current browser session.
 
 What-if comparisons use stored request token counts and do not change captured request
 cost snapshots.
