@@ -135,6 +135,11 @@ You can also change the upstream URL, fallback provider/model, model upstream ro
 response compatibility fixes, model provider pricing, and next-start incoming host/port
 settings from `/admin/settings/server` and the other Settings tabs.
 
+The Providers tab includes a seeded `Local LLM` provider pointing at
+`http://localhost:8000/v1` with no API key requirement. Select it as the fallback
+provider and set the fallback model name to route unmatched traffic to a local
+OpenAI-compatible server.
+
 ## Model Routes
 
 Model routes let one proxy endpoint send different client-facing models to different
@@ -262,6 +267,8 @@ Mistral where suitable API pricing is published. OpenRouter and Hugging Face Rou
 are seeded only as router-provider fallbacks. Seeded rows include source metadata, aliases,
 cached-input rates where available, and Qwen-style request-size tiers. Seeds are inserted
 only when missing, so UI edits are preserved.
+The provider catalog also seeds `Local LLM` as an editable no-key local endpoint for
+fallback routing.
 
 Tier ranges use `[min_input_tokens, max_input_tokens)`, and tier selection happens per
 captured request. Run what-if comparisons estimate each request independently and then sum

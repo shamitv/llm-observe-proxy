@@ -44,8 +44,8 @@ def main() -> None:
         set_fallback_enabled(session, True)
         upsert_model_provider(
             session,
-            slug="local-vllm",
-            name="Local vLLM",
+            slug="local-llm",
+            name="Local LLM",
             upstream_url="http://localhost:8000/v1",
             currency="USD",
             api_key_env="",
@@ -60,7 +60,7 @@ def main() -> None:
             match_type="exact",
             upstream_url="http://localhost:8000/v1",
             upstream_model="qwen3-coder-30b",
-            provider_slug="local-vllm",
+            provider_slug="local-llm",
             compatibility_fixes=[QWEN_TAGGED_TOOL_CALL_REWRITE],
             priority=10,
             active=True,
@@ -71,7 +71,7 @@ def main() -> None:
             match_type="prefix",
             upstream_url="http://localhost:8000/v1",
             upstream_model="qwen3-coder-30b",
-            provider_slug="local-vllm",
+            provider_slug="local-llm",
             priority=40,
             active=True,
         )

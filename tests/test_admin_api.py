@@ -17,13 +17,35 @@ def test_get_settings_summary(proxy_client: TestClient) -> None:
     assert "stored_rows" in data
 
 
+def test_seeded_local_llm_provider_is_available_for_fallback(proxy_client: TestClient) -> None:
+    providers = proxy_client.get("/admin/api/providers?search=local-llm")
+    settings = proxy_client.post(
+        "/admin/api/settings/upstream-defaults",
+        json={
+            "upstream_url": "http://localhost:8000/v1",
+            "default_provider_slug": "local-llm",
+            "default_model": "local-model",
+            "fallback_enabled": True,
+        },
+    )
+
+    assert providers.status_code == 200
+    data = providers.json()
+    assert data["total"] == 1
+    assert data["items"][0]["name"] == "Local LLM"
+    assert data["items"][0]["upstream_url"] == "http://localhost:8000/v1"
+    assert data["items"][0]["api_key_env"] is None
+    assert settings.status_code == 200
+    assert settings.json()["upstream"]["default_provider_slug"] == "local-llm"
+
+
 def test_update_upstream_defaults_valid(proxy_client: TestClient) -> None:
     provider_response = proxy_client.post(
         "/admin/api/providers",
         json={
-            "slug": "local",
-            "name": "Local",
-            "upstream_url": "http://localhost:8000/v1",
+            "slug": "local-test",
+            "name": "Local Test",
+            "upstream_url": "http://localhost:8002/v1",
             "active": True,
         },
     )
@@ -33,7 +55,7 @@ def test_update_upstream_defaults_valid(proxy_client: TestClient) -> None:
         "/admin/api/settings/upstream-defaults",
         json={
             "upstream_url": "http://localhost:8000/v1",
-            "default_provider_slug": "local",
+            "default_provider_slug": "local-test",
             "default_model": "qwen-local",
             "fallback_enabled": True,
         },
@@ -41,7 +63,7 @@ def test_update_upstream_defaults_valid(proxy_client: TestClient) -> None:
 
     assert response.status_code == 200
     data = response.json()
-    assert data["upstream"]["default_provider_slug"] == "local"
+    assert data["upstream"]["default_provider_slug"] == "local-test"
     assert data["upstream"]["default_model"] == "qwen-local"
 
 
@@ -83,16 +105,20 @@ def test_provider_crud_and_filters(proxy_client: TestClient) -> None:
 def test_route_crud_and_simulation(proxy_client: TestClient) -> None:
     proxy_client.post(
         "/admin/api/providers",
-        json={"slug": "local", "name": "Local", "upstream_url": "http://localhost:8000/v1"},
+        json={
+            "slug": "route-local",
+            "name": "Route Local",
+            "upstream_url": "http://localhost:8003/v1",
+        },
     )
     route = proxy_client.post(
         "/admin/api/routes",
         json={
             "incoming_model": "qwen-*",
             "match_type": "prefix",
-            "upstream_url": "http://localhost:8000/v1",
+            "upstream_url": "http://localhost:8003/v1",
             "upstream_model": "qwen3",
-            "provider_slug": "local",
+            "provider_slug": "route-local",
             "priority": 25,
         },
     )
@@ -115,9 +141,9 @@ def test_route_crud_and_simulation(proxy_client: TestClient) -> None:
         json={
             "incoming_model": "qwen-*",
             "match_type": "prefix",
-            "upstream_url": "http://localhost:8000/v1",
+            "upstream_url": "http://localhost:8003/v1",
             "upstream_model": "qwen3-updated",
-            "provider_slug": "local",
+            "provider_slug": "route-local",
             "active": False,
         },
     )

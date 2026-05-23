@@ -37,7 +37,7 @@ def test_upsert_provider_with_new_fields(tmp_path: Path) -> None:
             session,
             slug="local",
             name="Local Provider",
-            upstream_url="http://localhost:8000/v1",
+            upstream_url="http://localhost:8004/v1",
             currency="local",
             api_key_env="LOCAL_KEY",
             active=False,

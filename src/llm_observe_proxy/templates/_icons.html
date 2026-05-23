@@ -58,7 +58,7 @@
 {% macro provider_badge(slug, name) -%}
 {% set normalized = slug | default('', true) %}
 {% set provider_icon = "cloud" %}
-{% if normalized == "local-vllm" %}
+{% if normalized in ["local-llm", "local-vllm"] %}
   {% set provider_icon = "terminal" %}
 {% elif normalized in ["openai", "anthropic", "google", "mistral", "deepseek", "zai", "moonshot"] %}
   {% set provider_icon = "brain" %}

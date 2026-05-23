@@ -528,6 +528,9 @@ def test_settings_manages_model_providers_and_prices(
     pricing_tab = proxy_client.get("/admin/settings/pricing")
     assert providers_tab.status_code == 200
     assert pricing_tab.status_code == 200
+    assert "Local LLM" in providers_tab.text
+    assert "http://localhost:8000/v1" in providers_tab.text
+    assert '<option value="local-llm"' in providers_tab.text
     assert "OpenAI" in providers_tab.text
     assert "gpt-5.4-mini" in pricing_tab.text
 
