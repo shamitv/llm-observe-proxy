@@ -55,6 +55,15 @@ DEFAULT_PRICING_SOURCE = (
     "Seeded static catalog checked on 2026-05-23. Verify provider pricing before "
     "high-volume use."
 )
+OPENAI_PRICING_URL = "https://openai.com/api/pricing/"
+OPENAI_GPT55_URL = "https://developers.openai.com/api/docs/models/gpt-5.5"
+OPENAI_GPT55_PRO_URL = "https://developers.openai.com/api/docs/models/gpt-5.5-pro"
+OPENAI_GPT54_URL = "https://developers.openai.com/api/docs/models/gpt-5.4"
+OPENAI_GPT54_MINI_URL = "https://developers.openai.com/api/docs/models/gpt-5.4-mini"
+OPENAI_GPT54_NANO_URL = "https://developers.openai.com/api/docs/models/gpt-5.4-nano"
+OPENAI_GPT54_PRO_URL = "https://developers.openai.com/api/docs/models/gpt-5.4-pro"
+ANTHROPIC_PRICING_URL = "https://platform.claude.com/docs/en/about-claude/pricing"
+GOOGLE_GEMINI_PRICING_URL = "https://ai.google.dev/gemini-api/docs/pricing"
 ALIBABA_PRICING_URL = "https://www.alibabacloud.com/help/en/model-studio/model-pricing"
 ALIBABA_CACHE_URL = "https://www.alibabacloud.com/help/en/model-studio/context-cache"
 DEEPSEEK_PRICING_URL = "https://api-docs.deepseek.com/quick_start/pricing"
@@ -144,8 +153,15 @@ DEFAULT_MODEL_PRICES = (
         "model": "gpt-5.5",
         "display_name": "GPT-5.5",
         "input_usd_per_million": "5.00",
+        "cached_input_usd_per_million": "0.50",
         "output_usd_per_million": "30.00",
-        "notes": "Legacy scalar seed from v0.3.",
+        "source_url": OPENAI_GPT55_URL,
+        "checked_at": DEFAULT_PRICING_CHECKED_AT,
+        "release_date": "2026-04-23",
+        "notes": (
+            "Official OpenAI text-token rates. Long prompts over 272K input "
+            "tokens have a documented surcharge not represented in this scalar row."
+        ),
     },
     {
         "provider_slug": "openai",
@@ -153,31 +169,49 @@ DEFAULT_MODEL_PRICES = (
         "display_name": "GPT-5.5 Pro",
         "input_usd_per_million": "30.00",
         "output_usd_per_million": "180.00",
-        "notes": "Legacy scalar seed from v0.3.",
+        "source_url": OPENAI_GPT55_PRO_URL,
+        "checked_at": DEFAULT_PRICING_CHECKED_AT,
+        "release_date": "2026-04-23",
+        "notes": "Official OpenAI text-token rates; cached input discount is not offered.",
     },
     {
         "provider_slug": "openai",
         "model": "gpt-5.4",
         "display_name": "GPT-5.4",
         "input_usd_per_million": "2.50",
+        "cached_input_usd_per_million": "0.25",
         "output_usd_per_million": "15.00",
-        "notes": "Legacy scalar seed from v0.3.",
+        "source_url": OPENAI_GPT54_URL,
+        "checked_at": DEFAULT_PRICING_CHECKED_AT,
+        "release_date": "2026-03-05",
+        "notes": (
+            "Official OpenAI text-token rates. Long prompts over 272K input "
+            "tokens have a documented surcharge not represented in this scalar row."
+        ),
     },
     {
         "provider_slug": "openai",
         "model": "gpt-5.4-mini",
         "display_name": "GPT-5.4 Mini",
         "input_usd_per_million": "0.75",
+        "cached_input_usd_per_million": "0.075",
         "output_usd_per_million": "4.50",
-        "notes": "Legacy scalar seed from v0.3.",
+        "source_url": OPENAI_GPT54_MINI_URL,
+        "checked_at": DEFAULT_PRICING_CHECKED_AT,
+        "release_date": "2026-03-17",
+        "notes": "Official OpenAI text-token rates.",
     },
     {
         "provider_slug": "openai",
         "model": "gpt-5.4-nano",
         "display_name": "GPT-5.4 Nano",
         "input_usd_per_million": "0.20",
+        "cached_input_usd_per_million": "0.02",
         "output_usd_per_million": "1.25",
-        "notes": "Legacy scalar seed from v0.3.",
+        "source_url": OPENAI_GPT54_NANO_URL,
+        "checked_at": DEFAULT_PRICING_CHECKED_AT,
+        "release_date": "2026-03-17",
+        "notes": "Official OpenAI text-token rates.",
     },
     {
         "provider_slug": "openai",
@@ -185,47 +219,75 @@ DEFAULT_MODEL_PRICES = (
         "display_name": "GPT-5.4 Pro",
         "input_usd_per_million": "30.00",
         "output_usd_per_million": "180.00",
-        "notes": "Legacy scalar seed from v0.3.",
+        "source_url": OPENAI_GPT54_PRO_URL,
+        "checked_at": DEFAULT_PRICING_CHECKED_AT,
+        "release_date": "2026-03-05",
+        "notes": (
+            "Official OpenAI text-token rates; no cached-input discount is listed. "
+            "Long prompts over 272K input tokens have a documented surcharge not "
+            "represented in this scalar row."
+        ),
     },
     {
         "provider_slug": "anthropic",
         "model": "claude-opus-4-7",
         "display_name": "Claude Opus 4.7",
         "input_usd_per_million": "5.00",
+        "cached_input_usd_per_million": "0.50",
         "output_usd_per_million": "25.00",
-        "notes": "Legacy scalar seed from v0.3.",
+        "source_url": ANTHROPIC_PRICING_URL,
+        "checked_at": DEFAULT_PRICING_CHECKED_AT,
+        "release_date": "2026-04-16",
+        "notes": "Official Anthropic global rates; cached input uses cache-hit pricing.",
     },
     {
         "provider_slug": "anthropic",
         "model": "claude-opus-4-6",
         "display_name": "Claude Opus 4.6",
         "input_usd_per_million": "5.00",
+        "cached_input_usd_per_million": "0.50",
         "output_usd_per_million": "25.00",
-        "notes": "Legacy scalar seed from v0.3.",
+        "source_url": ANTHROPIC_PRICING_URL,
+        "checked_at": DEFAULT_PRICING_CHECKED_AT,
+        "release_date": "2026-02-17",
+        "notes": "Official Anthropic global rates; cached input uses cache-hit pricing.",
     },
     {
         "provider_slug": "anthropic",
         "model": "claude-sonnet-4-6",
         "display_name": "Claude Sonnet 4.6",
         "input_usd_per_million": "3.00",
+        "cached_input_usd_per_million": "0.30",
         "output_usd_per_million": "15.00",
-        "notes": "Legacy scalar seed from v0.3.",
+        "source_url": ANTHROPIC_PRICING_URL,
+        "checked_at": DEFAULT_PRICING_CHECKED_AT,
+        "release_date": "2026-02-17",
+        "notes": "Official Anthropic global rates; cached input uses cache-hit pricing.",
     },
     {
         "provider_slug": "anthropic",
         "model": "claude-haiku-4-5",
         "display_name": "Claude Haiku 4.5",
         "input_usd_per_million": "1.00",
+        "cached_input_usd_per_million": "0.10",
         "output_usd_per_million": "5.00",
-        "notes": "Legacy scalar seed from v0.3.",
+        "source_url": ANTHROPIC_PRICING_URL,
+        "checked_at": DEFAULT_PRICING_CHECKED_AT,
+        "release_date": "2025-10-16",
+        "notes": "Official Anthropic global rates; cached input uses cache-hit pricing.",
     },
     {
         "provider_slug": "google",
         "model": "gemini-3.1-pro-preview",
         "display_name": "Gemini 3.1 Pro Preview",
         "input_usd_per_million": "2.00",
+        "cached_input_usd_per_million": "0.20",
         "output_usd_per_million": "12.00",
-        "notes": "Legacy scalar seed from v0.3.",
+        "aliases": ("google/gemini-3.1-pro-preview",),
+        "source_url": GOOGLE_GEMINI_PRICING_URL,
+        "checked_at": DEFAULT_PRICING_CHECKED_AT,
+        "release_date": "2026-03-01",
+        "notes": "Official Gemini API paid-tier standard text-token rates.",
     },
     {
         "provider_slug": "google",
@@ -233,31 +295,83 @@ DEFAULT_MODEL_PRICES = (
         "display_name": "Gemini 3 Flash Preview",
         "input_usd_per_million": "0.50",
         "output_usd_per_million": "3.00",
-        "notes": "Legacy scalar seed from v0.3.",
+        "aliases": ("google/gemini-3-flash-preview",),
+        "source_url": GOOGLE_GEMINI_PRICING_URL,
+        "checked_at": DEFAULT_PRICING_CHECKED_AT,
+        "release_date": "2025-12-17",
+        "notes": (
+            "Official Gemini API standard text-token rates. Context caching is not "
+            "listed for this preview row."
+        ),
     },
     {
         "provider_slug": "google",
         "model": "gemini-2.5-pro",
         "display_name": "Gemini 2.5 Pro",
         "input_usd_per_million": "1.25",
+        "cached_input_usd_per_million": "0.125",
         "output_usd_per_million": "10.00",
-        "notes": "Legacy scalar seed from v0.3.",
+        "aliases": ("google/gemini-2.5-pro",),
+        "source_url": GOOGLE_GEMINI_PRICING_URL,
+        "checked_at": DEFAULT_PRICING_CHECKED_AT,
+        "release_date": "2025-06-17",
+        "notes": "Official Gemini API paid-tier standard text-token rates.",
+        "tiers": (
+            ("<=200K", 0, 200001, "1.25", "0.125", "10.00"),
+            (">200K", 200001, None, "2.50", "0.25", "15.00"),
+        ),
     },
     {
         "provider_slug": "google",
         "model": "gemini-2.5-flash",
         "display_name": "Gemini 2.5 Flash",
         "input_usd_per_million": "0.30",
+        "cached_input_usd_per_million": "0.03",
         "output_usd_per_million": "2.50",
-        "notes": "Legacy scalar seed from v0.3.",
+        "aliases": ("google/gemini-2.5-flash",),
+        "source_url": GOOGLE_GEMINI_PRICING_URL,
+        "checked_at": DEFAULT_PRICING_CHECKED_AT,
+        "release_date": "2025-06-17",
+        "notes": "Official Gemini API paid-tier standard text-token rates.",
     },
     {
         "provider_slug": "google",
         "model": "gemini-2.5-flash-lite",
         "display_name": "Gemini 2.5 Flash-Lite",
         "input_usd_per_million": "0.10",
+        "cached_input_usd_per_million": "0.01",
         "output_usd_per_million": "0.40",
-        "notes": "Legacy scalar seed from v0.3.",
+        "aliases": ("google/gemini-2.5-flash-lite",),
+        "source_url": GOOGLE_GEMINI_PRICING_URL,
+        "checked_at": DEFAULT_PRICING_CHECKED_AT,
+        "release_date": "2025-07-22",
+        "notes": "Official Gemini API paid-tier standard text-token rates.",
+    },
+    {
+        "provider_slug": "google",
+        "model": "gemini-3.5-flash",
+        "display_name": "Gemini 3.5 Flash",
+        "input_usd_per_million": "1.50",
+        "cached_input_usd_per_million": "0.15",
+        "output_usd_per_million": "9.00",
+        "aliases": ("google/gemini-3.5-flash",),
+        "source_url": GOOGLE_GEMINI_PRICING_URL,
+        "checked_at": DEFAULT_PRICING_CHECKED_AT,
+        "release_date": "2026-05-20",
+        "notes": "Official Gemini API paid-tier standard text-token rates.",
+    },
+    {
+        "provider_slug": "google",
+        "model": "gemini-3.1-flash-lite",
+        "display_name": "Gemini 3.1 Flash-Lite",
+        "input_usd_per_million": "0.25",
+        "cached_input_usd_per_million": "0.025",
+        "output_usd_per_million": "1.50",
+        "aliases": ("google/gemini-3.1-flash-lite",),
+        "source_url": GOOGLE_GEMINI_PRICING_URL,
+        "checked_at": DEFAULT_PRICING_CHECKED_AT,
+        "release_date": "2026-03-01",
+        "notes": "Official Gemini API paid-tier standard text-token rates.",
     },
     {
         "provider_slug": "alibaba",
@@ -318,6 +432,43 @@ DEFAULT_MODEL_PRICES = (
             ("0-32K", 0, 32001, "0.861", "", "3.441"),
             ("32K-128K", 32001, 128001, "1.291", "", "5.161"),
             ("128K-200K", 128001, 200001, "2.151", "", "8.602"),
+        ),
+    },
+    {
+        "provider_slug": "alibaba",
+        "model": "qwen3-coder-next",
+        "display_name": "Qwen3 Coder Next",
+        "input_usd_per_million": "0.30",
+        "output_usd_per_million": "1.50",
+        "aliases": ("qwen/qwen3-coder-next", "Qwen/Qwen3-Coder-Next"),
+        "source_url": ALIBABA_PRICING_URL,
+        "checked_at": DEFAULT_PRICING_CHECKED_AT,
+        "release_date": "2026-03-01",
+        "notes": (
+            "Official Alibaba Model Studio International deployment rates. "
+            "Context Cache support is not listed for this model."
+        ),
+        "tiers": (
+            ("0-32K", 0, 32001, "0.30", "", "1.50"),
+            ("32K-128K", 32001, 128001, "0.50", "", "2.50"),
+            ("128K-256K", 128001, 256001, "0.80", "", "4.00"),
+        ),
+    },
+    {
+        "provider_slug": "alibaba",
+        "model": "qwen3-coder-30b-a3b-instruct",
+        "display_name": "Qwen3 Coder 30B A3B Instruct",
+        "input_usd_per_million": "0.216",
+        "output_usd_per_million": "0.861",
+        "aliases": ("qwen/qwen3-coder-30b-a3b-instruct", "Qwen/Qwen3-Coder-30B-A3B-Instruct"),
+        "source_url": ALIBABA_PRICING_URL,
+        "checked_at": DEFAULT_PRICING_CHECKED_AT,
+        "release_date": "2025-07-31",
+        "notes": "Official Alibaba Model Studio Global deployment rates.",
+        "tiers": (
+            ("0-32K", 0, 32001, "0.216", "", "0.861"),
+            ("32K-128K", 32001, 128001, "0.323", "", "1.291"),
+            ("128K-200K", 128001, 200001, "0.538", "", "2.151"),
         ),
     },
     {
@@ -610,6 +761,57 @@ DEFAULT_MODEL_PRICES = (
         "notes": "Router fallback for Qwen3 Coder open-weight model.",
     },
     {
+        "provider_slug": "openrouter",
+        "model": "deepseek/deepseek-v3.2-speciale",
+        "display_name": "DeepSeek V3.2 Speciale (OpenRouter)",
+        "input_usd_per_million": "0.287",
+        "cached_input_usd_per_million": "0.058",
+        "output_usd_per_million": "0.431",
+        "aliases": ("DeepSeek-V3.2-Speciale",),
+        "source_url": OPENROUTER_MODELS_URL,
+        "checked_at": DEFAULT_PRICING_CHECKED_AT,
+        "release_date": "2025-12-01",
+        "notes": "Router fallback because current official DeepSeek API lists V4 model IDs.",
+    },
+    {
+        "provider_slug": "openrouter",
+        "model": "minimax/minimax-m2.7",
+        "display_name": "MiniMax M2.7 (OpenRouter)",
+        "input_usd_per_million": "0.279",
+        "output_usd_per_million": "1.20",
+        "aliases": ("MiniMaxAI/MiniMax-M2.7",),
+        "source_url": OPENROUTER_MODELS_URL,
+        "checked_at": DEFAULT_PRICING_CHECKED_AT,
+        "release_date": "2026-03-18",
+        "notes": "Router fallback from the OpenRouter Models API.",
+    },
+    {
+        "provider_slug": "openrouter",
+        "model": "z-ai/glm-4.7",
+        "display_name": "GLM-4.7 (OpenRouter)",
+        "input_usd_per_million": "0.40",
+        "cached_input_usd_per_million": "0.08",
+        "output_usd_per_million": "1.75",
+        "aliases": ("zai-org/GLM-4.7",),
+        "source_url": OPENROUTER_MODELS_URL,
+        "checked_at": DEFAULT_PRICING_CHECKED_AT,
+        "release_date": "2025-12-22",
+        "notes": "Router fallback because a first-party Z.ai pricing row was not verified.",
+    },
+    {
+        "provider_slug": "openrouter",
+        "model": "z-ai/glm-4.7-flash",
+        "display_name": "GLM-4.7 Flash (OpenRouter)",
+        "input_usd_per_million": "0.06",
+        "cached_input_usd_per_million": "0.01",
+        "output_usd_per_million": "0.40",
+        "aliases": ("zai-org/GLM-4.7-Flash",),
+        "source_url": OPENROUTER_MODELS_URL,
+        "checked_at": DEFAULT_PRICING_CHECKED_AT,
+        "release_date": "2026-01-19",
+        "notes": "Router fallback because a first-party Z.ai pricing row was not verified.",
+    },
+    {
         "provider_slug": "huggingface-router",
         "model": "openai/gpt-oss-120b",
         "display_name": "OpenAI gpt-oss-120b (HF Router)",
@@ -668,6 +870,134 @@ DEFAULT_MODEL_PRICES = (
         "notes": "Hugging Face router listed provider row.",
     },
 )
+
+_LEGACY_SCALAR_SEED_MODEL_PRICES = (
+    {
+        "provider_slug": "openai",
+        "model": "gpt-5.5",
+        "display_name": "GPT-5.5",
+        "input_usd_per_million": "5.00",
+        "output_usd_per_million": "30.00",
+        "notes": "Legacy scalar seed from v0.3.",
+    },
+    {
+        "provider_slug": "openai",
+        "model": "gpt-5.5-pro",
+        "display_name": "GPT-5.5 Pro",
+        "input_usd_per_million": "30.00",
+        "output_usd_per_million": "180.00",
+        "notes": "Legacy scalar seed from v0.3.",
+    },
+    {
+        "provider_slug": "openai",
+        "model": "gpt-5.4",
+        "display_name": "GPT-5.4",
+        "input_usd_per_million": "2.50",
+        "output_usd_per_million": "15.00",
+        "notes": "Legacy scalar seed from v0.3.",
+    },
+    {
+        "provider_slug": "openai",
+        "model": "gpt-5.4-mini",
+        "display_name": "GPT-5.4 Mini",
+        "input_usd_per_million": "0.75",
+        "output_usd_per_million": "4.50",
+        "notes": "Legacy scalar seed from v0.3.",
+    },
+    {
+        "provider_slug": "openai",
+        "model": "gpt-5.4-nano",
+        "display_name": "GPT-5.4 Nano",
+        "input_usd_per_million": "0.20",
+        "output_usd_per_million": "1.25",
+        "notes": "Legacy scalar seed from v0.3.",
+    },
+    {
+        "provider_slug": "openai",
+        "model": "gpt-5.4-pro",
+        "display_name": "GPT-5.4 Pro",
+        "input_usd_per_million": "30.00",
+        "output_usd_per_million": "180.00",
+        "notes": "Legacy scalar seed from v0.3.",
+    },
+    {
+        "provider_slug": "anthropic",
+        "model": "claude-opus-4-7",
+        "display_name": "Claude Opus 4.7",
+        "input_usd_per_million": "5.00",
+        "output_usd_per_million": "25.00",
+        "notes": "Legacy scalar seed from v0.3.",
+    },
+    {
+        "provider_slug": "anthropic",
+        "model": "claude-opus-4-6",
+        "display_name": "Claude Opus 4.6",
+        "input_usd_per_million": "5.00",
+        "output_usd_per_million": "25.00",
+        "notes": "Legacy scalar seed from v0.3.",
+    },
+    {
+        "provider_slug": "anthropic",
+        "model": "claude-sonnet-4-6",
+        "display_name": "Claude Sonnet 4.6",
+        "input_usd_per_million": "3.00",
+        "output_usd_per_million": "15.00",
+        "notes": "Legacy scalar seed from v0.3.",
+    },
+    {
+        "provider_slug": "anthropic",
+        "model": "claude-haiku-4-5",
+        "display_name": "Claude Haiku 4.5",
+        "input_usd_per_million": "1.00",
+        "output_usd_per_million": "5.00",
+        "notes": "Legacy scalar seed from v0.3.",
+    },
+    {
+        "provider_slug": "google",
+        "model": "gemini-3.1-pro-preview",
+        "display_name": "Gemini 3.1 Pro Preview",
+        "input_usd_per_million": "2.00",
+        "output_usd_per_million": "12.00",
+        "notes": "Legacy scalar seed from v0.3.",
+    },
+    {
+        "provider_slug": "google",
+        "model": "gemini-3-flash-preview",
+        "display_name": "Gemini 3 Flash Preview",
+        "input_usd_per_million": "0.50",
+        "output_usd_per_million": "3.00",
+        "notes": "Legacy scalar seed from v0.3.",
+    },
+    {
+        "provider_slug": "google",
+        "model": "gemini-2.5-pro",
+        "display_name": "Gemini 2.5 Pro",
+        "input_usd_per_million": "1.25",
+        "output_usd_per_million": "10.00",
+        "notes": "Legacy scalar seed from v0.3.",
+    },
+    {
+        "provider_slug": "google",
+        "model": "gemini-2.5-flash",
+        "display_name": "Gemini 2.5 Flash",
+        "input_usd_per_million": "0.30",
+        "output_usd_per_million": "2.50",
+        "notes": "Legacy scalar seed from v0.3.",
+    },
+    {
+        "provider_slug": "google",
+        "model": "gemini-2.5-flash-lite",
+        "display_name": "Gemini 2.5 Flash-Lite",
+        "input_usd_per_million": "0.10",
+        "output_usd_per_million": "0.40",
+        "notes": "Legacy scalar seed from v0.3.",
+    },
+)
+
+DEFAULT_MODEL_PRICE_REVISIONS = {
+    (str(price["provider_slug"]), str(price["model"])): price
+    for price in _LEGACY_SCALAR_SEED_MODEL_PRICES
+}
 
 
 def _now() -> datetime:
@@ -1225,41 +1555,18 @@ def seed_default_model_pricing(engine: Engine) -> None:
                 )
             )
             if existing is not None:
+                previous_seed = DEFAULT_MODEL_PRICE_REVISIONS.get((provider_slug, model))
+                if previous_seed is not None and _model_price_matches_seed(
+                    existing,
+                    previous_seed,
+                ):
+                    _apply_model_price_seed(existing, price_data)
                 continue
             price = ModelPrice(
                 provider_slug=provider_slug,
                 model=model,
-                display_name=str(price_data.get("display_name") or "") or None,
-                aliases_json=_aliases_json(price_data.get("aliases", "")),
-                input_usd_per_million=_seed_decimal(price_data["input_usd_per_million"]),
-                cached_input_usd_per_million=_seed_optional_decimal(
-                    price_data.get("cached_input_usd_per_million")
-                ),
-                output_usd_per_million=_seed_decimal(price_data["output_usd_per_million"]),
-                active=bool(price_data.get("active", True)),
-                source_url=str(price_data.get("source_url") or "") or None,
-                checked_at=str(price_data.get("checked_at") or "") or None,
-                release_date=str(price_data.get("release_date") or "") or None,
-                notes=str(price_data.get("notes") or DEFAULT_PRICING_SOURCE),
             )
-            for tier_data in price_data.get("tiers", ()):
-                label, minimum, maximum, input_rate, cached_input_rate, output_rate = tier_data
-                price.tiers.append(
-                    ModelPriceTier(
-                        min_input_tokens=minimum,
-                        max_input_tokens=maximum,
-                        input_usd_per_million=_seed_decimal(input_rate),
-                        cached_input_usd_per_million=_seed_optional_decimal(
-                            cached_input_rate
-                        ),
-                        output_usd_per_million=_seed_decimal(output_rate),
-                        label=label,
-                        source_url=price.source_url,
-                        checked_at=price.checked_at,
-                        release_date=price.release_date,
-                        notes=price.notes,
-                    )
-                )
+            _apply_model_price_seed(price, price_data)
             session.add(price)
         session.commit()
 
@@ -1676,6 +1983,110 @@ def _aliases_json(value: str | list[str] | tuple[str, ...]) -> str | None:
     if not deduped:
         return None
     return json.dumps(deduped, ensure_ascii=False, separators=(",", ":"))
+
+
+def _seed_metadata(value: object) -> str | None:
+    return str(value or "") or None
+
+
+def _seed_price_tier_snapshot(tier: ModelPriceTier) -> tuple[object, ...]:
+    return (
+        tier.label,
+        tier.min_input_tokens,
+        tier.max_input_tokens,
+        tier.input_usd_per_million,
+        tier.cached_input_usd_per_million,
+        tier.output_usd_per_million,
+        tier.source_url,
+        tier.checked_at,
+        tier.release_date,
+        tier.notes,
+    )
+
+
+def _seed_data_tier_snapshot(price_data: dict[str, object]) -> tuple[tuple[object, ...], ...]:
+    source_url = _seed_metadata(price_data.get("source_url"))
+    checked_at = _seed_metadata(price_data.get("checked_at"))
+    release_date = _seed_metadata(price_data.get("release_date"))
+    notes = str(price_data.get("notes") or DEFAULT_PRICING_SOURCE)
+    snapshots: list[tuple[object, ...]] = []
+    for tier_data in price_data.get("tiers", ()):
+        label, minimum, maximum, input_rate, cached_input_rate, output_rate = tier_data
+        snapshots.append(
+            (
+                label,
+                minimum,
+                maximum,
+                _seed_decimal(input_rate),
+                _seed_optional_decimal(cached_input_rate),
+                _seed_decimal(output_rate),
+                source_url,
+                checked_at,
+                release_date,
+                notes,
+            )
+        )
+    return tuple(snapshots)
+
+
+def _model_price_matches_seed(price: ModelPrice, price_data: dict[str, object]) -> bool:
+    if price.display_name != _seed_metadata(price_data.get("display_name")):
+        return False
+    if price.aliases_json != _aliases_json(price_data.get("aliases", "")):
+        return False
+    if price.input_usd_per_million != _seed_decimal(price_data["input_usd_per_million"]):
+        return False
+    if price.cached_input_usd_per_million != _seed_optional_decimal(
+        price_data.get("cached_input_usd_per_million")
+    ):
+        return False
+    if price.output_usd_per_million != _seed_decimal(price_data["output_usd_per_million"]):
+        return False
+    if bool(price.active) != bool(price_data.get("active", True)):
+        return False
+    if price.source_url != _seed_metadata(price_data.get("source_url")):
+        return False
+    if price.checked_at != _seed_metadata(price_data.get("checked_at")):
+        return False
+    if price.release_date != _seed_metadata(price_data.get("release_date")):
+        return False
+    if price.notes != str(price_data.get("notes") or DEFAULT_PRICING_SOURCE):
+        return False
+    return tuple(_seed_price_tier_snapshot(tier) for tier in price.tiers) == (
+        _seed_data_tier_snapshot(price_data)
+    )
+
+
+def _apply_model_price_seed(price: ModelPrice, price_data: dict[str, object]) -> None:
+    price.display_name = _seed_metadata(price_data.get("display_name"))
+    price.aliases_json = _aliases_json(price_data.get("aliases", ""))
+    price.input_usd_per_million = _seed_decimal(price_data["input_usd_per_million"])
+    price.cached_input_usd_per_million = _seed_optional_decimal(
+        price_data.get("cached_input_usd_per_million")
+    )
+    price.output_usd_per_million = _seed_decimal(price_data["output_usd_per_million"])
+    price.active = bool(price_data.get("active", True))
+    price.source_url = _seed_metadata(price_data.get("source_url"))
+    price.checked_at = _seed_metadata(price_data.get("checked_at"))
+    price.release_date = _seed_metadata(price_data.get("release_date"))
+    price.notes = str(price_data.get("notes") or DEFAULT_PRICING_SOURCE)
+    price.tiers.clear()
+    for tier_data in price_data.get("tiers", ()):
+        label, minimum, maximum, input_rate, cached_input_rate, output_rate = tier_data
+        price.tiers.append(
+            ModelPriceTier(
+                min_input_tokens=minimum,
+                max_input_tokens=maximum,
+                input_usd_per_million=_seed_decimal(input_rate),
+                cached_input_usd_per_million=_seed_optional_decimal(cached_input_rate),
+                output_usd_per_million=_seed_decimal(output_rate),
+                label=label,
+                source_url=price.source_url,
+                checked_at=price.checked_at,
+                release_date=price.release_date,
+                notes=price.notes,
+            )
+        )
 
 
 def _duration_ms(started_at: datetime | None, ended_at: datetime | None) -> int | None:

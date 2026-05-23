@@ -100,6 +100,18 @@ Skip notes:
 - IBM Granite 4.0 and OpenAI gpt-oss have release sources but no first-party
   per-token API pricing; they are seeded under `openrouter` and/or
   `huggingface-router`.
+- OpenAI `gpt-5.5`, `gpt-5.4`, and `gpt-5.4-pro` document long-prompt
+  surcharges above 272K input tokens. The refreshed seed keeps the standard
+  scalar rows because the current cost model cannot express a full-session
+  surcharge that changes output pricing from the request input threshold.
+- Google multimodal/audio/TTS/image rows remain skipped because their official
+  pricing includes image/audio/storage/search dimensions outside v0.4 token
+  cost math.
+- Alibaba `qwen3-coder-next` is seeded from the International Model Studio row
+  because a Global deployment row was not listed on the pricing page checked on
+  2026-05-23.
+- Z.ai GLM-4.7 and GLM-4.7 Flash are seeded as OpenRouter fallback rows because
+  a first-party Z.ai pricing row was not verified during the 2026-05-23 refresh.
 
 ### 7. Documentation
 
