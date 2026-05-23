@@ -569,13 +569,21 @@ def test_init_db_seeds_model_pricing_without_overwriting_edits(tmp_path) -> None
             new_alibaba_price.aliases_json
         )
 
-        openrouter_cached_price = session.scalars(
+        zai_successor_price = session.scalars(
             select(ModelPrice).where(
-                ModelPrice.provider_slug == "openrouter",
-                ModelPrice.model == "z-ai/glm-4.7",
+                ModelPrice.provider_slug == "zai",
+                ModelPrice.model == "glm-4.7",
             )
         ).one()
-        assert openrouter_cached_price.cached_input_usd_per_million == Decimal("0.080000")
+        assert zai_successor_price.cached_input_usd_per_million == Decimal("0.110000")
+
+        mistral_successor_price = session.scalars(
+            select(ModelPrice).where(
+                ModelPrice.provider_slug == "mistral",
+                ModelPrice.model == "mistral-medium-2604",
+            )
+        ).one()
+        assert mistral_successor_price.cached_input_usd_per_million == Decimal("0.150000")
 
     init_db(engine)
 

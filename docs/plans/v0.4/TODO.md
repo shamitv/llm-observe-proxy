@@ -110,8 +110,10 @@ Skip notes:
 - Alibaba `qwen3-coder-next` is seeded from the International Model Studio row
   because a Global deployment row was not listed on the pricing page checked on
   2026-05-23.
-- Z.ai GLM-4.7 and GLM-4.7 Flash are seeded as OpenRouter fallback rows because
-  a first-party Z.ai pricing row was not verified during the 2026-05-23 refresh.
+- OpenRouter lists newer provider-family rows such as Qwen3.7 Max and Mistral
+  Medium 3.5. Rows with verified first-party pricing are seeded under their
+  creator provider; unverified first-party rows remain skipped instead of being
+  mirrored under a router provider.
 
 ### 7. Documentation
 

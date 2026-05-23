@@ -74,6 +74,7 @@ KIMI_K2_PRICING_URL = "https://platform.kimi.ai/docs/pricing/chat-k2"
 MISTRAL_API_URL = "https://docs.mistral.ai/api"
 MISTRAL_DEVSTRAL_URL = "https://docs.mistral.ai/models/model-cards/devstral-2-25-12"
 MISTRAL_SMALL_URL = "https://docs.mistral.ai/models/model-cards/mistral-small-4-0-26-03"
+MISTRAL_MEDIUM_URL = "https://docs.mistral.ai/models/model-cards/mistral-medium-3-5-26-04"
 MISTRAL_LARGE_URL = "https://docs.mistral.ai/models/model-cards/mistral-large-3-25-12"
 MISTRAL_MINISTRAL_3B_URL = "https://docs.mistral.ai/models/model-cards/ministral-3-3b-25-12"
 MISTRAL_MINISTRAL_14B_URL = "https://docs.mistral.ai/models/model-cards/ministral-3-14b-25-12"
@@ -518,6 +519,45 @@ DEFAULT_MODEL_PRICES = (
     },
     {
         "provider_slug": "zai",
+        "model": "glm-4.7",
+        "display_name": "GLM-4.7",
+        "input_usd_per_million": "0.60",
+        "cached_input_usd_per_million": "0.11",
+        "output_usd_per_million": "2.20",
+        "aliases": ("z-ai/glm-4.7", "zai-org/GLM-4.7"),
+        "source_url": ZAI_PRICING_URL,
+        "checked_at": DEFAULT_PRICING_CHECKED_AT,
+        "release_date": "2025-12-22",
+        "notes": "Official Z.ai model pricing. Cached input storage listed as limited-time free.",
+    },
+    {
+        "provider_slug": "zai",
+        "model": "glm-4.7-flashx",
+        "display_name": "GLM-4.7 FlashX",
+        "input_usd_per_million": "0.07",
+        "cached_input_usd_per_million": "0.01",
+        "output_usd_per_million": "0.40",
+        "aliases": ("z-ai/glm-4.7-flashx", "zai-org/GLM-4.7-FlashX"),
+        "source_url": ZAI_PRICING_URL,
+        "checked_at": DEFAULT_PRICING_CHECKED_AT,
+        "release_date": "2026-01-19",
+        "notes": "Official Z.ai model pricing. Cached input storage listed as limited-time free.",
+    },
+    {
+        "provider_slug": "zai",
+        "model": "glm-4.7-flash",
+        "display_name": "GLM-4.7 Flash",
+        "input_usd_per_million": "0",
+        "cached_input_usd_per_million": "0",
+        "output_usd_per_million": "0",
+        "aliases": ("z-ai/glm-4.7-flash", "zai-org/GLM-4.7-Flash"),
+        "source_url": ZAI_PRICING_URL,
+        "checked_at": DEFAULT_PRICING_CHECKED_AT,
+        "release_date": "2026-01-19",
+        "notes": "Official Z.ai pricing lists GLM-4.7-Flash as free.",
+    },
+    {
+        "provider_slug": "zai",
         "model": "glm-4.5",
         "display_name": "GLM-4.5",
         "input_usd_per_million": "0.60",
@@ -617,6 +657,22 @@ DEFAULT_MODEL_PRICES = (
         "source_url": MISTRAL_SMALL_URL,
         "checked_at": DEFAULT_PRICING_CHECKED_AT,
         "release_date": "2026-03-16",
+        "notes": (
+            "Official model-card rates; cached tokens billed at 10% of input per "
+            f"{MISTRAL_API_URL}."
+        ),
+    },
+    {
+        "provider_slug": "mistral",
+        "model": "mistral-medium-2604",
+        "display_name": "Mistral Medium 3.5",
+        "input_usd_per_million": "1.50",
+        "cached_input_usd_per_million": "0.15",
+        "output_usd_per_million": "7.50",
+        "aliases": ("mistralai/mistral-medium-3-5", "mistral-medium-3-5-26-04"),
+        "source_url": MISTRAL_MEDIUM_URL,
+        "checked_at": DEFAULT_PRICING_CHECKED_AT,
+        "release_date": "2026-04-30",
         "notes": (
             "Official model-card rates; cached tokens billed at 10% of input per "
             f"{MISTRAL_API_URL}."
@@ -784,32 +840,6 @@ DEFAULT_MODEL_PRICES = (
         "checked_at": DEFAULT_PRICING_CHECKED_AT,
         "release_date": "2026-03-18",
         "notes": "Router fallback from the OpenRouter Models API.",
-    },
-    {
-        "provider_slug": "openrouter",
-        "model": "z-ai/glm-4.7",
-        "display_name": "GLM-4.7 (OpenRouter)",
-        "input_usd_per_million": "0.40",
-        "cached_input_usd_per_million": "0.08",
-        "output_usd_per_million": "1.75",
-        "aliases": ("zai-org/GLM-4.7",),
-        "source_url": OPENROUTER_MODELS_URL,
-        "checked_at": DEFAULT_PRICING_CHECKED_AT,
-        "release_date": "2025-12-22",
-        "notes": "Router fallback because a first-party Z.ai pricing row was not verified.",
-    },
-    {
-        "provider_slug": "openrouter",
-        "model": "z-ai/glm-4.7-flash",
-        "display_name": "GLM-4.7 Flash (OpenRouter)",
-        "input_usd_per_million": "0.06",
-        "cached_input_usd_per_million": "0.01",
-        "output_usd_per_million": "0.40",
-        "aliases": ("zai-org/GLM-4.7-Flash",),
-        "source_url": OPENROUTER_MODELS_URL,
-        "checked_at": DEFAULT_PRICING_CHECKED_AT,
-        "release_date": "2026-01-19",
-        "notes": "Router fallback because a first-party Z.ai pricing row was not verified.",
     },
     {
         "provider_slug": "huggingface-router",
