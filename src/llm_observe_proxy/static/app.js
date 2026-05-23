@@ -336,11 +336,75 @@ if (whatIfPanel) {
   updateFromApi();
 }
 
+const confirmWithModal = (message) => new Promise((resolve) => {
+  const overlay = document.createElement("div");
+  overlay.className = "modal-overlay";
+
+  const modal = document.createElement("div");
+  modal.className = "modal";
+  modal.setAttribute("role", "dialog");
+  modal.setAttribute("aria-modal", "true");
+  modal.setAttribute("aria-labelledby", "confirm-action-title");
+
+  const title = document.createElement("h3");
+  title.id = "confirm-action-title";
+  title.textContent = "Confirm action";
+
+  const copy = document.createElement("p");
+  copy.textContent = message;
+
+  const actions = document.createElement("div");
+  actions.className = "modal-actions";
+
+  const cancel = document.createElement("button");
+  cancel.className = "button ghost";
+  cancel.type = "button";
+  cancel.textContent = "Cancel";
+
+  const confirm = document.createElement("button");
+  confirm.className = "button danger";
+  confirm.type = "button";
+  confirm.textContent = "Delete";
+
+  const close = (value) => {
+    document.removeEventListener("keydown", onKeyDown);
+    overlay.remove();
+    resolve(value);
+  };
+
+  const onKeyDown = (event) => {
+    if (event.key === "Escape") {
+      close(false);
+    }
+  };
+
+  cancel.addEventListener("click", () => close(false));
+  confirm.addEventListener("click", () => close(true));
+  overlay.addEventListener("click", (event) => {
+    if (event.target === overlay) {
+      close(false);
+    }
+  });
+  document.addEventListener("keydown", onKeyDown);
+
+  actions.append(cancel, confirm);
+  modal.append(title, copy, actions);
+  overlay.append(modal);
+  document.body.append(overlay);
+  cancel.focus();
+});
+
 document.querySelectorAll("[data-confirm-message]").forEach((form) => {
-  form.addEventListener("submit", (event) => {
+  form.addEventListener("submit", async (event) => {
+    if (form.dataset.confirmed === "yes") {
+      delete form.dataset.confirmed;
+      return;
+    }
+    event.preventDefault();
     const message = form.dataset.confirmMessage || "Continue with this action?";
-    if (!window.confirm(message)) {
-      event.preventDefault();
+    if (await confirmWithModal(message)) {
+      form.dataset.confirmed = "yes";
+      form.submit();
     }
   });
 });
