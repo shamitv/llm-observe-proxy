@@ -2,9 +2,10 @@
 
 ## Overview
 
-This plan breaks the v0.5 admin UI redesign into **6 sequential phases**, each independently
+This plan breaks the v0.5 admin UI redesign into **7 sequential phases**, each independently
 verifiable. Phases are ordered so that each one builds on the previous: data model first,
-then engine, then API, then UI foundation, then tab content, then polish.
+then engine, then API, then UI foundation, then tab content, then polish, then
+after-implementation review fixes.
 
 ## Phase Summary
 
@@ -16,6 +17,7 @@ then engine, then API, then UI foundation, then tab content, then polish.
 | 4 | [UI Foundation](phase-4-ui-foundation/plan.md) | App shell & CSS | Sidebar, tabs, connection summary, design system, status badges |
 | 5 | [Tab Implementations](phase-5-tab-implementations/plan.md) | Core UI tabs | Server, Providers, and Routing tab templates and wiring |
 | 6 | [Polish & Remaining](phase-6-polish/plan.md) | Fit & finish | Pricing tab, confirmation modals, accessibility, responsive, documentation |
+| 7 | [After-Implementation Review & Fixes](phase-7-after-implementation-review-and-fixes/plan.md) | Audit fixes | Firefox fallback provider UX, icon parity, related tests and docs |
 
 ## Dependency Graph
 
@@ -26,6 +28,7 @@ graph LR
     P3 --> P4["Phase 4: UI Foundation"]
     P4 --> P5["Phase 5: Tab UIs"]
     P5 --> P6["Phase 6: Polish"]
+    P6 --> P7["Phase 7: Review Fixes"]
 ```
 
 ## Phase Details
@@ -136,6 +139,22 @@ graph LR
 
 ---
 
+### Phase 7 — After-Implementation Review & Fixes
+
+**Goal**: Address the Linux Firefox after-implementation audit findings.
+
+- Keep fallback provider controls usable in Firefox and return saves to the originating tab
+- Replace Settings initials/text-only mockup placeholders with server-rendered SVG icons
+- Add provider icon badges and action-control icons while preserving accessible labels
+- Add focused tests for fallback redirects, enhanced select markup, and icon rendering
+
+**Inputs**: Phase 6 completed Settings UI, after-implementation audit
+**Outputs**: Firefox fallback UX fixes, icon parity, tests, docs
+**Plan**: [phase-7-after-implementation-review-and-fixes/plan.md](phase-7-after-implementation-review-and-fixes/plan.md)
+**TODO**: [phase-7-after-implementation-review-and-fixes/todo.md](phase-7-after-implementation-review-and-fixes/todo.md)
+
+---
+
 ## Quality Gates
 
 Each phase must pass before proceeding to the next:
@@ -155,7 +174,8 @@ main
       ├── phase-3 commits (backend API)
       ├── phase-4 commits (UI foundation)
       ├── phase-5 commits (tab UIs)
-      └── phase-6 commits (polish)
+      ├── phase-6 commits (polish)
+      └── phase-7 commits (review fixes)
 ```
 
-Merge to main after Phase 6 passes all quality gates.
+Merge to main after Phase 7 passes all quality gates.

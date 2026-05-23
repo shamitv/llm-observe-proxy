@@ -214,6 +214,100 @@ def test_settings_tabs_render_new_shell(
     assert heading in response.text
 
 
+@pytest.mark.parametrize(
+    ("tab", "return_to"),
+    [
+        ("server", "/admin/settings/server"),
+        ("routing", "/admin/settings/routing"),
+        ("providers", "/admin/settings/providers"),
+    ],
+)
+def test_fallback_forms_render_provider_options_and_return_target(
+    proxy_client: TestClient,
+    tab: str,
+    return_to: str,
+) -> None:
+    response = proxy_client.get(f"/admin/settings/{tab}")
+
+    assert response.status_code == 200
+    assert 'action="/admin/settings/upstream-defaults"' in response.text
+    assert f'name="return_to" value="{return_to}"' in response.text
+    assert 'select name="default_provider_slug" data-enhanced-select' in response.text
+    assert '<option value="openai"' in response.text
+    assert "OpenAI" in response.text
+
+
+@pytest.mark.parametrize(
+    "return_to",
+    ["/admin/settings/server", "/admin/settings/routing", "/admin/settings/providers"],
+)
+def test_fallback_defaults_redirect_to_originating_settings_tab(
+    proxy_client: TestClient,
+    return_to: str,
+) -> None:
+    response = proxy_client.post(
+        "/admin/settings/upstream-defaults",
+        data={
+            "upstream_url": GLOBAL_UPSTREAM_URL,
+            "default_provider_slug": "openai",
+            "default_model": "gpt-test",
+            "fallback_enabled": "yes",
+            "return_to": return_to,
+        },
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == return_to
+
+
+def test_fallback_defaults_invalid_return_target_uses_server_tab(
+    proxy_client: TestClient,
+) -> None:
+    response = proxy_client.post(
+        "/admin/settings/upstream-defaults",
+        data={
+            "upstream_url": GLOBAL_UPSTREAM_URL,
+            "default_provider_slug": "openai",
+            "default_model": "gpt-test",
+            "return_to": "/admin/requests/1",
+        },
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/admin/settings/server"
+
+
+def test_settings_shell_and_action_icons_render_as_svg(proxy_client: TestClient) -> None:
+    response = proxy_client.get("/admin/settings/providers")
+
+    assert response.status_code == 200
+    assert response.text.count("<svg") >= 12
+    assert 'class="nav-icon"' in response.text
+    assert 'class="summary-icon"' in response.text
+    assert "provider-icon-badge provider-icon-openai" in response.text
+    assert 'class="button primary button-primary" href="#provider-editor"' in response.text
+    assert 'class="button-icon"' in response.text
+    assert 'class="field-icon"' in response.text
+
+
+def test_enhanced_fallback_select_keeps_native_select_as_form_source(
+    proxy_client: TestClient,
+) -> None:
+    response = proxy_client.get("/admin/settings/routing")
+    app_js = Path("src/llm_observe_proxy/static/app.js").read_text(encoding="utf-8")
+    styles = Path("src/llm_observe_proxy/static/styles.css").read_text(encoding="utf-8")
+
+    assert response.status_code == 200
+    assert 'select name="default_provider_slug" data-enhanced-select' in response.text
+    assert 'name="default_provider_slug"' in response.text
+    assert 'select.value = option.dataset.value || "";' in app_js
+    assert 'select.dispatchEvent(new Event("change", { bubbles: true }));' in app_js
+    assert ".enhanced-select-menu[hidden]" in styles
+    assert "display: none;" in styles
+
+
 def test_settings_renders_model_routes_without_secret_values(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

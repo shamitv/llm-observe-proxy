@@ -1,6 +1,7 @@
 {% extends "settings_base.html" %}
 {% import "_connection_summary.html" as summaries %}
 {% import "_status_badge.html" as badges %}
+{% import "_icons.html" as icons %}
 {% block summary_cards %}
 {{ summaries.summary_card("$", "Pricing rows", model_prices | length | compact_number, "Provider/model entries") }}
 {{ summaries.summary_card("PV", "Providers", providers | length | compact_number, "Available registries") }}
@@ -15,12 +16,12 @@
         <h2>Model Pricing</h2>
         <p>Scalar rates plus optional token-count tiers for what-if cost comparisons.</p>
       </div>
-      <a class="button primary button-primary" href="#price-editor">Add price</a>
+      <a class="button primary button-primary" href="#price-editor">{{ icons.icon("plus", class_name="button-icon") }}<span>Add price</span></a>
     </div>
     <div class="filter-row">
       <label class="search-bar">
         <span>Search pricing</span>
-        <input data-table-filter="pricing-table" placeholder="Search models, providers, aliases..." aria-label="Search pricing">
+        <span class="field-with-icon">{{ icons.icon("search", class_name="field-icon") }}<input data-table-filter="pricing-table" placeholder="Search models, providers, aliases..." aria-label="Search pricing"></span>
       </label>
       <label>
         <span>Provider</span>
@@ -83,7 +84,7 @@
                     </div>
                     <form method="post" action="/admin/settings/model-price-tiers/delete" data-confirm-message="Delete tier {{ tier.label | default(tier.range, true) }} for {{ price.model }}?">
                       <input type="hidden" name="tier_id" value="{{ tier.id }}">
-                      <button class="button danger compact-button button-danger" type="submit">Delete</button>
+                      <button class="button danger compact-button button-danger" type="submit">{{ icons.icon("trash", class_name="button-icon") }}<span>Delete</span></button>
                     </form>
                   </div>
                   {% endfor %}
@@ -103,7 +104,7 @@
                   <label><span>Checked at</span><input name="checked_at" placeholder="YYYY-MM-DD"></label>
                   <label><span>Released</span><input name="release_date" placeholder="YYYY-MM-DD"></label>
                   <label class="wide"><span>Notes</span><input name="notes" placeholder="Tier note"></label>
-                  <button class="button ghost compact-button button-ghost" type="submit">Add tier</button>
+                  <button class="button ghost compact-button button-ghost" type="submit">{{ icons.icon("plus", class_name="button-icon") }}<span>Add tier</span></button>
                 </form>
               </details>
             </td>
@@ -112,7 +113,7 @@
               <form method="post" action="/admin/settings/model-prices/delete" data-confirm-message="Delete pricing for {{ price.provider_name }}/{{ price.model }}?">
                 <input type="hidden" name="provider_slug" value="{{ price.provider_slug }}">
                 <input type="hidden" name="model" value="{{ price.model }}">
-                <button class="button danger compact-button button-danger" type="submit">Delete</button>
+                <button class="button danger compact-button button-danger" type="submit">{{ icons.icon("trash", class_name="button-icon") }}<span>Delete</span></button>
               </form>
             </td>
           </tr>
@@ -176,7 +177,7 @@
       </label>
     </div>
     <div class="button-row">
-      <button class="button primary button-primary" type="submit">Save price</button>
+      <button class="button primary button-primary" type="submit">{{ icons.icon("settings", class_name="button-icon") }}<span>Save price</span></button>
     </div>
   </form>
 </section>

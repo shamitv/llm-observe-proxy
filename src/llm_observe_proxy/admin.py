@@ -239,6 +239,9 @@ templates.env.filters["utc_iso"] = format_utc_iso
 templates.env.filters["usd"] = format_usd
 
 router = APIRouter(prefix="/admin", include_in_schema=False)
+SETTINGS_FALLBACK_RETURN_PATHS = frozenset(
+    {"/admin/settings/server", "/admin/settings/routing", "/admin/settings/providers"}
+)
 
 TEST_PROMPT_DEFAULT = "Reply with a short upstream connectivity check."
 TEST_IMAGE_DATA_URL = (
@@ -669,6 +672,7 @@ async def update_upstream_defaults(
     default_provider_slug: str = Form(""),
     default_model: str = Form(""),
     fallback_enabled: str | None = Form("yes"),
+    return_to: str = Form("/admin/settings/server"),
 ) -> HTMLResponse:
     try:
         normalized = normalize_upstream_url(upstream_url)
@@ -683,7 +687,11 @@ async def update_upstream_defaults(
             set_fallback_enabled(session, fallback_is_enabled)
     except ValueError as exc:
         return await _settings_with_error(request, str(exc))
-    return RedirectResponse("/admin/settings/server", status_code=303)
+    return RedirectResponse(_settings_fallback_return_path(return_to), status_code=303)
+
+
+def _settings_fallback_return_path(value: str) -> str:
+    return value if value in SETTINGS_FALLBACK_RETURN_PATHS else "/admin/settings/server"
 
 
 @router.post("/settings/compat-fixes", response_class=HTMLResponse)

@@ -1,6 +1,8 @@
 {% extends "settings_base.html" %}
 {% import "_connection_summary.html" as summaries %}
 {% import "_status_badge.html" as badges %}
+{% import "_fallback_defaults_form.html" as fallback_forms %}
+{% import "_icons.html" as icons %}
 {% block summary_cards %}
 {{ summaries.summary_card("PV", "Active providers", summary.active_providers | compact_number, "Across all environments") }}
 {{ summaries.summary_card("DF", "Default provider", fallback.provider_name | default("No provider", true), "Used for fallback", true) }}
@@ -15,12 +17,12 @@
         <h2>Provider Registry</h2>
         <p>Base URLs, auth environment variables, capabilities, and fallback status.</p>
       </div>
-      <a class="button primary button-primary" href="#provider-editor">Add provider</a>
+      <a class="button primary button-primary" href="#provider-editor">{{ icons.icon("plus", class_name="button-icon") }}<span>Add provider</span></a>
     </div>
     <div class="filter-row">
       <label class="search-bar">
         <span>Search providers</span>
-        <input data-table-filter="providers-table" placeholder="Search providers..." aria-label="Search providers">
+        <span class="field-with-icon">{{ icons.icon("search", class_name="field-icon") }}<input data-table-filter="providers-table" placeholder="Search providers..." aria-label="Search providers"></span>
       </label>
       <label>
         <span>Status</span>
@@ -57,7 +59,7 @@
           {% for provider in providers %}
           {% set usage = provider_usage | selectattr("provider_slug", "equalto", provider.slug) | list | first %}
           <tr data-search-text="{{ provider.name }} {{ provider.slug }} {{ provider.upstream_url }} {{ provider.currency }}" data-status="{{ 'active' if provider.active else 'inactive' }}" data-currency="{{ provider.currency }}" data-provider-row data-provider-slug="{{ provider.slug }}" data-provider-name="{{ provider.name }}" data-provider-url="{{ provider.upstream_url | default('', true) }}" data-provider-currency="{{ provider.currency }}" data-provider-api-key-env="{{ provider.api_key_env | default('', true) }}" data-provider-active="{{ 'yes' if provider.active else 'no' }}" data-provider-default="{{ 'yes' if provider.is_default_fallback else 'no' }}" data-provider-text="{{ 'yes' if provider.capabilities.text else 'no' }}" data-provider-vision="{{ 'yes' if provider.capabilities.vision else 'no' }}" data-provider-tool-calling="{{ 'yes' if provider.capabilities.tool_calling else 'no' }}">
-            <td><strong>{{ provider.name }}</strong>{% if provider.is_default_fallback %}<small>Default fallback</small>{% endif %}</td>
+            <td><span class="provider-name-cell">{{ icons.provider_badge(provider.slug, provider.name) }}<span><strong>{{ provider.name }}</strong>{% if provider.is_default_fallback %}<small>Default fallback</small>{% endif %}</span></span></td>
             <td><code>{{ provider.slug }}</code></td>
             <td><code>{{ provider.upstream_url | default("-", true) }}</code></td>
             <td>{{ provider.currency }}</td>
@@ -66,7 +68,7 @@
             <td>
               <form method="post" action="/admin/settings/providers/delete" data-confirm-message="Delete provider {{ provider.name }}? This may affect routes and pricing entries.">
                 <input type="hidden" name="slug" value="{{ provider.slug }}">
-                <button class="button danger compact-button button-danger" type="submit">Delete</button>
+                <button class="button danger compact-button button-danger" type="submit">{{ icons.icon("trash", class_name="button-icon") }}<span>Delete</span></button>
               </form>
             </td>
           </tr>
@@ -125,45 +127,23 @@
     </fieldset>
     <p class="muted">A default fallback provider must be active and should have a reachable OpenAI-compatible base URL.</p>
     <div class="button-row">
-      <button class="button primary button-primary" type="submit">Save provider</button>
-      <button class="button ghost button-ghost" type="button" data-run-provider-test>Test provider</button>
-      <button class="button ghost button-ghost" type="button" data-clear-provider-editor>Clear</button>
+      <button class="button primary button-primary" type="submit">{{ icons.icon("settings", class_name="button-icon") }}<span>Save provider</span></button>
+      <button class="button ghost button-ghost" type="button" data-run-provider-test>{{ icons.icon("play", class_name="button-icon") }}<span>Test provider</span></button>
+      <button class="button ghost button-ghost" type="button" data-clear-provider-editor>{{ icons.icon("runs", class_name="button-icon") }}<span>Clear</span></button>
     </div>
   </form>
 
-  <form class="card form-card" method="post" action="/admin/settings/upstream-defaults">
-    <div class="card-header">
-      <div>
-        <h2>Fallback Defaults</h2>
-        <p>Route misses can use a default provider and model.</p>
-      </div>
-      {{ badges.status_badge("Enabled" if fallback_enabled else "Inactive") }}
-    </div>
-    <input type="hidden" name="upstream_url" value="{{ upstream_url }}">
-    <div class="form-grid two-col">
-      <label class="form-field">
-        <span>Default provider</span>
-        <select name="default_provider_slug">
-          <option value="">No default provider</option>
-          {% for provider in providers %}
-          <option value="{{ provider.slug }}" {% if default_provider_slug == provider.slug %}selected{% endif %}>{{ provider.name }}</option>
-          {% endfor %}
-        </select>
-      </label>
-      <label class="form-field">
-        <span>Default model</span>
-        <input name="default_model" value="{{ default_model }}" placeholder="qwen/qwen3.6-35b">
-      </label>
-      <label class="check switch-line">
-        <input type="hidden" name="fallback_enabled" value="no">
-        <input type="checkbox" name="fallback_enabled" value="yes" {% if fallback_enabled %}checked{% endif %}>
-        <span>Enable fallback routing</span>
-      </label>
-    </div>
-    <div class="button-row">
-      <button class="button primary button-primary" type="submit">Save fallback defaults</button>
-    </div>
-  </form>
+  {{ fallback_forms.fallback_defaults_form(
+    "Fallback Defaults",
+    "Route misses can use a default provider and model.",
+    providers,
+    default_provider_slug,
+    default_model,
+    fallback_enabled,
+    upstream_url,
+    "/admin/settings/providers",
+    "Save fallback defaults"
+  ) }}
 
   <article class="card diagnostics-card health-card">
     <div class="card-header">
@@ -171,7 +151,7 @@
         <h2>Provider Health / Diagnostics</h2>
         <p>Lightweight checks call each configured provider's <code>/models</code> endpoint.</p>
       </div>
-      <button class="button ghost button-ghost" type="button" data-provider-health>Run health checks</button>
+      <button class="button ghost button-ghost" type="button" data-provider-health>{{ icons.icon("play", class_name="button-icon") }}<span>Run health checks</span></button>
     </div>
     <div class="table-shell">
       <table class="data-table" data-provider-health-table>
@@ -206,7 +186,7 @@
         <h2>Recent Provider Usage</h2>
         <p>Requests, estimated cost, and active routes since local midnight.</p>
       </div>
-      <a class="button ghost button-ghost" href="/admin">View requests</a>
+      <a class="button ghost button-ghost" href="/admin">{{ icons.icon("requests", class_name="button-icon") }}<span>View requests</span></a>
     </div>
     <div class="table-shell">
       <table class="data-table">

@@ -482,6 +482,210 @@ document.querySelectorAll("[data-table-filter], [data-table-status-filter], [dat
   control.addEventListener("change", () => applyTableFilters(tableId));
 });
 
+const closeEnhancedSelects = (except = null) => {
+  document.querySelectorAll(".enhanced-select").forEach((wrapper) => {
+    if (wrapper === except) {
+      return;
+    }
+    const button = wrapper.querySelector(".enhanced-select-button");
+    const menu = wrapper.querySelector(".enhanced-select-menu");
+    button?.setAttribute("aria-expanded", "false");
+    if (menu) {
+      menu.hidden = true;
+      menu.classList.remove("opens-up");
+    }
+  });
+};
+
+const activeEnhancedOption = (wrapper) => wrapper.querySelector(".enhanced-select-option.is-active");
+
+const setEnhancedActiveOption = (wrapper, index) => {
+  const options = Array.from(wrapper.querySelectorAll(".enhanced-select-option"));
+  if (!options.length) {
+    return;
+  }
+  const nextIndex = Math.max(0, Math.min(index, options.length - 1));
+  options.forEach((option) => option.classList.remove("is-active"));
+  options[nextIndex].classList.add("is-active");
+  options[nextIndex].scrollIntoView({ block: "nearest" });
+};
+
+const updateEnhancedSelectLabel = (wrapper) => {
+  const select = wrapper.querySelector("select");
+  const label = wrapper.querySelector(".button-label");
+  if (!select || !label) {
+    return;
+  }
+  label.textContent = select.selectedOptions[0]?.textContent?.trim() || "Select provider";
+  wrapper.querySelectorAll(".enhanced-select-option").forEach((option) => {
+    const selected = option.dataset.value === select.value;
+    option.setAttribute("aria-selected", selected ? "true" : "false");
+    option.classList.toggle("is-active", selected);
+  });
+};
+
+const openEnhancedSelect = (wrapper) => {
+  closeEnhancedSelects(wrapper);
+  const button = wrapper.querySelector(".enhanced-select-button");
+  const menu = wrapper.querySelector(".enhanced-select-menu");
+  if (!button || !menu) {
+    return;
+  }
+  menu.hidden = false;
+  button.setAttribute("aria-expanded", "true");
+  const buttonRect = button.getBoundingClientRect();
+  const roomBelow = window.innerHeight - buttonRect.bottom;
+  menu.classList.toggle("opens-up", roomBelow < Math.min(260, menu.scrollHeight + 20));
+  if (!activeEnhancedOption(wrapper)) {
+    setEnhancedActiveOption(wrapper, 0);
+  }
+};
+
+const closeEnhancedSelect = (wrapper, focusButton = false) => {
+  const button = wrapper.querySelector(".enhanced-select-button");
+  const menu = wrapper.querySelector(".enhanced-select-menu");
+  button?.setAttribute("aria-expanded", "false");
+  if (menu) {
+    menu.hidden = true;
+    menu.classList.remove("opens-up");
+  }
+  if (focusButton) {
+    button?.focus();
+  }
+};
+
+const selectEnhancedOption = (wrapper, option) => {
+  const select = wrapper.querySelector("select");
+  if (!select || !option) {
+    return;
+  }
+  select.value = option.dataset.value || "";
+  select.dispatchEvent(new Event("change", { bubbles: true }));
+  updateEnhancedSelectLabel(wrapper);
+  closeEnhancedSelect(wrapper, true);
+};
+
+const moveEnhancedSelect = (wrapper, direction) => {
+  const options = Array.from(wrapper.querySelectorAll(".enhanced-select-option"));
+  const current = options.indexOf(activeEnhancedOption(wrapper));
+  const fallback = direction > 0 ? -1 : options.length;
+  setEnhancedActiveOption(wrapper, (current === -1 ? fallback : current) + direction);
+};
+
+document.querySelectorAll("select[data-enhanced-select]").forEach((select, index) => {
+  const wrapper = document.createElement("div");
+  wrapper.className = "enhanced-select";
+  wrapper.dataset.enhancedSelectFor = select.name || `enhanced-select-${index}`;
+  select.parentNode.insertBefore(wrapper, select);
+  wrapper.append(select);
+  select.classList.add("native-select");
+
+  const button = document.createElement("button");
+  const menu = document.createElement("div");
+  const label = document.createElement("span");
+  const icon = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  const menuId = `enhanced-select-menu-${index}`;
+
+  button.type = "button";
+  button.className = "enhanced-select-button";
+  button.setAttribute("aria-haspopup", "listbox");
+  button.setAttribute("aria-expanded", "false");
+  button.setAttribute("aria-controls", menuId);
+  label.className = "button-label";
+  icon.setAttribute("class", "ui-icon");
+  icon.setAttribute("viewBox", "0 0 24 24");
+  icon.setAttribute("fill", "none");
+  icon.setAttribute("stroke", "currentColor");
+  icon.setAttribute("stroke-width", "2");
+  icon.setAttribute("stroke-linecap", "round");
+  icon.setAttribute("stroke-linejoin", "round");
+  icon.setAttribute("aria-hidden", "true");
+  path.setAttribute("d", "m6 9 6 6 6-6");
+  icon.append(path);
+  button.append(label, icon);
+
+  menu.id = menuId;
+  menu.className = "enhanced-select-menu";
+  menu.setAttribute("role", "listbox");
+  menu.setAttribute("aria-label", select.dataset.enhancedSelectLabel || select.name || "Options");
+  menu.hidden = true;
+
+  Array.from(select.options).forEach((nativeOption) => {
+    const option = document.createElement("button");
+    option.type = "button";
+    option.className = "enhanced-select-option";
+    option.setAttribute("role", "option");
+    option.dataset.value = nativeOption.value;
+    option.textContent = nativeOption.textContent.trim();
+    option.addEventListener("click", () => selectEnhancedOption(wrapper, option));
+    option.addEventListener("keydown", (event) => {
+      if (event.key === "ArrowDown") {
+        event.preventDefault();
+        moveEnhancedSelect(wrapper, 1);
+      } else if (event.key === "ArrowUp") {
+        event.preventDefault();
+        moveEnhancedSelect(wrapper, -1);
+      } else if (event.key === "Home") {
+        event.preventDefault();
+        setEnhancedActiveOption(wrapper, 0);
+      } else if (event.key === "End") {
+        event.preventDefault();
+        setEnhancedActiveOption(wrapper, menu.querySelectorAll(".enhanced-select-option").length - 1);
+      } else if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        selectEnhancedOption(wrapper, activeEnhancedOption(wrapper) || option);
+      } else if (event.key === "Escape") {
+        event.preventDefault();
+        closeEnhancedSelect(wrapper, true);
+      }
+    });
+    menu.append(option);
+  });
+
+  button.addEventListener("click", () => {
+    if (menu.hidden) {
+      openEnhancedSelect(wrapper);
+      return;
+    }
+    closeEnhancedSelect(wrapper);
+  });
+  button.addEventListener("keydown", (event) => {
+    if ((event.key === "Enter" || event.key === " ") && !menu.hidden) {
+      event.preventDefault();
+      selectEnhancedOption(wrapper, activeEnhancedOption(wrapper));
+    } else if (event.key === "ArrowDown") {
+      event.preventDefault();
+      openEnhancedSelect(wrapper);
+      moveEnhancedSelect(wrapper, 1);
+    } else if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      openEnhancedSelect(wrapper);
+    } else if (event.key === "ArrowUp") {
+      event.preventDefault();
+      openEnhancedSelect(wrapper);
+      moveEnhancedSelect(wrapper, -1);
+    } else if (event.key === "Escape") {
+      closeEnhancedSelect(wrapper);
+    }
+  });
+  select.addEventListener("change", () => updateEnhancedSelectLabel(wrapper));
+  wrapper.append(button, menu);
+  updateEnhancedSelectLabel(wrapper);
+});
+
+document.addEventListener("click", (event) => {
+  if (!event.target.closest(".enhanced-select")) {
+    closeEnhancedSelects();
+  }
+});
+
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") {
+    closeEnhancedSelects();
+  }
+});
+
 const setFieldValue = (form, selector, value) => {
   const field = form.querySelector(selector);
   if (!field) {
@@ -604,6 +808,7 @@ document.querySelectorAll("[data-route-simulator]").forEach((form) => {
 document.querySelectorAll("[data-provider-health]").forEach((button) => {
   button.addEventListener("click", async () => {
     const tables = document.querySelectorAll("[data-provider-health-table] tbody");
+    const originalMarkup = button.innerHTML;
     button.disabled = true;
     button.textContent = "Checking...";
     try {
@@ -631,7 +836,7 @@ document.querySelectorAll("[data-provider-health]").forEach((button) => {
       window.alert("Provider health checks are unavailable.");
     } finally {
       button.disabled = false;
-      button.textContent = "Run health checks";
+      button.innerHTML = originalMarkup;
     }
   });
 });

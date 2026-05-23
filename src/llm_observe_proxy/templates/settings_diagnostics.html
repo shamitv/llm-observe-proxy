@@ -1,6 +1,7 @@
 {% extends "settings_base.html" %}
 {% import "_connection_summary.html" as summaries %}
 {% import "_status_badge.html" as badges %}
+{% import "_icons.html" as icons %}
 {% block summary_cards %}
 {{ summaries.summary_card("HC", "Provider checks", providers | length | compact_number, "Lightweight /models checks") }}
 {{ summaries.summary_card("RT", "Active routes", summary.active_routes | compact_number, "Available for simulation") }}
@@ -15,7 +16,7 @@
         <h2>Provider Health Overview</h2>
         <p>Read-only status for configured providers.</p>
       </div>
-      <button class="button ghost button-ghost" type="button" data-provider-health>Run all health checks</button>
+      <button class="button ghost button-ghost" type="button" data-provider-health>{{ icons.icon("play", class_name="button-icon") }}<span>Run all health checks</span></button>
     </div>
     <div class="table-shell">
       <table class="data-table" data-provider-health-table>
@@ -63,9 +64,9 @@
       </label>
     </div>
     <div class="button-row">
-      <button class="button primary button-primary" type="submit" name="test_kind" value="simple">Simple message</button>
-      <button class="button ghost button-ghost" type="submit" name="test_kind" value="image">Image message</button>
-      <button class="button ghost button-ghost" type="submit" name="test_kind" value="tools">Function call</button>
+      <button class="button primary button-primary" type="submit" name="test_kind" value="simple">{{ icons.icon("play", class_name="button-icon") }}<span>Simple message</span></button>
+      <button class="button ghost button-ghost" type="submit" name="test_kind" value="image">{{ icons.icon("play", class_name="button-icon") }}<span>Image message</span></button>
+      <button class="button ghost button-ghost" type="submit" name="test_kind" value="tools">{{ icons.icon("play", class_name="button-icon") }}<span>Function call</span></button>
     </div>
     {% if test_result %}
     <div class="test-result result-panel">
@@ -98,7 +99,7 @@
         <span>Incoming model to test</span>
         <input name="model" value="{{ test_model | default('gpt-test', true) }}" required>
       </label>
-      <button class="button primary button-primary" type="submit">Run simulation</button>
+      <button class="button primary button-primary" type="submit">{{ icons.icon("play", class_name="button-icon") }}<span>Run simulation</span></button>
     </form>
     <div class="result-panel" data-route-simulator-result>
       <p class="muted">Simulation results will appear here.</p>

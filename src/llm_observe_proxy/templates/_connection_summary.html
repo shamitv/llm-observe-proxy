@@ -1,6 +1,28 @@
+{% import "_icons.html" as icons %}
 {% macro summary_card(icon, label, value, helper="", highlighted=false) %}
+{% set normalized = icon | string | lower %}
+{% set icon_name = normalized %}
+{% if normalized in ["in", "listener"] %}
+  {% set icon_name = "listener" %}
+{% elif normalized in ["cl", "client"] %}
+  {% set icon_name = "client" %}
+{% elif normalized in ["fb", "df", "fallback"] %}
+  {% set icon_name = "fallback" %}
+{% elif normalized in ["db", "rows", "old", "fs", "data"] %}
+  {% set icon_name = "database" %}
+{% elif normalized in ["rt", "route", "routing"] %}
+  {% set icon_name = "routing" %}
+{% elif normalized in ["md", "model"] %}
+  {% set icon_name = "model" %}
+{% elif normalized in ["pv", "provider", "providers"] %}
+  {% set icon_name = "providers" %}
+{% elif normalized in ["hc", "health"] %}
+  {% set icon_name = "health" %}
+{% elif normalized in ["$", "pricing"] %}
+  {% set icon_name = "pricing" %}
+{% endif %}
 <div class="summary-card {{ 'highlighted' if highlighted else '' }}">
-  <div class="summary-icon" aria-hidden="true">{{ icon }}</div>
+  <div class="summary-icon" aria-hidden="true">{{ icons.icon(icon_name, class_name="ui-icon summary-svg") }}</div>
   <div class="summary-body">
     <span class="summary-label">{{ label }}</span>
     <strong class="summary-value">{{ value }}</strong>

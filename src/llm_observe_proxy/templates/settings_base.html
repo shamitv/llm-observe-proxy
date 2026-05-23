@@ -1,13 +1,14 @@
 {% extends "base.html" %}
 {% import "_connection_summary.html" as summaries %}
+{% import "_icons.html" as icons %}
 {% block app_body %}
 {% set tab_items = [
-  ("server", "Server", "/admin/settings/server", "S"),
-  ("routing", "Routing", "/admin/settings/routing", "R"),
-  ("providers", "Providers", "/admin/settings/providers", "P"),
-  ("pricing", "Pricing", "/admin/settings/pricing", "$"),
-  ("diagnostics", "Diagnostics", "/admin/settings/diagnostics", "D"),
-  ("data", "Data", "/admin/settings/data", "DB")
+  ("server", "Server", "/admin/settings/server", "server"),
+  ("routing", "Routing", "/admin/settings/routing", "routing"),
+  ("providers", "Providers", "/admin/settings/providers", "providers"),
+  ("pricing", "Pricing", "/admin/settings/pricing", "pricing"),
+  ("diagnostics", "Diagnostics", "/admin/settings/diagnostics", "diagnostics"),
+  ("data", "Data", "/admin/settings/data", "data")
 ] %}
 <aside class="settings-sidebar" aria-label="Settings sections">
   <div class="sidebar-header">
@@ -17,7 +18,7 @@
   <nav class="sidebar-nav">
     {% for key, label, href, icon in tab_items %}
     <a class="sidebar-nav-item {{ 'active' if settings_tab == key else '' }}" href="{{ href }}">
-      <span class="nav-icon" aria-hidden="true">{{ icon }}</span>
+      <span class="nav-icon" aria-hidden="true">{{ icons.icon(icon, class_name="ui-icon sidebar-svg") }}</span>
       <span>{{ label }}</span>
     </a>
     {% endfor %}
@@ -57,7 +58,7 @@
   <nav class="tab-bar" aria-label="Settings tabs">
     {% for key, label, href, icon in tab_items %}
     <a class="tab-item {{ 'active' if settings_tab == key else '' }}" href="{{ href }}">
-      <span aria-hidden="true">{{ icon }}</span>
+      <span aria-hidden="true">{{ icons.icon(icon, class_name="ui-icon tab-svg") }}</span>
       <span>{{ label }}</span>
     </a>
     {% endfor %}

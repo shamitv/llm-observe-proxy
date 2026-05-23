@@ -1,5 +1,7 @@
 {% extends "settings_base.html" %}
 {% import "_status_badge.html" as badges %}
+{% import "_fallback_defaults_form.html" as fallback_forms %}
+{% import "_icons.html" as icons %}
 {% block settings_content %}
 <section class="settings-grid v05-grid">
   <form class="card form-card" method="post" action="/admin/settings/incoming">
@@ -24,7 +26,7 @@
     <p class="warning-copy">Network exposed. Use only on trusted networks.</p>
     {% endif %}
     <div class="button-row">
-      <button class="button primary button-primary" type="submit">Save listener settings</button>
+      <button class="button primary button-primary" type="submit">{{ icons.icon("settings", class_name="button-icon") }}<span>Save listener settings</span></button>
     </div>
   </form>
 
@@ -36,49 +38,25 @@
       </div>
     </div>
     <div class="button-row">
-      <a class="button ghost button-ghost" href="/admin/settings/providers">Model Providers</a>
-      <a class="button ghost button-ghost" href="/admin/settings/pricing">Model Pricing</a>
-      <a class="button ghost button-ghost" href="/admin/settings/routing">Model Routes</a>
+      <a class="button ghost button-ghost" href="/admin/settings/providers">{{ icons.icon("providers", class_name="button-icon") }}<span>Model Providers</span></a>
+      <a class="button ghost button-ghost" href="/admin/settings/pricing">{{ icons.icon("pricing", class_name="button-icon") }}<span>Model Pricing</span></a>
+      <a class="button ghost button-ghost" href="/admin/settings/routing">{{ icons.icon("routing", class_name="button-icon") }}<span>Model Routes</span></a>
     </div>
   </article>
 
-  <form class="card form-card" method="post" action="/admin/settings/upstream-defaults">
-    <div class="card-header">
-      <div>
-        <h2>Global Upstream Fallback Defaults</h2>
-        <p>Used when no exact or prefix route matches a request.</p>
-      </div>
-      {{ badges.status_badge("Enabled" if fallback_enabled else "Inactive") }}
-    </div>
-    <div class="form-grid two-col">
-      <label class="form-field wide">
-        <span>Global upstream URL</span>
-        <input name="upstream_url" value="{{ upstream_url }}" placeholder="http://localhost:8000/v1" required>
-      </label>
-      <label class="form-field">
-        <span>Default provider</span>
-        <select name="default_provider_slug">
-          <option value="">No default provider</option>
-          {% for provider in providers %}
-          <option value="{{ provider.slug }}" {% if default_provider_slug == provider.slug %}selected{% endif %}>{{ provider.name }}</option>
-          {% endfor %}
-        </select>
-      </label>
-      <label class="form-field">
-        <span>Default model</span>
-        <input name="default_model" value="{{ default_model }}" placeholder="qwen/qwen3.6-35b">
-      </label>
-      <label class="check switch-line">
-        <input type="hidden" name="fallback_enabled" value="no">
-        <input type="checkbox" name="fallback_enabled" value="yes" {% if fallback_enabled %}checked{% endif %}>
-        <span>Enable fallback routing</span>
-      </label>
-    </div>
-    <p class="muted">When no route matches, the proxy can send the request to {{ fallback.provider_name | default("the selected provider", true) }} as {{ default_model | default("the configured model", true) }}.</p>
-    <div class="button-row">
-      <button class="button primary button-primary" type="submit">Save upstream defaults</button>
-    </div>
-  </form>
+  {{ fallback_forms.fallback_defaults_form(
+    "Global Upstream Fallback Defaults",
+    "Used when no exact or prefix route matches a request.",
+    providers,
+    default_provider_slug,
+    default_model,
+    fallback_enabled,
+    upstream_url,
+    "/admin/settings/server",
+    "Save upstream defaults",
+    true,
+    "When no route matches, the proxy can send the request to " ~ (fallback.provider_name | default("the selected provider", true)) ~ " as " ~ (default_model | default("the configured model", true)) ~ "."
+  ) }}
 
   <form class="card form-card" method="post" action="/admin/settings/compat-fixes" data-fix-picker>
     <div class="card-header">
@@ -108,7 +86,7 @@
       </label>
     </details>
     <div class="button-row">
-      <button class="button primary button-primary" type="submit">Save fixes</button>
+      <button class="button primary button-primary" type="submit">{{ icons.icon("settings", class_name="button-icon") }}<span>Save fixes</span></button>
     </div>
   </form>
 
@@ -118,7 +96,7 @@
         <h2>Model Routes Summary</h2>
         <p>Showing {{ model_routes | length }} of {{ model_routes | length }} configured routes.</p>
       </div>
-      <a class="button ghost button-ghost" href="/admin/settings/routing">Add route</a>
+      <a class="button ghost button-ghost" href="/admin/settings/routing">{{ icons.icon("plus", class_name="button-icon") }}<span>Add route</span></a>
     </div>
     <div class="table-shell">
       <table class="data-table model-routes-table">
@@ -156,7 +134,7 @@
               <form method="post" action="/admin/settings/model-routes/delete" data-confirm-message="Delete route {{ route.model }}?">
                 <input type="hidden" name="route_id" value="{{ route.id }}">
                 <input type="hidden" name="model" value="{{ route.model }}">
-                <button class="button danger compact-button button-danger" type="submit">Delete</button>
+                <button class="button danger compact-button button-danger" type="submit">{{ icons.icon("trash", class_name="button-icon") }}<span>Delete</span></button>
               </form>
               {% else %}
               <span class="muted">Locked</span>
@@ -177,7 +155,7 @@
         <h2>Test Route / Diagnostics</h2>
         <p>Send a sample chat request through the configured resolution path.</p>
       </div>
-      <a class="button ghost button-ghost" href="/admin/settings/diagnostics">Diagnostics tab</a>
+      <a class="button ghost button-ghost" href="/admin/settings/diagnostics">{{ icons.icon("diagnostics", class_name="button-icon") }}<span>Diagnostics tab</span></a>
     </div>
     <div class="form-grid two-col">
       <label class="form-field">
@@ -190,9 +168,9 @@
       </label>
     </div>
     <div class="button-row">
-      <button class="button primary button-primary" type="submit" name="test_kind" value="simple">Run test</button>
-      <button class="button ghost button-ghost" type="submit" name="test_kind" value="image">Image message</button>
-      <button class="button ghost button-ghost" type="submit" name="test_kind" value="tools">Function call</button>
+      <button class="button primary button-primary" type="submit" name="test_kind" value="simple">{{ icons.icon("play", class_name="button-icon") }}<span>Run test</span></button>
+      <button class="button ghost button-ghost" type="submit" name="test_kind" value="image">{{ icons.icon("play", class_name="button-icon") }}<span>Image message</span></button>
+      <button class="button ghost button-ghost" type="submit" name="test_kind" value="tools">{{ icons.icon("play", class_name="button-icon") }}<span>Function call</span></button>
     </div>
     {% if test_result %}
     <div class="test-result result-panel">
@@ -232,8 +210,8 @@
     </div>
     <p class="muted">Older than {{ days }} days: <strong>{{ trim_count | compact_number }}</strong> row{{ "" if trim_count == 1 else "s" }} will be deleted.</p>
     <div class="button-row">
-      <button class="button danger button-danger" type="submit" data-danger-submit>Trim records</button>
-      <a class="button ghost button-ghost" href="/admin/settings/server?days={{ days }}">Refresh count</a>
+      <button class="button danger button-danger" type="submit" data-danger-submit>{{ icons.icon("trash", class_name="button-icon") }}<span>Trim records</span></button>
+      <a class="button ghost button-ghost" href="/admin/settings/server?days={{ days }}">{{ icons.icon("runs", class_name="button-icon") }}<span>Refresh count</span></a>
     </div>
   </form>
 </section>

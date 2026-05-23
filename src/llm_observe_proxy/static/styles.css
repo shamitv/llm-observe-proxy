@@ -35,6 +35,29 @@ pre {
   font-family: "JetBrains Mono", "SFMono-Regular", Consolas, monospace;
 }
 
+.ui-icon {
+  display: block;
+  width: 1em;
+  height: 1em;
+}
+
+.nav-link-icon,
+.button-icon,
+.field-icon {
+  flex: 0 0 auto;
+}
+
+.button-icon,
+.nav-link-icon {
+  width: 16px;
+  height: 16px;
+}
+
+.field-icon {
+  width: 17px;
+  height: 17px;
+}
+
 .topbar {
   position: sticky;
   top: 0;
@@ -88,6 +111,10 @@ pre {
 .nav a,
 .mode-tabs a,
 .button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
   min-height: 36px;
   padding: 8px 12px;
   border: 1px solid var(--line);
@@ -318,6 +345,27 @@ textarea {
   resize: vertical;
 }
 
+.field-with-icon {
+  position: relative;
+  display: block;
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 400;
+}
+
+.field-with-icon .field-icon {
+  position: absolute;
+  top: 50%;
+  left: 10px;
+  color: var(--muted);
+  pointer-events: none;
+  transform: translateY(-50%);
+}
+
+.field-with-icon input {
+  padding-left: 34px;
+}
+
 .check {
   display: flex;
   align-items: center;
@@ -333,9 +381,6 @@ textarea {
 }
 
 .button {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
   cursor: pointer;
   font: inherit;
 }
@@ -1146,6 +1191,18 @@ figcaption {
   font-weight: 900;
 }
 
+.sidebar-svg,
+.summary-svg,
+.tab-svg {
+  width: 16px;
+  height: 16px;
+}
+
+.summary-icon .summary-svg {
+  width: 18px;
+  height: 18px;
+}
+
 .sidebar-env-card {
   display: grid;
   gap: 4px;
@@ -1336,6 +1393,131 @@ fieldset legend,
   white-space: normal;
 }
 
+.fallback-provider-field {
+  position: relative;
+}
+
+.enhanced-select {
+  position: relative;
+}
+
+.enhanced-select .native-select {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: 0;
+  border: 0;
+  padding: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.enhanced-select-button {
+  display: flex;
+  width: 100%;
+  min-height: 38px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #ffffff;
+  color: var(--ink);
+  padding: 8px 10px;
+  font: inherit;
+  text-align: left;
+}
+
+.enhanced-select-button:hover {
+  border-color: var(--brand);
+}
+
+.enhanced-select-button .button-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.enhanced-select-button .ui-icon {
+  width: 16px;
+  height: 16px;
+  color: var(--muted);
+}
+
+.enhanced-select-menu {
+  position: absolute;
+  z-index: 70;
+  right: 0;
+  left: 0;
+  display: grid;
+  gap: 2px;
+  max-height: min(280px, 50vh);
+  margin-top: 6px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: var(--shadow);
+  padding: 6px;
+  overflow: auto;
+}
+
+.enhanced-select-menu[hidden] {
+  display: none;
+}
+
+.enhanced-select-menu.opens-up {
+  top: auto;
+  bottom: calc(100% + 6px);
+  margin-top: 0;
+}
+
+.enhanced-select-option {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ink);
+  padding: 8px 9px;
+  font: inherit;
+  text-align: left;
+}
+
+.enhanced-select-option:hover,
+.enhanced-select-option.is-active {
+  background: #eef9f8;
+  color: var(--brand-strong);
+}
+
+.enhanced-select-option[aria-selected="true"] {
+  font-weight: 800;
+}
+
+.enhanced-select-option[aria-selected="true"]::after {
+  content: "Selected";
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.fallback-helper {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-bottom: 0;
+}
+
+.inline-info-icon {
+  flex: 0 0 16px;
+  width: 16px;
+  height: 16px;
+  margin-top: 2px;
+  color: var(--brand-strong);
+}
+
 .warning-copy {
   margin: 0;
   border: 1px solid #f6c66a;
@@ -1424,6 +1606,29 @@ fieldset legend,
   margin-top: 3px;
   color: var(--muted);
   font-size: 12px;
+}
+
+.provider-name-cell {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 9px;
+  align-items: center;
+}
+
+.provider-icon-badge {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-2);
+  color: var(--brand-strong);
+}
+
+.provider-badge-svg {
+  width: 16px;
+  height: 16px;
 }
 
 .diagnostics-card .data-table,
