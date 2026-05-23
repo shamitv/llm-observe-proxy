@@ -8,7 +8,7 @@ from typing import Any
 
 from sqlalchemy import Text, and_, cast, inspect, or_, select
 from sqlalchemy.engine import Engine
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, defer
 
 from llm_observe_proxy.capture import (
     ExtractedTokenUsage,
@@ -297,19 +297,28 @@ def backfill_historical_cached_cost_estimates(engine: Engine) -> int:
         if has_candidates is None:
             return 0
         records = session.scalars(
-            select(RequestRecord).where(candidate_filter).execution_options(yield_per=200)
+            select(RequestRecord)
+            .where(candidate_filter)
+            .options(
+                defer(RequestRecord.request_body),
+                defer(RequestRecord.response_body),
+                defer(RequestRecord.upstream_response_body_raw),
+            )
+            .execution_options(yield_per=200)
         )
         for record in records:
+            provider_slug = _record_provider_slug(record, providers_by_slug, provider_urls)
+            if provider_slug is None:
+                continue
+            billing_model = _record_billing_model(record)
+            if billing_model is None:
+                continue
             usage = _record_usage_for_backfill(record)
             if (
                 usage.input_tokens is None
                 or usage.output_tokens is None
                 or not usage.cached_input_tokens
             ):
-                continue
-            provider_slug = _record_provider_slug(record, providers_by_slug, provider_urls)
-            billing_model = _record_billing_model(record)
-            if provider_slug is None or billing_model is None:
                 continue
 
             estimate = estimate_cost(

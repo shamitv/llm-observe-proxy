@@ -66,7 +66,7 @@ def resolve_bind(
     settings: Settings,
 ) -> tuple[str, int]:
     engine = create_db_engine(settings.database_url)
-    init_db(engine)
+    init_db(engine, run_backfills=False)
     session_factory = create_session_factory(engine)
     try:
         with session_scope(session_factory) as session:

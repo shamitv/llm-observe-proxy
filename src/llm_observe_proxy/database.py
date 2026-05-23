@@ -1269,11 +1269,13 @@ def create_session_factory(engine: Engine) -> SessionFactory:
     return sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
 
 
-def init_db(engine: Engine) -> None:
+def init_db(engine: Engine, *, run_backfills: bool = True) -> None:
     Base.metadata.create_all(engine)
     _ensure_sqlite_request_record_schema(engine)
     _ensure_sqlite_model_price_schema(engine)
     seed_default_model_pricing(engine)
+    if not run_backfills:
+        return
     from llm_observe_proxy.costing import backfill_historical_cached_cost_estimates
 
     backfill_historical_cached_cost_estimates(engine)
