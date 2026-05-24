@@ -20,10 +20,10 @@ what-if comparisons.
 - SQLite capture for request/response headers, bodies, status, timing, model, endpoint,
   streaming state, tool-call signals, image assets, provider token usage, cost snapshots,
   and errors.
-- Admin UI for searching and browsing captured traffic, including per-request output TPS
-  and estimated cost.
+- Live-updating admin UI for searching and browsing captured traffic, including
+  per-request output TPS and estimated cost.
 - Runs for grouping all requests made during a task, benchmark, or repro workflow.
-- Run detail pages with request counts, LLM wall time, token totals, cost totals,
+- Live run detail pages with request counts, LLM wall time, token totals, cost totals,
   tokens/sec, model and endpoint breakdowns, and signal/error counts.
 - Run what-if pricing for comparing captured usage against other configured scalar or
   tiered model prices.
@@ -317,6 +317,10 @@ completion, plus token totals, cost totals, and tokens/sec metrics. The request 
 are available. Run-level **Output tok/s** uses output tokens divided by summed request
 duration, matching the total request duration shown on the page.
 
+Request and run list/detail pages load their data from local REST endpoints and poll once
+per second while visible, so new requests, pending request completion, active-run counts,
+and run metrics update without manually refreshing the browser.
+
 ## Screenshots
 
 Screenshots are generated from a seeded demo database and stored in `docs/screenshots`.
@@ -353,6 +357,12 @@ Regenerate screenshots:
 - `GET /admin/runs/{id}`: run metrics, what-if cost comparison, and associated request list.
 - `POST /admin/runs/start`: start a named run, ending any active run first.
 - `POST /admin/runs/end`: end the active run.
+- `GET /admin/api/requests`: request browser JSON data with filters and pagination.
+- `GET /admin/api/requests/{id}`: request detail JSON data and rendered payload modes.
+- `GET /admin/api/runs`: run browser JSON data and active-run summary.
+- `GET /admin/api/runs/{id}`: run detail JSON metrics and associated request rows.
+- `POST /admin/api/runs/start`: start a run through JSON.
+- `POST /admin/api/runs/end`: end the active run through JSON.
 - `GET /admin/settings`: redirects to the Server settings tab.
 - `GET /admin/settings/server`: listener, upstream fallback, default fixes, route summary, test, and retention controls.
 - `GET /admin/settings/routing`: editable exact/prefix routes, fallback behavior, simulator, and usage summary.
@@ -411,9 +421,9 @@ not rebind a currently running process.
 .\.venv\Scripts\pytest.exe -q
 ```
 
-The test suite starts a fake upstream on `localhost:8080/v1`, so stop any local process
-using port `8080` before running tests. See [docs/tests/README.md](docs/tests/README.md)
-for the full coverage matrix.
+The test suite starts its fake upstream on a free temporary loopback port, so a local
+proxy can keep running on `8080` while tests execute. See
+[docs/tests/README.md](docs/tests/README.md) for the full coverage matrix.
 
 ## Publishing
 

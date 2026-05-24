@@ -67,7 +67,7 @@ The backend now supports the UI with SQLite provider/route/fallback fields, dete
 | Target area | After implementation state | Remaining notes |
 |---|---|---|
 | App shell/sidebar/tabs | Implemented top nav active state, Settings sidebar, tab bar, and environment card. | Sidebar is responsive by stacking on narrow viewports rather than using a hamburger toggle. |
-| Connection summary | Implemented per-tab summary cards for listener, fallback, providers/routes, pricing rows, storage, and retention. | Summary cards are server-rendered; no live polling refresh. |
+| Connection summary | Implemented per-tab summary cards for listener, fallback, providers/routes, pricing rows, storage, and retention. | Settings summary cards remain server-rendered; request/run live polling was added in Phase 8. |
 | Server tab | Implemented listener form, fallback provider/model, default fixes checkbox flow with advanced edit, route summary, test, and retention. | Route summary remains a compact table, not a fully interactive editor; full editing lives in Routing. |
 | Providers tab | Implemented registry, filters, editor, fallback defaults, health table, and usage table. | Health checks are manual; screenshots show the seeded pre-check state. |
 | Routing tab | Implemented exact/prefix routes, priority, active state, fallback override, selected editor, simulator, and usage. | Row selection is client-side for the current page; large-data server pagination is not yet exposed in HTML. |
@@ -80,7 +80,7 @@ The backend now supports the UI with SQLite provider/route/fallback fields, dete
 
 Server, Providers, and Routing now match the mockup intent: operational shell, sidebar, summary strip, tab row, dense registry tables, selected editors, fallback panels, diagnostics areas, and restrained visual styling.
 
-The implementation intentionally keeps the app server-rendered and dependency-light. Instead of adding a heavy SPA layer, it uses Jinja templates, small fetch-backed actions, and existing HTML POST compatibility. Pricing, Diagnostics, and Data extend the same visual system even though the provided mockups focused on the first three tabs.
+The Settings implementation intentionally stays server-rendered and dependency-light. Request and Run pages now use lightweight Jinja shells backed by REST polling, while Settings continues to use Jinja templates, small fetch-backed actions, and existing HTML POST compatibility. Pricing, Diagnostics, and Data extend the same visual system even though the provided mockups focused on the first three tabs.
 
 ## Known Risks
 

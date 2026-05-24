@@ -1000,6 +1000,16 @@ figcaption {
   font-weight: 700;
 }
 
+.live-status {
+  min-height: 22px;
+  margin: -8px 0 14px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+  text-align: right;
+  text-transform: uppercase;
+}
+
 .error-text {
   color: var(--danger);
   font-weight: 700;

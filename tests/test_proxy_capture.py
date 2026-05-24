@@ -80,8 +80,8 @@ def test_non_streaming_chat_completion_snapshots_estimated_cost(
         assert record.billing_total_cost_usd == Decimal("0.00001200")
         assert '"input_usd_per_million":"1.000000"' in record.pricing_snapshot_json
 
-    browser = proxy_client.get("/admin")
-    assert "$0.000012" in browser.text
+    browser = proxy_client.get("/admin/api/requests")
+    assert browser.json()["items"][0]["cost_display"] == "$0.000012"
 
 
 def test_non_streaming_chat_completion_accounts_for_cached_input_tokens(
@@ -630,10 +630,11 @@ def test_responses_reasoning_payload_is_recorded_and_visible_in_ui(
     assert response.status_code == 200
     assert response.json()["reasoning"]["effort"] == "medium"
 
-    detail = proxy_client.get("/admin/requests/1?mode=json")
+    detail = proxy_client.get("/admin/api/requests/1?mode=json")
     assert detail.status_code == 200
-    assert "Reasoned answer" in detail.text
-    assert "reasoning" in detail.text
+    rendered = detail.json()["response_render"]["text"]
+    assert "Reasoned answer" in rendered
+    assert "reasoning" in rendered
 
     with proxy_app.state.session_factory() as session:
         record = session.scalars(select(RequestRecord)).one()
@@ -697,7 +698,7 @@ def test_streaming_qwen_reasoning_tool_call_is_rewritten_and_audited(
             },
         ) as response:
             body = b"".join(response.iter_bytes())
-        detail = client.get("/admin/requests/1?mode=sse")
+        detail = client.get("/admin/api/requests/1?mode=sse")
 
     assert response.status_code == 200
     assert b'"tool_calls"' in body
@@ -724,9 +725,10 @@ def test_streaming_qwen_reasoning_tool_call_is_rewritten_and_audited(
         assert record.compat_fix_errors_json is None
 
     assert detail.status_code == 200
-    assert "Compatibility <strong>rewritten</strong>" in detail.text
-    assert "Raw Upstream Response" in detail.text
-    assert "qwen-tagged-tool-call-rewrite" in detail.text
+    detail_data = detail.json()
+    assert detail_data["record"]["response_was_rewritten"] is True
+    assert detail_data["raw_response_render"] is not None
+    assert "qwen-tagged-tool-call-rewrite" in detail_data["record"]["compat_fixes_json"]
 
 
 def test_streaming_qwen_reasoning_field_is_rewritten_by_default_fix(
@@ -1003,10 +1005,11 @@ def test_responses_streaming_tool_call_sets_tool_signal_and_ui_renderer(
         assert record.is_stream is True
         assert record.has_tool_calls is True
 
-    detail = proxy_client.get("/admin/requests/1?mode=tool")
+    detail = proxy_client.get("/admin/api/requests/1?mode=tool")
     assert detail.status_code == 200
-    assert "get_weather" in detail.text
-    assert "function_call" in detail.text
+    rendered = detail.json()["response_render"]
+    assert "get_weather" in rendered["text"]
+    assert "function_call" in rendered["text"]
 
 
 def test_images_are_extracted_from_data_urls_and_remote_urls(
@@ -1041,10 +1044,9 @@ def test_images_are_extracted_from_data_urls_and_remote_urls(
         assert images[0].source == data_url
         assert images[1].source == remote_url
 
-    detail = proxy_client.get("/admin/requests/1")
-    assert "Images Sent" in detail.text
-    assert data_url in detail.text
-    assert remote_url in detail.text
+    detail = proxy_client.get("/admin/api/requests/1")
+    sources = [image["source"] for image in detail.json()["images"]]
+    assert sources == [data_url, remote_url]
 
 
 def test_tool_calls_render_for_non_streaming_chat_response(
@@ -1065,9 +1067,10 @@ def test_tool_calls_render_for_non_streaming_chat_response(
         record = session.scalars(select(RequestRecord)).one()
         assert record.has_tool_calls is True
 
-    detail = proxy_client.get("/admin/requests/1?mode=tool")
-    assert "chat.tool_call" in detail.text
-    assert "get_weather" in detail.text
+    detail = proxy_client.get("/admin/api/requests/1?mode=tool")
+    rendered = detail.json()["response_render"]
+    assert "chat.tool_call" in rendered["text"]
+    assert "get_weather" in rendered["text"]
 
 
 def test_generic_v1_passthrough_records_query_string(

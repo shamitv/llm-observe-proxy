@@ -44,18 +44,45 @@ def test_request_browser_filters_and_markdown_renderer(proxy_client: TestClient)
     page = proxy_client.get("/admin?model=gpt-test")
     assert page.status_code == 200
     assert "Request Browser" in page.text
-    assert "gpt-test" in page.text
-    assert "/v1/chat/completions" in page.text
-    assert "Tokens" in page.text
-    assert "TPS" in page.text
-    assert "<strong>6</strong><small>Input</small>" in page.text
-    assert "<strong>3</strong><small>Output</small>" in page.text
-    assert "<strong>9</strong><small>Total</small>" in page.text
+    assert 'data-live-page="requests"' in page.text
+    assert 'data-api-url="/admin/api/requests"' in page.text
 
-    detail = proxy_client.get("/admin/requests/1?mode=markdown")
+    api = proxy_client.get("/admin/api/requests?model=gpt-test")
+    assert api.status_code == 200
+    data = api.json()
+    assert data["items"][0]["model"] == "gpt-test"
+    assert data["items"][0]["endpoint"] == "/v1/chat/completions"
+    assert data["items"][0]["tokens"]["input_display"] == "6"
+    assert data["items"][0]["tokens"]["output_display"] == "3"
+    assert data["items"][0]["tokens"]["total_display"] == "9"
+
+    detail = proxy_client.get("/admin/api/requests/1?mode=markdown")
     assert detail.status_code == 200
-    assert "<h1>Run Report</h1>" in detail.text
-    assert "<li>captured</li>" in detail.text
+    detail_data = detail.json()
+    assert "<h1>Run Report</h1>" in detail_data["response_render"]["html"]
+    assert "<li>captured</li>" in detail_data["response_render"]["html"]
+
+
+def test_live_request_run_shells_and_polling_script(proxy_client: TestClient) -> None:
+    app_js = Path("src/llm_observe_proxy/static/app.js").read_text(encoding="utf-8")
+
+    pages = {
+        "/admin": 'data-live-page="requests"',
+        "/admin/requests/1": 'data-live-page="request-detail"',
+        "/admin/runs": 'data-live-page="runs"',
+        "/admin/runs/1": 'data-live-page="run-detail"',
+    }
+    for path, marker in pages.items():
+        response = proxy_client.get(path)
+        assert response.status_code == 200
+        assert marker in response.text
+        assert 'data-poll-interval="1000"' in response.text
+
+    assert "window.setInterval(refresh, interval);" in app_js
+    assert 'fetch(apiUrlWithCurrentQuery(root)' in app_js
+    assert 'root.querySelector("[data-live-mode-tabs]")' in app_js
+    assert 'data-live-run-start' in app_js
+    assert 'data-live-run-end' in app_js
 
 
 def test_request_browser_paginates_records(
@@ -72,23 +99,26 @@ def test_request_browser_paginates_records(
             )
         session.commit()
 
-    first_page = proxy_client.get("/admin")
+    first_page = proxy_client.get("/admin/api/requests")
     assert first_page.status_code == 200
-    assert "Showing <strong>1-50</strong>" in first_page.text
-    assert "of <strong>55</strong>" in first_page.text
-    assert 'href="/admin/requests/55">#55</a>' in first_page.text
-    assert 'href="/admin/requests/6">#6</a>' in first_page.text
-    assert 'href="/admin/requests/5">#5</a>' not in first_page.text
-    assert "Next" in first_page.text
+    first_data = first_page.json()
+    assert first_data["pagination"]["display"]["start"] == "1"
+    assert first_data["pagination"]["display"]["end"] == "50"
+    assert first_data["pagination"]["display"]["total"] == "55"
+    assert [item["id"] for item in first_data["items"]][:2] == [55, 54]
+    assert 6 in [item["id"] for item in first_data["items"]]
+    assert 5 not in [item["id"] for item in first_data["items"]]
+    assert first_data["pagination"]["has_next"] is True
 
-    second_page = proxy_client.get("/admin?page=2")
+    second_page = proxy_client.get("/admin/api/requests?page=2")
     assert second_page.status_code == 200
-    assert "Showing <strong>51-55</strong>" in second_page.text
-    assert "of <strong>55</strong>" in second_page.text
-    assert 'href="/admin/requests/5">#5</a>' in second_page.text
-    assert 'href="/admin/requests/1">#1</a>' in second_page.text
-    assert 'href="/admin/requests/6">#6</a>' not in second_page.text
-    assert "Previous" in second_page.text
+    second_data = second_page.json()
+    assert second_data["pagination"]["display"]["start"] == "51"
+    assert second_data["pagination"]["display"]["end"] == "55"
+    assert second_data["pagination"]["display"]["total"] == "55"
+    assert [item["id"] for item in second_data["items"]] == [5, 4, 3, 2, 1]
+    assert 6 not in [item["id"] for item in second_data["items"]]
+    assert second_data["pagination"]["has_previous"] is True
 
 
 def test_request_browser_pagination_preserves_filters(
@@ -106,15 +136,20 @@ def test_request_browser_pagination_preserves_filters(
         _add_request_record(session, created_at=started, model="other-model")
         session.commit()
 
-    page = proxy_client.get("/admin?model=target-model&per_page=1")
+    page = proxy_client.get("/admin")
+    api = proxy_client.get("/admin/api/requests?model=target-model&per_page=1")
 
     assert page.status_code == 200
-    assert "Showing <strong>1-1</strong>" in page.text
-    assert "of <strong>3</strong>" in page.text
-    assert "model=target-model" in page.text
-    assert "per_page=1" in page.text
-    assert "page=2" in page.text
-    assert "<span>other-model</span>" not in page.text
+    assert 'data-live-request-filters' in page.text
+    assert api.status_code == 200
+    data = api.json()
+    assert data["pagination"]["display"]["start"] == "1"
+    assert data["pagination"]["display"]["end"] == "1"
+    assert data["pagination"]["display"]["total"] == "3"
+    assert data["filters"]["model"] == "target-model"
+    assert data["pagination"]["per_page"] == 1
+    assert data["pagination"]["pages"][1]["number"] == 2
+    assert {item["model"] for item in data["items"]} == {"target-model"}
 
 
 def test_request_browser_tool_filter_accepts_empty_form_values(
@@ -138,13 +173,16 @@ def test_request_browser_tool_filter_accepts_empty_form_values(
         plain_id = plain_record.id
         tool_id = tool_record.id
 
-    page = proxy_client.get("/admin?endpoint=&model=&run=&status=&tool=1")
+    page = proxy_client.get("/admin")
+    api = proxy_client.get("/admin/api/requests?endpoint=&model=&run=&status=&tool=1")
 
     assert page.status_code == 200
-    assert "tool-model" in page.text
-    assert f'href="/admin/requests/{tool_id}">#{tool_id}</a>' in page.text
-    assert f'href="/admin/requests/{plain_id}">#{plain_id}</a>' not in page.text
-    assert 'name="tool" value="1" checked' in page.text
+    assert 'name="tool" value="1"' in page.text
+    assert api.status_code == 200
+    data = api.json()
+    assert data["filters"]["tool"] is True
+    assert [item["id"] for item in data["items"]] == [tool_id]
+    assert plain_id not in [item["id"] for item in data["items"]]
 
 
 def test_pending_requests_show_elapsed_duration(
@@ -172,26 +210,28 @@ def test_pending_requests_show_elapsed_duration(
         completed_id = completed.id
 
     browser = proxy_client.get("/admin")
+    browser_api = proxy_client.get("/admin/api/requests")
 
     assert browser.status_code == 200
-    assert 'class="elapsed-duration" data-pending-start="' in browser.text
-    assert "so far</span>" in browser.text
-    assert (
-        '<span class="estimated-token"><strong>~50.1k</strong>'
-        "<small>Est. input</small></span>"
-    ) in browser.text
-    assert "pending" in browser.text
-    assert f'href="/admin/requests/{completed_id}">#{completed_id}</a>' in browser.text
-    assert "~100k" not in browser.text
-    assert "1 s" in browser.text
+    assert 'data-live-page="requests"' in browser.text
+    assert browser_api.status_code == 200
+    data = browser_api.json()
+    pending_item = next(item for item in data["items"] if item["id"] == pending_id)
+    completed_item = next(item for item in data["items"] if item["id"] == completed_id)
+    assert pending_item["duration_is_elapsed"] is True
+    assert pending_item["tokens"]["input_estimated"] is True
+    assert pending_item["tokens"]["input_display"] == "50.1k"
+    assert pending_item["status_label"] == "pending"
+    assert completed_item["duration_display"] == "1 s"
+    assert completed_item["tokens"]["input_estimated"] is False
 
-    detail = proxy_client.get(f"/admin/requests/{pending_id}")
+    detail = proxy_client.get(f"/admin/api/requests/{pending_id}")
     assert detail.status_code == 200
-    assert "Duration <strong><span class=\"elapsed-duration\"" in detail.text
-    assert "so far</span>" in detail.text
-    assert "Status <strong>pending</strong>" in detail.text
-    assert "~50.1k" in detail.text
-    assert "Estimate tokenizer" in detail.text
+    detail_data = detail.json()
+    assert detail_data["record"]["duration_is_elapsed"] is True
+    assert detail_data["record"]["status_label"] == "pending"
+    assert detail_data["record"]["estimated_input_tokens_display"] == "50.1k"
+    assert detail_data["record"]["estimated_input_tokenizer"] == "o200k_base"
 
 
 def test_settings_updates_upstream_url(proxy_client: TestClient, proxy_app: FastAPI) -> None:
@@ -931,14 +971,19 @@ def test_request_browser_and_detail_show_route_metadata(
         )
         browser = client.get("/admin")
         detail = client.get("/admin/requests/1")
+        browser_api = client.get("/admin/api/requests")
+        detail_api = client.get("/admin/api/requests/1")
 
     assert fake_upstream.last_request["body"]["model"] == "qwen3-coder-30b"
     assert browser.status_code == 200
-    assert "route-badge" in browser.text
-    assert "local-qwen" in browser.text
+    assert 'data-live-page="requests"' in browser.text
+    assert browser_api.status_code == 200
+    assert browser_api.json()["items"][0]["model_route"] == "local-qwen"
     assert detail.status_code == 200
-    assert "Upstream Model <strong>qwen3-coder-30b</strong>" in detail.text
-    assert "Route <strong>local-qwen</strong>" in detail.text
+    assert 'data-live-page="request-detail"' in detail.text
+    assert detail_api.status_code == 200
+    assert detail_api.json()["record"]["upstream_model"] == "qwen3-coder-30b"
+    assert detail_api.json()["record"]["model_route"] == "local-qwen"
 
 
 def test_runs_require_name_and_manage_active_state(
@@ -957,8 +1002,10 @@ def test_runs_require_name_and_manage_active_state(
     assert response.status_code == 303
 
     runs_page = proxy_client.get("/admin/runs")
-    assert "Run in progress" in runs_page.text
-    assert "Video benchmark" in runs_page.text
+    runs_api = proxy_client.get("/admin/api/runs")
+    assert 'data-live-page="runs"' in runs_page.text
+    assert runs_api.status_code == 200
+    assert runs_api.json()["active_run"]["name"] == "Video benchmark"
 
     response = proxy_client.post(
         "/admin/runs/start",
@@ -989,20 +1036,22 @@ def test_run_detail_uses_compact_header_for_active_run(proxy_client: TestClient)
     assert response.status_code == 303
 
     detail = proxy_client.get("/admin/runs/1")
+    detail_api = proxy_client.get("/admin/api/runs/1")
 
     assert detail.status_code == 200
     assert 'class="run-summary-header"' in detail.text
     assert 'class="run-control"' not in detail.text
     assert 'class="kpi-grid"' not in detail.text
-    assert "Run in progress" in detail.text
-    assert "Run: Live compact task" in detail.text
-    assert "watching a local model" in detail.text
-    assert "Started <strong>" in detail.text
-    assert "Ended <strong>active</strong>" in detail.text
+    assert 'data-live-page="run-detail"' in detail.text
+    assert detail_api.status_code == 200
+    data = detail_api.json()
+    assert data["run"]["is_active"] is True
+    assert data["run"]["name"] == "Live compact task"
+    assert data["run"]["notes"] == "watching a local model"
+    assert data["run"]["ended_at"] is None
     assert "Requests" in detail.text
     assert "LLM wall time" in detail.text
     assert "Output tok/s" in detail.text
-    assert "End run" in detail.text
     assert detail.text.index("run-summary-header") < detail.text.index("What-if cost")
     assert 'data-api-url="/admin/api/runs/1/what-if"' in detail.text
     assert "Models/providers like OpenAI, Anthropic, Gemini, Qwen" in detail.text
@@ -1032,29 +1081,27 @@ def test_run_filter_detail_and_badges_show_associated_requests(
         assert records[1].task_run_id is None
 
     browser = proxy_client.get(f"/admin?run={task_run.id}")
+    browser_api = proxy_client.get(f"/admin/api/requests?run={task_run.id}")
     assert browser.status_code == 200
-    assert "Local video task" in browser.text
-    assert "#1" in browser.text
-    assert "#2" not in browser.text
+    assert browser_api.status_code == 200
+    assert [item["id"] for item in browser_api.json()["items"]] == [1]
 
     detail = proxy_client.get(f"/admin/runs/{task_run.id}")
+    detail_api = proxy_client.get(f"/admin/api/runs/{task_run.id}")
     assert detail.status_code == 200
     assert 'class="run-summary-header"' in detail.text
     assert 'class="run-control"' not in detail.text
     assert 'class="kpi-grid"' not in detail.text
     assert "LLM wall time" in detail.text
     assert "Total tokens" in detail.text
-    assert ">9<" in detail.text
     assert "Run traffic" in detail.text
-    assert "End run" not in detail.text
-    assert "#1" in detail.text
-    assert "#2" not in detail.text
+    detail_data = detail_api.json()
+    assert detail_data["run"]["is_active"] is False
+    assert detail_data["stats"]["tokens"]["total"]["display"] == "9"
+    assert [item["id"] for item in detail_data["items"]] == [1]
 
-    request_detail = proxy_client.get("/admin/requests/1")
-    assert (
-        "Run <strong><a href=\"/admin/runs/1\">Local video task</a></strong>"
-        in request_detail.text
-    )
+    request_detail = proxy_client.get("/admin/api/requests/1")
+    assert request_detail.json()["record"]["task_run"]["name"] == "Local video task"
 
 
 def test_run_detail_paginates_traffic_without_limiting_what_if_totals(
@@ -1089,13 +1136,17 @@ def test_run_detail_paginates_traffic_without_limiting_what_if_totals(
         run_id = task_run.id
 
     detail = proxy_client.get(f"/admin/runs/{run_id}?per_page=10")
+    detail_api = proxy_client.get(f"/admin/api/runs/{run_id}?per_page=10")
 
     assert detail.status_code == 200
-    assert "Showing <strong>1-10</strong>" in detail.text
-    assert "of <strong>55</strong>" in detail.text
-    assert "#55" in detail.text
-    assert "#46" in detail.text
-    assert "#45" not in detail.text
+    assert detail_api.status_code == 200
+    detail_data = detail_api.json()
+    assert detail_data["pagination"]["display"]["start"] == "1"
+    assert detail_data["pagination"]["display"]["end"] == "10"
+    assert detail_data["pagination"]["display"]["total"] == "55"
+    assert [item["id"] for item in detail_data["items"]][:2] == [55, 54]
+    assert 46 in [item["id"] for item in detail_data["items"]]
+    assert 45 not in [item["id"] for item in detail_data["items"]]
     assert "Custom Full Run" not in detail.text
 
     api = proxy_client.get(
@@ -1345,30 +1396,33 @@ def test_admin_formats_large_numbers_and_durations(
         record.billing_total_tokens = 5_117_356
         session.commit()
 
-    detail = proxy_client.get("/admin/runs/1")
+    detail = proxy_client.get("/admin/api/runs/1")
     assert detail.status_code == 200
-    assert "42m 59s" in detail.text
-    assert "44m 13s" in detail.text
-    assert "26m 45s" in detail.text
-    assert 'datetime="2026-05-01T00:00:00.000000Z" data-local-time="full"' in detail.text
-    assert "2026-05-01 00:00:00 UTC" in detail.text
-    assert ">5.06M<" in detail.text
-    assert ">56.7k<" in detail.text
-    assert ">5.12M<" in detail.text
-    assert ">35.35<" in detail.text
+    detail_data = detail.json()
+    assert detail_data["stats"]["llm_wall_time_display"] == "42m 59s"
+    assert detail_data["stats"]["run_open_duration_display"] == "44m 13s"
+    assert detail_data["stats"]["total_request_duration_display"] == "26m 45s"
+    assert detail_data["run"]["started_at"] == "2026-05-01T00:00:00.000000Z"
+    assert detail_data["run"]["started_at_fallback"] == "2026-05-01 00:00:00 UTC"
+    assert detail_data["stats"]["tokens"]["input"]["display"] == "5.06M"
+    assert detail_data["stats"]["tokens"]["output"]["display"] == "56.7k"
+    assert detail_data["stats"]["tokens"]["total"]["display"] == "5.12M"
+    assert detail_data["stats"]["throughput"]["output_observed"]["display"] == "35.35"
 
-    runs = proxy_client.get("/admin/runs")
-    assert ">35.35<" in runs.text
-    assert 'data-local-time="table">2026-05-01 00:00:00 UTC</time>' in runs.text
-    browser = proxy_client.get("/admin")
-    assert "<strong>5.06M</strong><small>Input</small>" in browser.text
-    assert "26m 45s" in browser.text
-    assert 'data-local-time="table">2026-05-01 00:00:00 UTC</time>' in browser.text
+    runs = proxy_client.get("/admin/api/runs")
+    assert runs.json()["items"][0]["output_tokens_per_second_display"] == "35.35"
+    assert runs.json()["items"][0]["started_at_table_fallback"] == "2026-05-01 00:00:00 UTC"
+    browser = proxy_client.get("/admin/api/requests")
+    item = browser.json()["items"][0]
+    assert item["tokens"]["input_display"] == "5.06M"
+    assert item["duration_display"] == "26m 45s"
+    assert item["created_at_table_fallback"] == "2026-05-01 00:00:00 UTC"
 
-    request_detail = proxy_client.get("/admin/requests/1")
-    assert "Created <strong><time" in request_detail.text
-    assert "Completed <strong><time" in request_detail.text
-    assert 'data-local-time="full">2026-05-01 00:00:00 UTC</time>' in request_detail.text
+    request_detail = proxy_client.get("/admin/api/requests/1")
+    request_data = request_detail.json()["record"]
+    assert request_data["created_at"] == "2026-05-01T00:00:00.000000Z"
+    assert request_data["completed_at"] == "2026-05-01T00:42:59.395000Z"
+    assert request_data["created_at_fallback"] == "2026-05-01 00:00:00 UTC"
 
 
 def test_admin_reads_timings_usage_for_existing_stream_records(
@@ -1393,17 +1447,19 @@ def test_admin_reads_timings_usage_for_existing_stream_records(
         session.commit()
         record_id = record.id
 
-    browser = proxy_client.get("/admin")
+    browser = proxy_client.get("/admin/api/requests")
     assert browser.status_code == 200
-    assert "<strong>1.19k</strong><small>Input</small>" in browser.text
-    assert "<strong>40</strong><small>Output</small>" in browser.text
-    assert "<strong>1.23k</strong><small>Total</small>" in browser.text
+    item = browser.json()["items"][0]
+    assert item["tokens"]["input_display"] == "1.19k"
+    assert item["tokens"]["output_display"] == "40"
+    assert item["tokens"]["total_display"] == "1.23k"
 
-    detail = proxy_client.get(f"/admin/requests/{record_id}")
+    detail = proxy_client.get(f"/admin/api/requests/{record_id}")
     assert detail.status_code == 200
-    assert "<strong>1.19k</strong>Input tokens" in detail.text
-    assert "<strong>40</strong>Output tokens" in detail.text
-    assert "<strong>1.23k</strong>Total tokens" in detail.text
+    record = detail.json()["record"]
+    assert record["display_input_tokens_display"] == "1.19k"
+    assert record["display_output_tokens_display"] == "40"
+    assert record["display_total_tokens_display"] == "1.23k"
 
 
 def test_settings_updates_incoming_server(proxy_client: TestClient) -> None:

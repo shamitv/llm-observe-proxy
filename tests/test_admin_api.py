@@ -184,3 +184,32 @@ def test_retention_preview_and_trim(proxy_client: TestClient, proxy_app) -> None
 def test_usage_endpoints(proxy_client: TestClient) -> None:
     assert proxy_client.get("/admin/api/providers/usage").status_code == 200
     assert proxy_client.get("/admin/api/routes/usage").status_code == 200
+
+
+def test_live_run_rest_actions_and_missing_resources(proxy_client: TestClient) -> None:
+    blank = proxy_client.post("/admin/api/runs/start", json={"name": "   "})
+    assert blank.status_code == 400
+    assert blank.json() == {"detail": "Run name is required."}
+
+    started = proxy_client.post(
+        "/admin/api/runs/start",
+        json={"name": "REST benchmark", "notes": "live poll"},
+    )
+    assert started.status_code == 200
+    assert started.json()["run"]["name"] == "REST benchmark"
+    assert started.json()["run"]["is_active"] is True
+
+    runs = proxy_client.get("/admin/api/runs")
+    assert runs.status_code == 200
+    assert runs.json()["active_run"]["name"] == "REST benchmark"
+
+    detail = proxy_client.get("/admin/api/runs/1")
+    assert detail.status_code == 200
+    assert detail.json()["run"]["notes"] == "live poll"
+
+    ended = proxy_client.post("/admin/api/runs/end")
+    assert ended.status_code == 200
+    assert ended.json()["run"]["is_active"] is False
+
+    assert proxy_client.get("/admin/api/requests/999").status_code == 404
+    assert proxy_client.get("/admin/api/runs/999").status_code == 404
