@@ -305,10 +305,13 @@ processing a video, comparing local and cloud models, or reproducing an agent is
 1. Open `/admin/runs` or use the run control on `/admin`.
 2. Enter a required run name and choose **Start run**.
 3. Run your application or benchmark through the proxy.
-4. Choose **End run** when the task is complete.
+4. Choose **Pause** to keep recording traffic outside the run, **Resume** to attach
+   new traffic to that run again, or **End run** when the task is complete.
 
-Starting a new run automatically ends any existing active run. Requests made while a run
-is active are linked to that run; requests outside a run are still captured normally.
+Starting a new run automatically ends any existing active run. Paused runs remain open
+and resumable, but only one run can be active at a time. Requests made while a run is
+active are linked to that run; requests outside a run, including while all runs are
+paused, are still captured normally.
 
 The request browser can filter by run, and request rows link back to their run. The run
 detail page reports LLM wall time from the first request start to the last response
@@ -356,12 +359,16 @@ Regenerate screenshots:
 - `GET /admin/runs`: run browser and active run controls.
 - `GET /admin/runs/{id}`: run metrics, what-if cost comparison, and associated request list.
 - `POST /admin/runs/start`: start a named run, ending any active run first.
+- `POST /admin/runs/pause`: pause the active run.
+- `POST /admin/runs/{id}/resume`: resume an open paused run.
 - `POST /admin/runs/end`: end the active run.
 - `GET /admin/api/requests`: request browser JSON data with filters and pagination.
 - `GET /admin/api/requests/{id}`: request detail JSON data and rendered payload modes.
 - `GET /admin/api/runs`: run browser JSON data and active-run summary.
 - `GET /admin/api/runs/{id}`: run detail JSON metrics and associated request rows.
 - `POST /admin/api/runs/start`: start a run through JSON.
+- `POST /admin/api/runs/pause`: pause the active run through JSON.
+- `POST /admin/api/runs/{id}/resume`: resume an open paused run through JSON.
 - `POST /admin/api/runs/end`: end the active run through JSON.
 - `GET /admin/settings`: redirects to the Server settings tab.
 - `GET /admin/settings/server`: listener, upstream fallback, default fixes, route summary, test, and retention controls.

@@ -43,6 +43,15 @@ but they should not dominate the first screen.
   table rows.
 - Desktop request rows may select a right-side inspector; mobile taps should open
   the full request detail.
+- Desktop request tables with a visible inspector should stay compact and let the
+  inspector carry signals, summary, route, provider, upstream, compatibility, and
+  copy actions. Mobile request views should use stacked cards, not table columns.
+- Runs can be active, paused, or complete. Paused runs remain open and resumable,
+  but they are not capture targets; traffic during pause is still recorded as
+  non-run traffic. UI controls must make the one-active-run rule obvious.
+- Mobile run lists should use stacked cards with Open, Pause/Resume, and End
+  actions where appropriate. Summary chips may scroll horizontally, but the page
+  itself must not.
 - Run Detail defaults to Overview with health, top models, status codes, signals,
   compact what-if cost, insights, and recent traffic. Full traffic and detailed
   what-if comparison live behind tabs.
