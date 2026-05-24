@@ -1398,3 +1398,40 @@ def test_init_db_upgrades_existing_sqlite_request_records_with_route_metadata(tm
         "ix_request_records_response_was_rewritten",
     }.issubset(indexes)
     assert ids == [42]
+
+
+def test_init_db_upgrades_existing_sqlite_task_runs_with_paused_at(tmp_path) -> None:
+    db_path = tmp_path / "legacy-runs.sqlite3"
+    settings = Settings(database_url=f"sqlite:///{db_path.as_posix()}")
+    engine = create_db_engine(settings.database_url)
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "CREATE TABLE task_runs ("
+                "id INTEGER PRIMARY KEY, "
+                "name VARCHAR(256) NOT NULL, "
+                "notes TEXT, "
+                "started_at DATETIME NOT NULL, "
+                "ended_at DATETIME, "
+                "summary TEXT, "
+                "metadata_json TEXT)"
+            )
+        )
+        connection.execute(
+            text(
+                "INSERT INTO task_runs "
+                "(id, name, started_at) "
+                "VALUES (7, 'legacy', '2026-05-01 00:00:00')"
+            )
+        )
+
+    init_db(engine)
+
+    inspector = inspect(engine)
+    columns = {column["name"] for column in inspector.get_columns("task_runs")}
+    with engine.connect() as connection:
+        rows = connection.execute(text("SELECT id, paused_at FROM task_runs")).all()
+    engine.dispose()
+
+    assert "paused_at" in columns
+    assert rows == [(7, None)]

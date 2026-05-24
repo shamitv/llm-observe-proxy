@@ -63,6 +63,8 @@ from llm_observe_proxy.database import (
     list_model_providers,
     list_model_routes_db,
     list_task_runs_with_stats,
+    pause_active_task_run,
+    resume_task_run,
     session_scope,
     set_default_compat_fixes,
     set_default_model,
@@ -539,6 +541,12 @@ async def runs_api(request: Request) -> dict[str, object]:
         ]
         active_run = _task_run_summary(get_active_task_run(session), session)
         upstream_url = get_upstream_url(session, request.app.state.settings)
+    total_requests = sum(int(run["request_count"] or 0) for run in runs_with_stats)
+    total_tokens = sum(int(run["total_tokens"] or 0) for run in runs_with_stats)
+    total_cost = sum(
+        (run["total_cost_usd"] for run in runs_with_stats if run["total_cost_usd"] is not None),
+        Decimal("0"),
+    )
 
     return {
         "items": [_task_run_list_item_json(run) for run in runs_with_stats],
@@ -547,6 +555,13 @@ async def runs_api(request: Request) -> dict[str, object]:
             "shown": len(runs_with_stats),
             "shown_display": format_compact_number(len(runs_with_stats)),
             "active": 1 if active_run else 0,
+            "paused": sum(1 for run in runs_with_stats if run["is_paused"]),
+            "total_requests": total_requests,
+            "total_requests_display": format_compact_number(total_requests),
+            "total_tokens": total_tokens,
+            "total_tokens_display": format_compact_number(total_tokens),
+            "total_cost_usd": _json_safe_number(total_cost),
+            "total_cost_display": format_usd(total_cost),
         },
         "upstream_url": upstream_url,
         "poll_interval_ms": 1000,
@@ -624,6 +639,7 @@ async def run_what_if_api(
             _run_billing_usages(session, run_id),
             session,
             requested_keys=key,
+            baseline=_run_current_cost_baseline(session, run_id),
         )
 
 
@@ -658,6 +674,34 @@ async def end_run_api(request: Request) -> dict[str, object]:
         }
 
 
+@router.post("/api/runs/pause", response_model=None)
+async def pause_run_api(request: Request) -> dict[str, object]:
+    session_factory: SessionFactory = request.app.state.session_factory
+    with session_scope(session_factory) as session:
+        task_run = pause_active_task_run(session)
+        return {
+            "run": _task_run_summary_json(_task_run_summary(task_run, session))
+            if task_run
+            else None
+        }
+
+
+@router.post("/api/runs/{run_id}/resume", response_model=None)
+async def resume_run_api(
+    request: Request,
+    run_id: int,
+) -> dict[str, object] | JSONResponse:
+    session_factory: SessionFactory = request.app.state.session_factory
+    try:
+        with session_scope(session_factory) as session:
+            task_run = resume_task_run(session, run_id)
+            return {"run": _task_run_summary_json(_task_run_summary(task_run, session))}
+    except LookupError:
+        return JSONResponse({"detail": "Run not found."}, status_code=404)
+    except ValueError as exc:
+        return JSONResponse({"detail": str(exc)}, status_code=400)
+
+
 @router.post("/runs/start", response_class=HTMLResponse)
 async def start_run(
     request: Request,
@@ -683,6 +727,29 @@ async def end_run(request: Request) -> HTMLResponse:
     if run_id is None:
         return RedirectResponse("/admin/runs", status_code=303)
     return RedirectResponse(f"/admin/runs/{run_id}", status_code=303)
+
+
+@router.post("/runs/pause", response_class=HTMLResponse)
+async def pause_run(request: Request) -> HTMLResponse:
+    session_factory: SessionFactory = request.app.state.session_factory
+    with session_scope(session_factory) as session:
+        task_run = pause_active_task_run(session)
+        run_id = task_run.id if task_run else None
+    if run_id is None:
+        return RedirectResponse("/admin/runs", status_code=303)
+    return RedirectResponse(f"/admin/runs/{run_id}", status_code=303)
+
+
+@router.post("/runs/{run_id}/resume", response_class=HTMLResponse)
+async def resume_run(request: Request, run_id: int) -> HTMLResponse:
+    session_factory: SessionFactory = request.app.state.session_factory
+    try:
+        with session_scope(session_factory) as session:
+            task_run = resume_task_run(session, run_id)
+            resumed_run_id = task_run.id
+    except (LookupError, ValueError):
+        return RedirectResponse("/admin/runs", status_code=303)
+    return RedirectResponse(f"/admin/runs/{resumed_run_id}", status_code=303)
 
 
 @router.get("/settings", response_class=HTMLResponse)
@@ -2196,6 +2263,7 @@ def _run_what_if_context(
     session,
     *,
     requested_keys: list[str] | None,
+    baseline: dict[str, object] | None = None,
 ) -> dict[str, object]:
     active_prices = [price for price in list_model_prices(session) if price.active]
     price_by_key = {_model_price_key(price): price for price in active_prices}
@@ -2220,10 +2288,76 @@ def _run_what_if_context(
             _run_what_if_option(price, checked=_model_price_key(price) in selected_key_set)
             for price in active_prices
         ],
+        "baseline": baseline,
         "scenarios": scenarios,
         "selected_keys": selected_keys,
         "compared_count": len(scenarios),
         "message": message,
+    }
+
+
+def _run_current_cost_baseline(session, run_id: int) -> dict[str, object] | None:
+    row = session.execute(
+        select(
+            func.sum(RequestRecord.billing_total_cost_usd),
+            func.count(RequestRecord.billing_total_cost_usd),
+        ).where(RequestRecord.task_run_id == run_id)
+    ).one()
+    if not row[1]:
+        return None
+    providers = [
+        value
+        for value in session.scalars(
+            select(
+                func.coalesce(
+                    RequestRecord.billing_provider_name,
+                    RequestRecord.billing_provider_slug,
+                )
+            )
+            .where(
+                RequestRecord.task_run_id == run_id,
+                or_(
+                    RequestRecord.billing_provider_name.is_not(None),
+                    RequestRecord.billing_provider_slug.is_not(None),
+                ),
+            )
+            .distinct()
+            .order_by(
+                func.coalesce(
+                    RequestRecord.billing_provider_name,
+                    RequestRecord.billing_provider_slug,
+                )
+            )
+        ).all()
+        if value
+    ]
+    models = [
+        value
+        for value in session.scalars(
+            select(func.coalesce(RequestRecord.billing_model, RequestRecord.model))
+            .where(
+                RequestRecord.task_run_id == run_id,
+                or_(
+                    RequestRecord.billing_model.is_not(None),
+                    RequestRecord.model.is_not(None),
+                ),
+            )
+            .distinct()
+            .order_by(func.coalesce(RequestRecord.billing_model, RequestRecord.model))
+        ).all()
+        if value
+    ]
+    provider_name = providers[0] if len(providers) == 1 else "Captured providers"
+    model = models[0] if len(models) == 1 else "Captured models"
+    total_cost = row[0]
+    return {
+        "label": "Current run",
+        "provider_name": provider_name,
+        "model": model,
+        "total_cost_usd": _json_safe_number(total_cost),
+        "display": {
+            "total_cost_usd": format_usd(total_cost),
+        },
     }
 
 
@@ -2467,6 +2601,7 @@ def _pagination_json(pagination: dict[str, object]) -> dict[str, object]:
 def _task_run_summary_json(task_run: dict[str, object] | None) -> dict[str, object] | None:
     if task_run is None:
         return None
+    run_status = str(task_run["status"])
     return {
         "id": task_run["id"],
         "name": task_run["name"],
@@ -2478,7 +2613,14 @@ def _task_run_summary_json(task_run: dict[str, object] | None) -> dict[str, obje
         "ended_at_fallback": _datetime_fallback(task_run["ended_at"])
         if task_run["ended_at"]
         else None,
+        "paused_at": _datetime_iso(task_run["paused_at"]),
+        "paused_at_fallback": _datetime_fallback(task_run["paused_at"])
+        if task_run["paused_at"]
+        else None,
         "is_active": task_run["is_active"],
+        "is_paused": task_run["is_paused"],
+        "status": run_status,
+        "status_label": run_status,
         "open_duration_ms": task_run["open_duration_ms"],
         "open_duration_display": _duration_display(task_run["open_duration_ms"]),
         "request_count": task_run["request_count"],
@@ -2583,6 +2725,7 @@ def _record_list_item_json(record: dict[str, object]) -> dict[str, object]:
         "model": record["model"],
         "upstream_model": record["upstream_model"],
         "model_route": record["model_route"],
+        "upstream_url": record.get("upstream_url"),
         "status": record["status"],
         "status_label": status_label,
         "duration_ms": record["duration_ms"],
@@ -2602,11 +2745,25 @@ def _record_list_item_json(record: dict[str, object]) -> dict[str, object]:
         "provider_name": record.get("provider_name") or record["billing_provider"],
         "billing_model": record["billing_model"],
         "route_name": record.get("route_name") or record["model_route"] or "global fallback",
+        "response_was_rewritten": record.get("response_was_rewritten", False),
+        "compat_fixes_json": record.get("compat_fixes_json"),
+        "compat_fix_errors_json": record.get("compat_fix_errors_json"),
+        "compatibility_label": _compatibility_label(record),
         "error": record["error"],
         "signals": signals,
         "preview": _plain_preview(record["preview"]),
         "semantic_summary": _plain_preview(semantic_summary),
     }
+
+
+def _compatibility_label(record: dict[str, object]) -> str:
+    if record.get("response_was_rewritten"):
+        return "rewritten"
+    if record.get("compat_fix_errors_json"):
+        return "warned"
+    if record.get("compat_fixes_json"):
+        return "applied"
+    return "none"
 
 
 def _token_triplet_json(tokens: dict[str, object]) -> dict[str, object]:
@@ -2883,6 +3040,7 @@ def _request_list_items_for_page(
             RequestRecord.model.label("model"),
             RequestRecord.upstream_model.label("upstream_model"),
             RequestRecord.model_route.label("model_route"),
+            RequestRecord.upstream_url.label("upstream_url"),
             RequestRecord.response_status.label("response_status"),
             RequestRecord.response_content_type.label("response_content_type"),
             RequestRecord.duration_ms.label("duration_ms"),
@@ -2898,6 +3056,9 @@ def _request_list_items_for_page(
             RequestRecord.billing_total_tokens.label("billing_total_tokens"),
             RequestRecord.billing_total_cost_usd.label("billing_total_cost_usd"),
             RequestRecord.estimated_input_tokens.label("estimated_input_tokens"),
+            RequestRecord.response_was_rewritten.label("response_was_rewritten"),
+            RequestRecord.compat_fixes_json.label("compat_fixes_json"),
+            RequestRecord.compat_fix_errors_json.label("compat_fix_errors_json"),
             RequestRecord.error.label("error"),
             preview.label("response_body_preview"),
             response_length.label("response_body_length"),
@@ -2906,6 +3067,7 @@ def _request_list_items_for_page(
             TaskRun.notes.label("run_notes"),
             TaskRun.started_at.label("run_started_at"),
             TaskRun.ended_at.label("run_ended_at"),
+            TaskRun.paused_at.label("run_paused_at"),
         )
         .outerjoin(TaskRun, RequestRecord.task_run_id == TaskRun.id)
         .order_by(desc(RequestRecord.created_at))
@@ -2962,6 +3124,7 @@ def _record_list_item_from_row(row, *, now: datetime | None = None) -> dict[str,
         "model": row["model"] or "unknown",
         "upstream_model": row["upstream_model"],
         "model_route": row["model_route"],
+        "upstream_url": row["upstream_url"],
         "status": row["response_status"],
         "duration_ms": row["duration_ms"],
         "duration_display_ms": duration["duration_display_ms"],
@@ -2985,6 +3148,9 @@ def _record_list_item_from_row(row, *, now: datetime | None = None) -> dict[str,
         "provider_name": row["billing_provider_name"] or row["billing_provider_slug"],
         "billing_model": row["billing_model"],
         "route_name": row["model_route"] or "global fallback",
+        "response_was_rewritten": row["response_was_rewritten"],
+        "compat_fixes_json": row["compat_fixes_json"],
+        "compat_fix_errors_json": row["compat_fix_errors_json"],
         "estimated_input_tokens": row["estimated_input_tokens"],
         "error": row["error"],
         "preview": preview,
@@ -2998,13 +3164,19 @@ def _task_run_summary_from_row(row, *, now: datetime | None = None) -> dict[str,
     if row["run_id"] is None:
         return None
     ended_at = row["run_ended_at"]
+    paused_at = row["run_paused_at"]
+    is_active = ended_at is None and paused_at is None
+    is_paused = ended_at is None and paused_at is not None
     return {
         "id": row["run_id"],
         "name": row["run_name"],
         "notes": row["run_notes"],
         "started_at": row["run_started_at"],
         "ended_at": ended_at,
-        "is_active": ended_at is None,
+        "paused_at": paused_at,
+        "is_active": is_active,
+        "is_paused": is_paused,
+        "status": _run_status(ended_at=ended_at, paused_at=paused_at),
         "open_duration_ms": _duration_ms(
             row["run_started_at"],
             ended_at or now or datetime.now(UTC),
@@ -3045,6 +3217,7 @@ def _record_list_item(record: RequestRecord, *, now: datetime | None = None) -> 
         "model": record.model or "unknown",
         "upstream_model": record.upstream_model,
         "model_route": record.model_route,
+        "upstream_url": record.upstream_url,
         "status": record.response_status,
         "duration_ms": record.duration_ms,
         "duration_display_ms": duration["duration_display_ms"],
@@ -3068,6 +3241,9 @@ def _record_list_item(record: RequestRecord, *, now: datetime | None = None) -> 
         "provider_name": record.billing_provider_name or record.billing_provider_slug,
         "billing_model": record.billing_model,
         "route_name": record.model_route or "global fallback",
+        "response_was_rewritten": record.response_was_rewritten,
+        "compat_fixes_json": record.compat_fixes_json,
+        "compat_fix_errors_json": record.compat_fix_errors_json,
         "estimated_input_tokens": record.estimated_input_tokens,
         "error": record.error,
         "preview": response_render.text,
@@ -3208,6 +3384,9 @@ def _task_run_summary(task_run: TaskRun | None, session=None) -> dict[str, objec
     if task_run is None:
         return None
     ended_at = task_run.ended_at
+    paused_at = task_run.paused_at
+    is_active = ended_at is None and paused_at is None
+    is_paused = ended_at is None and paused_at is not None
     now = datetime.now(UTC)
     request_count = None
     if session is not None:
@@ -3223,10 +3402,21 @@ def _task_run_summary(task_run: TaskRun | None, session=None) -> dict[str, objec
         "notes": task_run.notes,
         "started_at": task_run.started_at,
         "ended_at": ended_at,
-        "is_active": ended_at is None,
+        "paused_at": paused_at,
+        "is_active": is_active,
+        "is_paused": is_paused,
+        "status": _run_status(ended_at=ended_at, paused_at=paused_at),
         "open_duration_ms": _duration_ms(task_run.started_at, ended_at or now),
         "request_count": request_count,
     }
+
+
+def _run_status(*, ended_at: datetime | None, paused_at: datetime | None) -> str:
+    if ended_at is not None:
+        return "complete"
+    if paused_at is not None:
+        return "paused"
+    return "active"
 
 
 def _task_run_list_item(
