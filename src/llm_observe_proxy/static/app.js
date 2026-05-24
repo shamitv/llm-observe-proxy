@@ -25,6 +25,14 @@ const tableTime = new Intl.DateTimeFormat(undefined, {
   second: "2-digit",
 });
 
+const mobileDateTime = new Intl.DateTimeFormat(undefined, {
+  day: "numeric",
+  month: "short",
+  hour: "numeric",
+  minute: "2-digit",
+  second: "2-digit",
+});
+
 document.querySelectorAll("[data-local-time]").forEach((element) => {
   const value = element.getAttribute("datetime");
   if (!value) {
@@ -119,6 +127,7 @@ if (whatIfPanel) {
   let priceOptions = [];
   let selectedKeys = [];
   let latestScenarios = [];
+  let latestBaseline = null;
 
   const setMessage = (text) => {
     if (!message) {
@@ -241,30 +250,35 @@ if (whatIfPanel) {
     });
   };
 
-  const renderSummary = (scenarios) => {
+  const renderSummary = (scenarios, baseline = latestBaseline) => {
     const summaryList = document.querySelector("[data-what-if-summary]");
     if (!summaryList) {
       return;
     }
     summaryList.replaceChildren();
-    if (!scenarios.length) {
+    if (!baseline && !scenarios.length) {
       const empty = document.createElement("p");
       empty.className = "muted";
       empty.textContent = "No comparisons selected.";
       summaryList.append(empty);
       return;
     }
-    const baseline = scenarios[0]?.total_cost_usd;
-    scenarios.slice(0, 3).forEach((scenario, index) => {
+    const baselineValue = baseline ? baseline.total_cost_usd : scenarios[0]?.total_cost_usd;
+    const rows = baseline ? [baseline, ...scenarios.slice(0, 2)] : scenarios.slice(0, 3);
+    rows.forEach((scenario, index) => {
       const total = scenario.display?.total_cost_usd || "-";
-      let delta = index === 0 ? "Baseline" : "";
-      if (index > 0 && typeof baseline === "number" && typeof scenario.total_cost_usd === "number") {
-        const amount = scenario.total_cost_usd - baseline;
-        const percent = baseline ? (amount / baseline) * 100 : null;
+      let delta = index === 0 && baseline ? "Current baseline" : (index === 0 ? "Baseline" : "");
+      if (
+        index > 0
+        && typeof baselineValue === "number"
+        && typeof scenario.total_cost_usd === "number"
+      ) {
+        const amount = scenario.total_cost_usd - baselineValue;
+        const percent = baselineValue ? (amount / baselineValue) * 100 : null;
         delta = `${amount >= 0 ? "+" : ""}${amount.toFixed(4)}${percent === null ? "" : ` · ${percent >= 0 ? "+" : ""}${percent.toFixed(1)}%`}`;
       }
       const row = document.createElement("div");
-      row.className = `what-if-summary-row${index === 0 ? " current" : ""}`;
+      row.className = `what-if-summary-row${index === 0 && baseline ? " current" : ""}`;
       const labelWrap = document.createElement("span");
       const label = document.createElement("strong");
       label.textContent = scenario.label;
@@ -281,7 +295,7 @@ if (whatIfPanel) {
       summaryList.append(row);
     });
   };
-  window.renderWhatIfSummary = () => renderSummary(latestScenarios);
+  window.renderWhatIfSummary = () => renderSummary(latestScenarios, latestBaseline);
 
   const selectedOption = (value) => {
     const needle = normalize(value);
@@ -330,9 +344,10 @@ if (whatIfPanel) {
       selectedKeys = Array.isArray(data.selected_keys) ? data.selected_keys : [];
       const scenarios = Array.isArray(data.scenarios) ? data.scenarios : [];
       latestScenarios = scenarios;
+      latestBaseline = data.baseline || null;
       renderOptions();
       renderScenarios(scenarios);
-      renderSummary(scenarios);
+      renderSummary(scenarios, latestBaseline);
       setCount(`${data.compared_count || 0} compared`);
       setMessage(data.message || "");
     } catch (_error) {
@@ -1127,6 +1142,10 @@ const localTimeNode = (isoValue, fallback, mode = "full") => {
     );
     return time;
   }
+  if (mode === "mobile") {
+    time.textContent = mobileDateTime.format(date);
+    return time;
+  }
   time.textContent = full;
   return time;
 };
@@ -1166,7 +1185,7 @@ const renderSignals = (item) => {
     }
   });
   if (!wrap.children.length) {
-    wrap.append(createNode("span", { className: "signal-muted", textContent: "None" }));
+    wrap.append(createNode("span", { className: "signal-muted", textContent: "—" }));
   }
   return wrap;
 };
@@ -1202,20 +1221,17 @@ const renderCostCell = (item) => {
 };
 
 const renderRequestSummary = (item) => createNode("div", { className: "request-summary" }, [
-  createNode("span", { textContent: item.semantic_summary || item.preview || "" }),
-  createNode("a", {
-    className: "request-row-link",
-    href: `/admin/requests/${item.id}`,
-    textContent: "View full details",
-    "aria-label": `View full details for request #${item.id}`,
-  }),
+  createNode("span", { textContent: item.semantic_summary || item.preview || "—" }),
 ]);
 
-const renderRequestRows = (tbody, items, showRun) => {
+const renderRequestRows = (tbody, items, showRun, options = {}) => {
+  const showSignals = options.showSignals !== false;
+  const showSummary = options.showSummary !== false;
   tbody.replaceChildren();
   if (!items.length) {
     const row = createNode("tr");
-    tableCell(row, "No captured requests yet.", "empty").colSpan = showRun ? 9 : 8;
+    const columnCount = 6 + (showRun ? 1 : 0) + (showSignals ? 1 : 0) + (showSummary ? 1 : 0);
+    tableCell(row, "No captured requests yet.", "empty").colSpan = columnCount;
     tbody.append(row);
     return;
   }
@@ -1234,7 +1250,7 @@ const renderRequestRows = (tbody, items, showRun) => {
     }
     const requestCell = createNode("td", { className: "request-cell" });
     requestCell.append(
-      createNode("a", { href: `/admin/requests/${item.id}`, textContent: `#${item.id}` }),
+      createNode("strong", { textContent: `#${item.id}` }),
       localTimeNode(item.created_at, item.created_at_table_fallback, "table"),
       createNode("span", { className: "request-endpoint" }, [
         createNode("span", { className: "method", textContent: item.method }),
@@ -1282,8 +1298,12 @@ const renderRequestRows = (tbody, items, showRun) => {
     ]), "numeric");
     tableCell(row, renderTokenTriplet(item.tokens));
     tableCell(row, renderCostCell(item), "numeric");
-    tableCell(row, renderSignals(item), "signals");
-    tableCell(row, renderRequestSummary(item), "request-preview");
+    if (showSignals) {
+      tableCell(row, renderSignals(item), "signals");
+    }
+    if (showSummary) {
+      tableCell(row, renderRequestSummary(item), "request-preview");
+    }
     tbody.append(row);
   });
 };
@@ -1334,23 +1354,34 @@ const renderMobileRequestList = (items, showRun) => {
     return list;
   }
   items.forEach((item) => {
-    const row = createNode("a", { className: "request-mobile-row", href: `/admin/requests/${item.id}` }, [
-      createNode("span", { className: "mobile-dot" }),
-      createNode("span", {}, [
-        createNode("strong", { textContent: `#${item.id}` }),
-        localTimeNode(item.created_at, item.created_at_table_fallback, "table"),
+    const signalText = signalDefinitions
+      .filter(([key]) => item.signals?.[key])
+      .map(([, label]) => label.replace(" >10s", "").replace("Large", "Large"))
+      .join(" · ");
+    const row = createNode("a", { className: "request-mobile-card", href: `/admin/requests/${item.id}` }, [
+      createNode("span", { className: "mobile-card-main" }, [
+        createNode("span", {}, [
+          createNode("strong", { textContent: `#${item.id}` }),
+          createNode("span", { textContent: " · " }),
+          localTimeNode(item.created_at, item.created_at_table_fallback, "mobile"),
+        ]),
+        renderStatusPill(item.status_label),
       ]),
-      createNode("span", {}, [
+      createNode("span", { className: "mobile-card-model" }, [
         createNode("strong", { textContent: valueOrDash(item.model) }),
         createNode("small", { textContent: item.provider_name || item.billing_provider || item.route_name || "-" }),
       ]),
-      renderStatusPill(item.status_label),
-      createNode("span", {}, [
-        createNode("strong", { textContent: valueOrDash(item.duration_display) }),
-        createNode("small", { textContent: `${valueOrDash(item.tokens_per_second_display)} TPS` }),
+      createNode("span", { className: "mobile-card-metrics" }, [
+        createNode("span", { textContent: valueOrDash(item.duration_display) }),
+        createNode("span", { textContent: `${valueOrDash(item.tokens_per_second_display)} TPS` }),
+        createNode("span", { textContent: valueOrDash(item.cost_display) }),
       ]),
-      renderCostCell(item),
-      createNode("span", { className: "mobile-chevron", textContent: "›" }),
+      createNode("span", { className: "mobile-card-foot" }, [
+        createNode("span", {
+          textContent: `${valueOrDash(item.tokens?.input_display)} in · ${valueOrDash(item.tokens?.output_display)} out · ${valueOrDash(item.tokens?.total_display)} total`,
+        }),
+        createNode("span", { textContent: signalText || "›" }),
+      ]),
     ]);
     if (showRun && item.task_run) {
       row.title = item.task_run.name;
@@ -1365,6 +1396,8 @@ const renderMobileRequestList = (items, showRun) => {
 
 const renderRequestsTable = (container, items, pagination, showRun, options = {}) => {
   container.replaceChildren();
+  const showSignals = options.showSignals !== false;
+  const showSummary = options.showSummary !== false;
   if (!options.compact) {
     container.append(createNode("div", { className: "request-table-controls" }, [
       createNode("button", {
@@ -1387,16 +1420,26 @@ const renderRequestsTable = (container, items, pagination, showRun, options = {}
     "col-performance",
     "col-tokens",
     "col-cost",
-    "col-signals",
-    "col-summary",
+    ...(showSignals ? ["col-signals"] : []),
+    ...(showSummary ? ["col-summary"] : []),
   ].forEach((className) => colgroup.append(createNode("col", { className })));
   const thead = createNode("thead");
   const headRow = createNode("tr");
-  ["Request", "Model / Provider", ...(showRun ? ["Run"] : []), "Status", "Performance", "Tokens", "Cost", "Signals", "Summary"]
+  [
+    "Request",
+    "Model / Provider",
+    ...(showRun ? ["Run"] : []),
+    "Status",
+    "Performance",
+    "Tokens",
+    "Cost",
+    ...(showSignals ? ["Signals"] : []),
+    ...(showSummary ? ["Summary"] : []),
+  ]
     .forEach((heading) => headRow.append(createNode("th", { textContent: heading })));
   thead.append(headRow);
   const tbody = createNode("tbody");
-  renderRequestRows(tbody, items, showRun);
+  renderRequestRows(tbody, items, showRun, { showSignals, showSummary });
   table.append(colgroup, thead, tbody);
   container.append(table);
   container.append(renderMobileRequestList(items, showRun));
@@ -1405,6 +1448,71 @@ const renderRequestsTable = (container, items, pagination, showRun, options = {}
   }
   updatePendingElapsed();
 };
+
+const requestDetailCache = new Map();
+
+const copyText = async (text) => {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+  const area = document.createElement("textarea");
+  area.value = text;
+  area.setAttribute("readonly", "");
+  area.style.position = "fixed";
+  area.style.left = "-9999px";
+  document.body.append(area);
+  area.select();
+  document.execCommand("copy");
+  area.remove();
+};
+
+const requestDetailForCopy = async (requestId) => {
+  if (requestDetailCache.has(requestId)) {
+    return requestDetailCache.get(requestId);
+  }
+  const response = await fetch(`/admin/api/requests/${requestId}?mode=text`, {
+    headers: { Accept: "application/json" },
+  });
+  const data = await response.json();
+  if (!response.ok) {
+    throw new Error(data.detail || `Request API returned ${response.status}`);
+  }
+  requestDetailCache.set(requestId, data);
+  return data;
+};
+
+const shellQuote = (value) => `'${String(value).replaceAll("'", "'\\''")}'`;
+
+const curlFromRequestDetail = (detail) => {
+  const record = detail.record;
+  const url = new URL(record.path + (record.query_string ? `?${record.query_string}` : ""), window.location.origin);
+  const lines = [`curl -X ${shellQuote(record.method || "POST")} ${shellQuote(url.toString())}`];
+  let headers = {};
+  try {
+    headers = JSON.parse(record.request_headers_json || "{}");
+  } catch {
+    headers = {};
+  }
+  Object.entries(headers).forEach(([key, value]) => {
+    const lower = key.toLowerCase();
+    if (["host", "content-length"].includes(lower)) {
+      return;
+    }
+    lines.push(`  -H ${shellQuote(`${key}: ${value}`)}`);
+  });
+  if (detail.request_render?.text) {
+    lines.push(`  --data-binary ${shellQuote(detail.request_render.text)}`);
+  }
+  return lines.join(" \\\n");
+};
+
+const inspectorActionButton = (action, label) => createNode("button", {
+  className: "button ghost compact-button",
+  type: "button",
+  "data-inspector-copy": action,
+  textContent: label,
+});
 
 const renderRequestInspector = (container, item) => {
   if (!container) {
@@ -1429,17 +1537,24 @@ const renderRequestInspector = (container, item) => {
       createNode("strong", { textContent: valueOrDash(value) }),
     ]));
   });
+  const actions = createNode("div", { className: "inspector-actions" }, [
+    createNode("a", {
+      className: "button primary compact-button",
+      href: `/admin/requests/${item.id}`,
+      textContent: "Open full details",
+    }),
+    inspectorActionButton("id", "Copy ID"),
+    inspectorActionButton("request", "Copy request JSON"),
+    inspectorActionButton("response", "Copy response"),
+    inspectorActionButton("curl", "Copy as curl"),
+  ]);
   container.append(
     createNode("header", { className: "request-inspector-header" }, [
       createNode("div", {}, [
         createNode("h2", { textContent: `Request #${item.id}` }),
         renderStatusPill(item.status_label),
       ]),
-      createNode("a", {
-        className: "button ghost compact-button",
-        href: `/admin/requests/${item.id}`,
-        textContent: "Open",
-      }),
+      actions,
     ]),
     createNode("div", { className: "inspector-tabs", "aria-label": "Request inspector sections" }, [
       createNode("span", { className: "active", textContent: "Overview" }),
@@ -1454,6 +1569,16 @@ const renderRequestInspector = (container, item) => {
       createNode("dd", { textContent: item.method }),
       createNode("dt", { textContent: "Endpoint" }),
       createNode("dd", { textContent: item.endpoint }),
+      createNode("dt", { textContent: "Provider" }),
+      createNode("dd", { textContent: item.provider_name || item.billing_provider || "-" }),
+      createNode("dt", { textContent: "Route" }),
+      createNode("dd", { textContent: item.route_name || item.model_route || "global fallback" }),
+      createNode("dt", { textContent: "Upstream" }),
+      createNode("dd", { textContent: item.upstream_url || "-" }),
+      createNode("dt", { textContent: "Forwarded model" }),
+      createNode("dd", { textContent: item.upstream_model || item.model || "-" }),
+      createNode("dt", { textContent: "Compatibility" }),
+      createNode("dd", { textContent: item.compatibility_label || "none" }),
       createNode("dt", { textContent: "Run" }),
       createNode("dd", { textContent: item.task_run?.name || "-" }),
       createNode("dt", { textContent: "Duration" }),
@@ -1475,11 +1600,6 @@ const renderRequestInspector = (container, item) => {
       createNode("h3", { textContent: "Quick stats" }),
       stats,
     ]),
-    createNode("a", {
-      className: "button ghost inspector-detail-link",
-      href: `/admin/requests/${item.id}`,
-      textContent: "View full details →",
-    }),
   );
 };
 
@@ -1535,6 +1655,24 @@ const renderRunControl = (container, activeRun, includeNotes) => {
         textContent: `${activeRun.request_count_display} request${activeRun.request_count === 1 ? "" : "s"} · ${activeRun.open_duration_display} open`,
       }),
     );
+    const actions = createNode("div", { className: "run-control-actions" });
+    actions.append(createNode("a", {
+      className: "button ghost compact-button",
+      href: `/admin/runs/${activeRun.id}`,
+      textContent: "Open",
+    }));
+    actions.append(createNode("form", {
+      method: "post",
+      action: "/admin/runs/pause",
+      "data-live-run-pause": true,
+      "data-api-url": "/admin/api/runs/pause",
+    }, [
+      createNode("button", {
+        className: "button ghost compact-button",
+        type: "submit",
+        textContent: "Pause",
+      }),
+    ]));
     const form = createNode("form", {
       method: "post",
       action: "/admin/runs/end",
@@ -1546,7 +1684,8 @@ const renderRunControl = (container, activeRun, includeNotes) => {
       type: "submit",
       textContent: "End run",
     }));
-    container.append(copy, form);
+    actions.append(form);
+    container.append(copy, actions);
     return;
   }
   const form = createNode("form", {
@@ -1754,7 +1893,10 @@ const initRequestsLivePage = (root) => {
     latestItems = data.items || [];
     renderRequestStats(root, data.stats || {});
     renderRunControl(runControl, data.active_run, false);
-    renderRequestsTable(table, latestItems, data.pagination, true);
+    renderRequestsTable(table, latestItems, data.pagination, true, {
+      showSignals: false,
+      showSummary: false,
+    });
     if (!latestItems.some((item) => String(item.id) === String(selectedRequestId))) {
       selectedRequestId = latestItems[0]?.id || null;
     }
@@ -1803,6 +1945,12 @@ const initRequestsLivePage = (root) => {
     );
     markSelectedRequest(root, selectedRequestId);
   });
+  table?.addEventListener("dblclick", (event) => {
+    const requestRow = event.target.closest("[data-request-row]");
+    if (requestRow) {
+      window.location.href = `/admin/requests/${requestRow.dataset.requestId}`;
+    }
+  });
   table?.addEventListener("keydown", (event) => {
     if (event.key !== "Enter") {
       return;
@@ -1811,6 +1959,44 @@ const initRequestsLivePage = (root) => {
     if (requestRow) {
       window.location.href = `/admin/requests/${requestRow.dataset.requestId}`;
     }
+  });
+  inspector?.addEventListener("click", async (event) => {
+    const button = event.target.closest("[data-inspector-copy]");
+    if (!button || !selectedRequestId) {
+      return;
+    }
+    event.preventDefault();
+    const action = button.dataset.inspectorCopy;
+    try {
+      let text = "";
+      if (action === "id") {
+        text = String(selectedRequestId);
+      } else {
+        const detail = await requestDetailForCopy(selectedRequestId);
+        if (action === "request") {
+          text = detail.request_render?.text || "";
+        } else if (action === "response") {
+          text = detail.response_render?.text || "";
+        } else if (action === "curl") {
+          text = curlFromRequestDetail(detail);
+        }
+      }
+      await copyText(text);
+      button.textContent = "Copied";
+      window.setTimeout(() => {
+        button.textContent = {
+          id: "Copy ID",
+          request: "Copy request JSON",
+          response: "Copy response",
+          curl: "Copy as curl",
+        }[action] || "Copy";
+      }, 1200);
+    } catch (error) {
+      window.alert(error.message || "Copy failed.");
+    }
+  });
+  root.querySelector("[data-mobile-filter-toggle]")?.addEventListener("click", () => {
+    form?.classList.toggle("is-expanded");
   });
   root.querySelector("[data-live-request-stats]")?.addEventListener("click", (event) => {
     const chip = event.target.closest("[data-stat-filter]");
@@ -1864,7 +2050,7 @@ const renderRunsTable = (container, items) => {
       localTimeNode(run.started_at, run.started_at_table_fallback, "table"),
     );
     row.append(runCell);
-    tableCell(row, renderStatusPill(run.is_active ? "active" : "complete"));
+    tableCell(row, renderStatusPill(run.status_label || (run.is_active ? "active" : "complete")));
     tableCell(row, run.request_count_display);
     tableCell(row, run.llm_wall_time_display);
     tableCell(row, run.total_tokens_display);
@@ -1887,6 +2073,66 @@ const renderRunsTable = (container, items) => {
   });
   table.append(thead, tbody);
   container.append(table);
+  container.append(renderRunCardsMobile(items));
+};
+
+const runActionForm = (run, kind) => {
+  const isResume = kind === "resume";
+  const isPause = kind === "pause";
+  return createNode("form", {
+    method: "post",
+    action: isResume ? `/admin/runs/${run.id}/resume` : (isPause ? "/admin/runs/pause" : "/admin/runs/end"),
+    "data-live-run-resume": isResume ? true : null,
+    "data-live-run-pause": isPause ? true : null,
+    "data-live-run-end": !isResume && !isPause ? true : null,
+    "data-api-url": isResume ? `/admin/api/runs/${run.id}/resume` : (isPause ? "/admin/api/runs/pause" : "/admin/api/runs/end"),
+  }, [
+    createNode("button", {
+      className: isResume ? "button primary compact-button" : (isPause ? "button ghost compact-button" : "button danger compact-button"),
+      type: "submit",
+      textContent: isResume ? "Resume" : (isPause ? "Pause" : "End"),
+    }),
+  ]);
+};
+
+const renderRunCardsMobile = (items) => {
+  const list = createNode("div", { className: "run-mobile-list" });
+  if (!items.length) {
+    list.append(createNode("div", { className: "empty-state", textContent: "No runs yet." }));
+    return list;
+  }
+  items.forEach((run) => {
+    const actions = createNode("span", { className: "run-card-actions" }, [
+      createNode("a", {
+        className: "button ghost compact-button",
+        href: `/admin/runs/${run.id}`,
+        textContent: "Open",
+      }),
+    ]);
+    if (run.is_active) {
+      actions.append(runActionForm(run, "pause"));
+      actions.append(runActionForm(run, "end"));
+    } else if (run.is_paused) {
+      actions.append(runActionForm(run, "resume"));
+    }
+    const card = createNode("article", { className: `run-mobile-card run-${run.status_label || "complete"}` }, [
+      createNode("span", { className: "mobile-card-main" }, [
+        createNode("strong", { textContent: run.name }),
+        renderStatusPill(run.status_label || (run.is_active ? "active" : "complete")),
+      ]),
+      localTimeNode(run.started_at, run.started_at_table_fallback, "mobile"),
+      createNode("span", {
+        className: "mobile-card-metrics",
+        textContent: `${run.request_count_display} requests · ${run.total_tokens_display} tokens · ${run.total_cost_display}`,
+      }),
+      createNode("span", { className: "mobile-card-foot" }, [
+        createNode("span", { textContent: `LLM wall time ${run.llm_wall_time_display}` }),
+        actions,
+      ]),
+    ]);
+    list.append(card);
+  });
+  return list;
 };
 
 const initRunsLivePage = (root) => {
@@ -1907,6 +2153,10 @@ const initRunsLivePage = (root) => {
       stats.replaceChildren(
         createNode("span", {}, [createNode("strong", { textContent: data.stats.shown_display }), "Shown"]),
         createNode("span", {}, [createNode("strong", { textContent: String(data.stats.active) }), "Active"]),
+        createNode("span", {}, [createNode("strong", { textContent: String(data.stats.paused || 0) }), "Paused"]),
+        createNode("span", {}, [createNode("strong", { textContent: data.stats.total_requests_display || "0" }), "Requests"]),
+        createNode("span", {}, [createNode("strong", { textContent: data.stats.total_tokens_display || "0" }), "Tokens"]),
+        createNode("span", {}, [createNode("strong", { textContent: data.stats.total_cost_display || "$0.00" }), "Cost"]),
       );
     }
     renderRunControl(runControl, data.active_run, true);
@@ -2262,7 +2512,10 @@ const renderRunOverview = (root, data) => {
     createNode("article", { className: "panel overview-card run-insights" }, [
       createNode("header", {}, [
         createNode("h2", { textContent: "Run insights" }),
-        createNode("span", { className: data.run.is_active ? "live-dot" : "muted", textContent: data.run.is_active ? "Live" : "Complete" }),
+        createNode("span", {
+          className: data.run.is_active ? "live-dot" : (data.run.is_paused ? "pause-dot" : "muted"),
+          textContent: data.run.is_active ? "Live" : (data.run.is_paused ? "Paused" : "Complete"),
+        }),
       ]),
       renderMetricRows([
         ["Active route", firstStatus ? `${firstStatus.label} · ${firstStatus.count_display}` : "-"],
@@ -2308,32 +2561,38 @@ const renderRunDetail = (root, data) => {
   const header = root.querySelector("[data-live-run-detail-header]");
   if (header) {
     const meta = createNode("div", { className: "detail-meta run-meta" });
+    const statusLabel = run.status_label || (run.is_active ? "active" : "complete");
     meta.append(
       runStatusChip(`Started ${run.started_at_fallback}`),
       runStatusChip(`Open for ${run.open_duration_display}`),
-      runStatusChip(`Status ${run.is_active ? "active" : "complete"}`, run.is_active ? "ok-chip" : ""),
+      runStatusChip(`Status ${statusLabel}`, run.is_active ? "ok-chip" : (run.is_paused ? "pause-chip" : "")),
     );
+    if (run.is_paused && run.paused_at_fallback) {
+      meta.append(runStatusChip(`Paused ${run.paused_at_fallback}`, "pause-chip"));
+    }
     if (data.stats.error_count) {
       meta.append(runStatusChip(`${data.stats.error_count_display} errors`, "error-chip"));
     }
     const side = createNode("div", { className: "run-summary-side" }, [meta]);
     if (run.is_active) {
-      side.append(createNode("form", {
-        className: "run-summary-action",
-        method: "post",
-        action: "/admin/runs/end",
-        "data-live-run-end": true,
-        "data-api-url": "/admin/api/runs/end",
-      }, [
-        createNode("button", { className: "button danger", type: "submit", textContent: "End run" }),
+      side.append(createNode("div", { className: "run-summary-actions" }, [
+        runActionForm(run, "pause"),
+        runActionForm(run, "end"),
+      ]));
+    } else if (run.is_paused) {
+      side.append(createNode("div", { className: "run-summary-actions" }, [
+        runActionForm(run, "resume"),
       ]));
     }
     const topline = createNode("div", { className: "run-summary-topline" }, [
       createNode("div", { className: "run-summary-title" }, [
-        createNode("p", { className: "eyebrow", textContent: run.is_active ? "Run in progress" : "Completed run" }),
+        createNode("p", {
+          className: "eyebrow",
+          textContent: run.is_active ? "Run in progress" : (run.is_paused ? "Paused run" : "Completed run"),
+        }),
         createNode("div", { className: "run-title-line" }, [
           createNode("h1", { textContent: `Run: ${run.name}` }),
-          runStatusChip(run.is_active ? "LIVE" : "DONE", run.is_active ? "live-chip" : ""),
+          runStatusChip(run.is_active ? "LIVE" : (run.is_paused ? "PAUSED" : "DONE"), run.is_active ? "live-chip" : (run.is_paused ? "pause-chip" : "")),
         ]),
         run.notes ? createNode("p", { className: "muted", textContent: run.notes }) : null,
         meta,
@@ -2426,11 +2685,13 @@ const initRunDetailLivePage = (root) => {
 document.addEventListener("submit", async (event) => {
   const startForm = event.target.closest("[data-live-run-start]");
   const endForm = event.target.closest("[data-live-run-end]");
-  if (!startForm && !endForm) {
+  const pauseForm = event.target.closest("[data-live-run-pause]");
+  const resumeForm = event.target.closest("[data-live-run-resume]");
+  if (!startForm && !endForm && !pauseForm && !resumeForm) {
     return;
   }
   event.preventDefault();
-  const form = startForm || endForm;
+  const form = startForm || endForm || pauseForm || resumeForm;
   const payload = startForm
     ? {
       name: form.elements.name?.value || "",

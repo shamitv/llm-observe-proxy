@@ -88,6 +88,12 @@ def test_live_request_run_shells_and_polling_script(proxy_client: TestClient) ->
     assert 'root.querySelector("[data-live-mode-tabs]")' in app_js
     assert 'data-live-run-start' in app_js
     assert 'data-live-run-end' in app_js
+    assert 'data-live-run-pause' in app_js
+    assert 'data-live-run-resume' in app_js
+    assert "renderRunCardsMobile" in app_js
+    assert "request-mobile-card" in app_js
+    assert "data-inspector-copy" in app_js
+    assert "Copy as curl" in app_js
 
     request_page = proxy_client.get("/admin")
     assert 'select name="provider"' in request_page.text
@@ -96,6 +102,7 @@ def test_live_request_run_shells_and_polling_script(proxy_client: TestClient) ->
     assert 'name="slow" value="1"' in request_page.text
     assert 'name="large" value="1"' in request_page.text
     assert 'data-live-request-inspector' in request_page.text
+    assert 'data-mobile-filter-toggle' in request_page.text
 
     run_page = proxy_client.get("/admin/runs/1")
     assert 'data-run-tabs' in run_page.text
@@ -1046,6 +1053,56 @@ def test_runs_require_name_and_manage_active_state(
         assert active == []
 
 
+def test_runs_can_pause_resume_and_keep_one_active_run(
+    proxy_client: TestClient,
+    proxy_app: FastAPI,
+) -> None:
+    first = proxy_client.post(
+        "/admin/api/runs/start",
+        json={"name": "Paused task"},
+    )
+    assert first.status_code == 200
+    run_id = first.json()["run"]["id"]
+
+    pause = proxy_client.post("/admin/api/runs/pause")
+    assert pause.status_code == 200
+    pause_data = pause.json()["run"]
+    assert pause_data["id"] == run_id
+    assert pause_data["is_paused"] is True
+    assert pause_data["status"] == "paused"
+
+    runs_api = proxy_client.get("/admin/api/runs")
+    assert runs_api.json()["active_run"] is None
+    assert runs_api.json()["stats"]["paused"] == 1
+
+    second = proxy_client.post(
+        "/admin/api/runs/start",
+        json={"name": "Active task"},
+    )
+    assert second.status_code == 200
+    second_id = second.json()["run"]["id"]
+
+    resumed = proxy_client.post(f"/admin/api/runs/{run_id}/resume")
+    assert resumed.status_code == 200
+    assert resumed.json()["run"]["is_active"] is True
+
+    with proxy_app.state.session_factory() as session:
+        runs = session.scalars(select(TaskRun).order_by(TaskRun.id)).all()
+        assert runs[0].paused_at is None
+        assert runs[0].ended_at is None
+        assert runs[1].id == second_id
+        assert runs[1].paused_at is not None
+        assert runs[1].ended_at is None
+
+    missing = proxy_client.post("/admin/api/runs/999/resume")
+    assert missing.status_code == 404
+
+    completed = proxy_client.post("/admin/runs/end", follow_redirects=False)
+    assert completed.status_code == 303
+    complete_resume = proxy_client.post(f"/admin/api/runs/{run_id}/resume")
+    assert complete_resume.status_code == 400
+
+
 def test_run_detail_uses_compact_header_for_active_run(proxy_client: TestClient) -> None:
     response = proxy_client.post(
         "/admin/runs/start",
@@ -1257,6 +1314,10 @@ def test_run_detail_shows_default_what_if_costs_without_mutating_snapshots(
 
     with proxy_app.state.session_factory() as session:
         record = session.scalars(select(RequestRecord)).one()
+        record.billing_provider_name = "Captured Provider"
+        record.billing_model = "captured-model"
+        record.billing_total_cost_usd = Decimal("0.000042")
+        session.commit()
         original_cost = record.billing_total_cost_usd
 
     detail = proxy_client.get("/admin/runs/1")
@@ -1279,6 +1340,8 @@ def test_run_detail_shows_default_what_if_costs_without_mutating_snapshots(
     assert api.status_code == 200
     assert data["selected_keys"] == ["openai:gpt-5.5", "openai:gpt-5.4-mini"]
     assert data["compared_count"] == 2
+    assert data["baseline"]["label"] == "Current run"
+    assert data["baseline"]["display"]["total_cost_usd"] == "$0.000042"
     labels = [scenario["label"] for scenario in data["scenarios"]]
     assert labels == ["GPT-5.5", "GPT-5.4 Mini"]
     totals = [scenario["display"]["total_cost_usd"] for scenario in data["scenarios"]]
