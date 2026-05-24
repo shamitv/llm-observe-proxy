@@ -158,6 +158,14 @@ For renderer or CLI changes, use `tests/test_rendering_and_cli.py`.
 
 Keep the UI professional and operational:
 
+- Read `design.md` before making UI changes. Treat it as the project-wide design
+  source of truth for product intent, visual system, Requests/Runs behavior,
+  Settings patterns, responsive behavior, and accessibility.
+- When changing UI direction or introducing a durable new pattern, update
+  `design.md` in the same change so future agents inherit the current intent.
+- Treat phase-specific mockups and design docs under `docs/plans/` as references
+  that inform implementation, not pixel-perfect replacement instructions unless
+  the user explicitly asks for exact reproduction.
 - Prefer compact panels, dense tables, clear labels, and predictable controls.
 - Avoid marketing-page patterns.
 - Keep Jinja templates defensive for settings values that may be absent from older app

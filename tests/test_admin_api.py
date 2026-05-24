@@ -4,7 +4,7 @@ from datetime import UTC, datetime, timedelta
 
 from fastapi.testclient import TestClient
 
-from llm_observe_proxy.database import RequestRecord
+from llm_observe_proxy.database import RequestRecord, TaskRun
 
 
 def test_get_settings_summary(proxy_client: TestClient) -> None:
@@ -257,3 +257,185 @@ def test_requests_api_uses_bounded_preview_and_detail_keeps_full_body(
     detail = proxy_client.get(f"/admin/api/requests/{record_id}?mode=text")
     assert detail.status_code == 200
     assert detail.json()["response_render"]["text"] == large_response
+
+
+def test_requests_api_v2_filters_stats_and_semantic_summaries(
+    proxy_client: TestClient,
+    proxy_app,
+) -> None:
+    now = datetime.now(UTC)
+    with proxy_app.state.session_factory() as session:
+        session.add_all(
+            [
+                RequestRecord(
+                    created_at=now,
+                    completed_at=now + timedelta(milliseconds=500),
+                    method="POST",
+                    path="/v1/chat/completions",
+                    endpoint="/v1/chat/completions",
+                    model="gpt-test",
+                    model_route="gpt-*",
+                    upstream_url="http://localhost:8080/v1/chat/completions",
+                    request_headers_json="{}",
+                    request_body=b"{}",
+                    response_status=200,
+                    response_headers_json="{}",
+                    response_body=(
+                        b'{"choices":[{"message":{"content":"Hello from the assistant."}}]}'
+                    ),
+                    response_content_type="application/json",
+                    duration_ms=500,
+                    billing_provider_slug="openai",
+                    billing_provider_name="OpenAI",
+                    billing_total_tokens=20,
+                ),
+                RequestRecord(
+                    created_at=now + timedelta(seconds=1),
+                    completed_at=now + timedelta(seconds=13),
+                    method="POST",
+                    path="/v1/chat/completions",
+                    endpoint="/v1/chat/completions",
+                    model="qwen-chat",
+                    model_route="qwen-*",
+                    upstream_url="http://localhost:8080/v1/chat/completions",
+                    request_headers_json="{}",
+                    request_body=b"{}",
+                    response_status=200,
+                    response_headers_json="{}",
+                    response_body=(
+                        b'data: {"choices":[{"delta":{"tool_calls":'
+                        b'[{"function":{"name":"read_file"}}]}}]}\n\n'
+                    ),
+                    response_content_type="text/event-stream",
+                    duration_ms=12_000,
+                    is_stream=True,
+                    has_tool_calls=True,
+                    billing_provider_slug="deepseek",
+                    billing_provider_name="DeepSeek",
+                    billing_total_tokens=12_000,
+                ),
+                RequestRecord(
+                    created_at=now + timedelta(seconds=2),
+                    completed_at=now + timedelta(seconds=3),
+                    method="POST",
+                    path="/v1/chat/completions",
+                    endpoint="/v1/chat/completions",
+                    model="bad-model",
+                    model_route="gpt-*",
+                    upstream_url="http://localhost:8080/v1/chat/completions",
+                    request_headers_json="{}",
+                    request_body=b"{}",
+                    response_status=500,
+                    response_headers_json="{}",
+                    response_body=b'{"error":{"message":"upstream exploded"}}',
+                    response_content_type="application/json",
+                    duration_ms=1000,
+                    billing_provider_slug="openai",
+                    billing_provider_name="OpenAI",
+                    billing_total_tokens=5,
+                    error="upstream exploded",
+                ),
+            ]
+        )
+        session.commit()
+
+    all_rows = proxy_client.get("/admin/api/requests")
+    assert all_rows.status_code == 200
+    all_data = all_rows.json()
+    assert all_data["stats"]["errors"]["value"] == 1
+    assert all_data["stats"]["slow"]["value"] == 1
+    assert all_data["stats"]["large"]["value"] == 1
+    assert {"value": "openai", "label": "OpenAI"} in all_data["provider_options"]
+    assert "qwen-*" in all_data["route_options"]
+
+    filtered = proxy_client.get(
+        "/admin/api/requests?provider=deepseek&route=qwen-*&slow=1&large=1&tool=1"
+    )
+    assert filtered.status_code == 200
+    item = filtered.json()["items"][0]
+    assert item["provider_name"] == "DeepSeek"
+    assert item["route_name"] == "qwen-*"
+    assert item["signals"]["stream"] is True
+    assert item["signals"]["tool"] is True
+    assert item["signals"]["slow"] is True
+    assert item["signals"]["large"] is True
+    assert item["semantic_summary"] == "Streaming response · Tool call detected"
+
+    errors = proxy_client.get("/admin/api/requests?error=1")
+    assert errors.status_code == 200
+    error_item = errors.json()["items"][0]
+    assert error_item["status"] == 500
+    assert error_item["signals"]["error"] is True
+    assert error_item["semantic_summary"].startswith("Server error 500")
+
+
+def test_run_detail_api_v2_health_counts_and_rates(
+    proxy_client: TestClient,
+    proxy_app,
+) -> None:
+    now = datetime.now(UTC)
+    with proxy_app.state.session_factory() as session:
+        run = TaskRun(name="Health run", started_at=now)
+        session.add(run)
+        session.flush()
+        session.add_all(
+            [
+                RequestRecord(
+                    task_run_id=run.id,
+                    created_at=now,
+                    completed_at=now + timedelta(seconds=1),
+                    method="POST",
+                    path="/v1/chat/completions",
+                    endpoint="/v1/chat/completions",
+                    model="ok",
+                    upstream_url="http://localhost:8080/v1/chat/completions",
+                    request_headers_json="{}",
+                    request_body=b"{}",
+                    response_status=200,
+                    response_headers_json="{}",
+                    response_body=b"{}",
+                    duration_ms=1000,
+                ),
+                RequestRecord(
+                    task_run_id=run.id,
+                    created_at=now + timedelta(seconds=2),
+                    completed_at=now + timedelta(seconds=3),
+                    method="POST",
+                    path="/v1/chat/completions",
+                    endpoint="/v1/chat/completions",
+                    model="bad",
+                    upstream_url="http://localhost:8080/v1/chat/completions",
+                    request_headers_json="{}",
+                    request_body=b"{}",
+                    response_status=500,
+                    response_headers_json="{}",
+                    response_body=b"{}",
+                    duration_ms=1000,
+                ),
+                RequestRecord(
+                    task_run_id=run.id,
+                    created_at=now + timedelta(seconds=4),
+                    method="POST",
+                    path="/v1/chat/completions",
+                    endpoint="/v1/chat/completions",
+                    model="pending",
+                    upstream_url="http://localhost:8080/v1/chat/completions",
+                    request_headers_json="{}",
+                    request_body=b"{}",
+                ),
+            ]
+        )
+        session.commit()
+        run_id = run.id
+
+    detail = proxy_client.get(f"/admin/api/runs/{run_id}")
+    assert detail.status_code == 200
+    stats = detail.json()["stats"]
+    assert stats["request_count"] == 3
+    assert stats["success_count"] == 1
+    assert stats["error_count"] == 1
+    assert stats["pending_count"] == 1
+    assert stats["success_rate_display"] == "33.3%"
+    assert stats["error_rate_display"] == "33.3%"
+    assert stats["signals"]["errors"]["value"] == 1
+    assert stats["last_activity"] is not None

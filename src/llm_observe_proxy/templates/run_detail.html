@@ -33,66 +33,98 @@
 
   <div class="live-status" data-live-status aria-live="polite">Loading run...</div>
 
-  <section class="panel what-if-panel" data-what-if-panel data-api-url="{{ what_if_api_url }}">
-    <header>
-      <h2>What-if cost</h2>
-      <span data-what-if-count>Loading</span>
-    </header>
-    <form class="what-if-form" data-what-if-form>
-      <label class="what-if-picker">
-        <span>Compare model</span>
-        <input
-          data-what-if-input
-          list="what-if-model-options"
-          name="what_if_model"
-          autocomplete="off"
-          placeholder="Search models or providers"
-        >
-      </label>
-      <datalist id="what-if-model-options" data-what-if-options></datalist>
-      <button class="button primary compact-button" type="submit">Compare</button>
-    </form>
-    <p class="muted what-if-hint">Models/providers like OpenAI, Anthropic, Gemini, Qwen</p>
-    <p class="muted what-if-message" data-what-if-message hidden></p>
-    <div class="table-shell compact-table">
-      <table class="model-routes-table what-if-table">
-        <thead>
-          <tr>
-            <th>Scenario</th>
-            <th>Input Tokens</th>
-            <th>Cached Input</th>
-            <th>Output Tokens</th>
-            <th>Input / 1M</th>
-            <th>Cached / 1M</th>
-            <th>Output / 1M</th>
-            <th>Input Cost</th>
-            <th>Output Cost</th>
-            <th>Total Cost</th>
-            <th>Included</th>
-            <th>Missing Usage</th>
-          </tr>
-        </thead>
-        <tbody data-what-if-scenarios>
-          <tr>
-            <td class="empty" colspan="12">Loading comparisons...</td>
-          </tr>
-        </tbody>
-      </table>
+  <nav class="run-tabs" data-run-tabs aria-label="Run detail tabs">
+    <button class="active" type="button" data-run-tab="overview">Overview</button>
+    <button type="button" data-run-tab="traffic">Traffic</button>
+    <button type="button" data-run-tab="cost">Cost what-if</button>
+    <button type="button" data-run-tab="models">Models</button>
+    <button type="button" data-run-tab="diagnostics">Diagnostics</button>
+  </nav>
+
+  <section class="run-tab-panel active" data-run-tab-panel="overview">
+    <div class="run-overview-grid" data-live-run-overview>
+      <div class="empty-state">Loading run overview...</div>
     </div>
+    <section class="panel recent-traffic-panel">
+      <header>
+        <h2>Recent traffic</h2>
+        <button class="button ghost compact-button" type="button" data-run-tab-jump="traffic">View all</button>
+      </header>
+      <div class="table-shell compact-traffic" data-live-recent-traffic data-show-run="false">
+        <div class="empty-state">Loading recent traffic...</div>
+      </div>
+    </section>
   </section>
 
-  <div data-live-run-breakdowns></div>
-
-  <section class="page-heading compact-heading">
-    <div>
-      <p class="eyebrow">Requests</p>
-      <h2>Run traffic</h2>
-    </div>
-    <a class="button ghost" href="/admin?run={{ run_id }}">Open in browser</a>
+  <section class="run-tab-panel" data-run-tab-panel="traffic" hidden>
+    <section class="page-heading compact-heading">
+      <div>
+        <p class="eyebrow">Requests</p>
+        <h2>Run traffic</h2>
+      </div>
+      <a class="button ghost" href="/admin?run={{ run_id }}">Open in browser</a>
+    </section>
+    <section class="table-shell" data-live-requests-table data-show-run="false">
+      <div class="empty-state">Loading run traffic...</div>
+    </section>
   </section>
 
-  <section class="table-shell" data-live-requests-table data-show-run="false">
-    <div class="empty-state">Loading run traffic...</div>
+  <section class="run-tab-panel" data-run-tab-panel="cost" hidden>
+    <section class="panel what-if-panel" data-what-if-panel data-api-url="{{ what_if_api_url }}">
+      <header>
+        <h2>What-if cost</h2>
+        <span data-what-if-count>Loading</span>
+      </header>
+      <form class="what-if-form" data-what-if-form>
+        <label class="what-if-picker">
+          <span>Compare model</span>
+          <input
+            data-what-if-input
+            list="what-if-model-options"
+            name="what_if_model"
+            autocomplete="off"
+            placeholder="Search models or providers"
+          >
+        </label>
+        <datalist id="what-if-model-options" data-what-if-options></datalist>
+        <button class="button primary compact-button" type="submit">Compare</button>
+      </form>
+      <p class="muted what-if-hint">Models/providers like OpenAI, Anthropic, Gemini, Qwen</p>
+      <p class="muted what-if-message" data-what-if-message hidden></p>
+      <div class="table-shell compact-table">
+        <table class="model-routes-table what-if-table">
+          <thead>
+            <tr>
+              <th>Scenario</th>
+              <th>Input Tokens</th>
+              <th>Cached Input</th>
+              <th>Output Tokens</th>
+              <th>Input / 1M</th>
+              <th>Cached / 1M</th>
+              <th>Output / 1M</th>
+              <th>Input Cost</th>
+              <th>Output Cost</th>
+              <th>Total Cost</th>
+              <th>Included</th>
+              <th>Missing Usage</th>
+            </tr>
+          </thead>
+          <tbody data-what-if-scenarios>
+            <tr>
+              <td class="empty" colspan="12">Loading comparisons...</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+  </section>
+
+  <section class="run-tab-panel" data-run-tab-panel="models" hidden>
+    <div data-live-run-models></div>
+  </section>
+
+  <section class="run-tab-panel" data-run-tab-panel="diagnostics" hidden>
+    <div data-live-run-diagnostics></div>
   </section>
 </section>
 {% endblock %}
