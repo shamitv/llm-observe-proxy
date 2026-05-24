@@ -1080,6 +1080,11 @@ class TaskRun(Base):
         nullable=True,
         index=True,
     )
+    paused_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        index=True,
+    )
     summary: Mapped[str | None] = mapped_column(Text, nullable=True)
     metadata_json: Mapped[str | None] = mapped_column(Text, nullable=True)
 
@@ -1358,6 +1363,7 @@ def create_session_factory(engine: Engine) -> SessionFactory:
 
 def init_db(engine: Engine) -> None:
     Base.metadata.create_all(engine)
+    _ensure_sqlite_task_run_schema(engine)
     _ensure_sqlite_request_record_schema(engine)
     _ensure_sqlite_model_provider_schema(engine)
     _ensure_sqlite_model_price_schema(engine)
@@ -2006,7 +2012,9 @@ def delete_ui_model_route(session: Session, model: str) -> bool:
 
 def get_active_task_run(session: Session) -> TaskRun | None:
     return session.scalar(
-        select(TaskRun).where(TaskRun.ended_at.is_(None)).order_by(TaskRun.started_at.desc())
+        select(TaskRun)
+        .where(TaskRun.ended_at.is_(None), TaskRun.paused_at.is_(None))
+        .order_by(TaskRun.started_at.desc())
     )
 
 
@@ -2016,7 +2024,9 @@ def start_task_run(session: Session, name: str, notes: str | None = None) -> Tas
         raise ValueError("Run name is required.")
 
     now = _now()
-    active_runs = session.scalars(select(TaskRun).where(TaskRun.ended_at.is_(None))).all()
+    active_runs = session.scalars(
+        select(TaskRun).where(TaskRun.ended_at.is_(None), TaskRun.paused_at.is_(None))
+    ).all()
     for active_run in active_runs:
         active_run.ended_at = now
 
@@ -2033,6 +2043,37 @@ def end_active_task_run(session: Session) -> TaskRun | None:
     active_run.ended_at = _now()
     session.flush()
     return active_run
+
+
+def pause_active_task_run(session: Session) -> TaskRun | None:
+    active_run = get_active_task_run(session)
+    if active_run is None:
+        return None
+    active_run.paused_at = _now()
+    session.flush()
+    return active_run
+
+
+def resume_task_run(session: Session, task_run_id: int) -> TaskRun:
+    task_run = session.get(TaskRun, task_run_id)
+    if task_run is None:
+        raise LookupError("Run not found.")
+    if task_run.ended_at is not None:
+        raise ValueError("Completed runs cannot be resumed.")
+
+    now = _now()
+    active_runs = session.scalars(
+        select(TaskRun).where(
+            TaskRun.id != task_run_id,
+            TaskRun.ended_at.is_(None),
+            TaskRun.paused_at.is_(None),
+        )
+    ).all()
+    for active_run in active_runs:
+        active_run.paused_at = now
+    task_run.paused_at = None
+    session.flush()
+    return task_run
 
 
 def get_task_run_stats(session: Session, task_run_id: int) -> dict[str, object]:
@@ -2086,6 +2127,18 @@ def _ensure_sqlite_parent(engine: Engine) -> None:
     if not database or database == ":memory:":
         return
     Path(database).expanduser().parent.mkdir(parents=True, exist_ok=True)
+
+
+def _ensure_sqlite_task_run_schema(engine: Engine) -> None:
+    if engine.dialect.name != "sqlite":
+        return
+    inspector = inspect(engine)
+    if "task_runs" not in inspector.get_table_names():
+        return
+    columns = {column["name"] for column in inspector.get_columns("task_runs")}
+    with engine.begin() as connection:
+        if "paused_at" not in columns:
+            connection.execute(text("ALTER TABLE task_runs ADD COLUMN paused_at DATETIME"))
 
 
 def _ensure_sqlite_request_record_schema(engine: Engine) -> None:
