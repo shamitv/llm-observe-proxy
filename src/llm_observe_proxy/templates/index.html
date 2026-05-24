@@ -28,7 +28,7 @@
     </div>
   </section>
 
-  <form class="toolbar" data-live-request-filters>
+  <form class="toolbar request-filter-toolbar" data-live-request-filters>
     <label>
       Endpoint
       <input name="endpoint" list="endpoints" placeholder="/v1/chat/completions">
@@ -37,6 +37,18 @@
       Model
       <select name="model">
         <option value="">Any model</option>
+      </select>
+    </label>
+    <label>
+      Provider
+      <select name="provider">
+        <option value="">Any provider</option>
+      </select>
+    </label>
+    <label>
+      Route
+      <select name="route">
+        <option value="">Any route</option>
       </select>
     </label>
     <label>
@@ -50,15 +62,23 @@
       <input name="status" inputmode="numeric" placeholder="200">
     </label>
     <label class="check"><input type="checkbox" name="stream" value="1"> Streaming</label>
-    <label class="check"><input type="checkbox" name="image" value="1"> Images</label>
     <label class="check"><input type="checkbox" name="tool" value="1"> Tools</label>
+    <label class="check"><input type="checkbox" name="image" value="1"> Images</label>
+    <label class="check"><input type="checkbox" name="error" value="1"> Errors</label>
+    <label class="check"><input type="checkbox" name="slow" value="1"> Slow &gt;10s</label>
+    <label class="check"><input type="checkbox" name="large" value="1"> Large &gt;10k tok</label>
     <button class="button primary" type="submit">Filter</button>
     <a class="button ghost" href="/admin" data-live-reset>Reset</a>
     <datalist id="endpoints"></datalist>
   </form>
 
-  <section class="table-shell" data-live-requests-table data-show-run="true">
-    <div class="empty-state">Loading captured requests...</div>
+  <section class="request-browser-layout">
+    <section class="table-shell" data-live-requests-table data-show-run="true">
+      <div class="empty-state">Loading captured requests...</div>
+    </section>
+    <aside class="request-inspector" data-live-request-inspector aria-label="Selected request">
+      <div class="empty-state">Select a request to inspect it.</div>
+    </aside>
   </section>
 </section>
 {% endblock %}

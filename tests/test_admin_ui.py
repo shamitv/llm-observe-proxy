@@ -81,10 +81,27 @@ def test_live_request_run_shells_and_polling_script(proxy_client: TestClient) ->
     assert "window.setTimeout(refresh, interval);" in app_js
     assert "if (inFlight && !replace)" in app_js
     assert "refresh({ replace: true })" in app_js
+    assert "renderRequestInspector" in app_js
+    assert "data-stat-filter" in app_js
+    assert "what-if-summary-row" in app_js
     assert 'fetch(apiUrlWithCurrentQuery(root)' in app_js
     assert 'root.querySelector("[data-live-mode-tabs]")' in app_js
     assert 'data-live-run-start' in app_js
     assert 'data-live-run-end' in app_js
+
+    request_page = proxy_client.get("/admin")
+    assert 'select name="provider"' in request_page.text
+    assert 'select name="route"' in request_page.text
+    assert 'name="error" value="1"' in request_page.text
+    assert 'name="slow" value="1"' in request_page.text
+    assert 'name="large" value="1"' in request_page.text
+    assert 'data-live-request-inspector' in request_page.text
+
+    run_page = proxy_client.get("/admin/runs/1")
+    assert 'data-run-tabs' in run_page.text
+    assert 'data-live-run-overview' in run_page.text
+    assert 'data-live-recent-traffic' in run_page.text
+    assert 'data-run-tab-panel="cost"' in run_page.text
 
 
 def test_request_browser_paginates_records(

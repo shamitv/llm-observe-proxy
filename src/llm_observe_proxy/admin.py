@@ -14,7 +14,7 @@ import httpx
 from fastapi import APIRouter, Form, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from jinja2 import Undefined, pass_context
-from sqlalchemy import desc, func, select
+from sqlalchemy import case, desc, func, or_, select
 from starlette.templating import Jinja2Templates
 
 from llm_observe_proxy.capture import (
@@ -132,6 +132,13 @@ def format_compact_rate(value: object) -> str:
     if abs(number) < 1000:
         return f"{number:.2f}"
     return format_compact_number(number)
+
+
+def format_percent(value: object) -> str:
+    number = _coerce_number(value)
+    if number is None:
+        return "-"
+    return f"{_format_decimal(number * 100, max_decimals=1)}%"
 
 
 def format_duration_ms(value: object) -> str:
@@ -259,6 +266,8 @@ TEST_IMAGE_DATA_URL = (
 )
 DEFAULT_RUN_WHAT_IF_KEYS = ("openai:gpt-5.5", "openai:gpt-5.4-mini")
 LIST_RESPONSE_PREVIEW_BYTES = 64 * 1024
+SLOW_REQUEST_THRESHOLD_MS = 10_000
+LARGE_REQUEST_TOKEN_THRESHOLD = 10_000
 
 
 @router.get("", response_class=HTMLResponse)
@@ -283,11 +292,16 @@ async def requests_api(
     request: Request,
     endpoint: str | None = None,
     model: str | None = None,
+    provider: str | None = None,
+    route: str | None = None,
     status: str | None = None,
     run: str | None = None,
     stream: str | None = None,
     image: str | None = None,
     tool: str | None = None,
+    error: str | None = None,
+    slow: str | None = None,
+    large: str | None = None,
     page: int = Query(1, ge=1),
     per_page: int = Query(50, ge=1, le=200),
 ) -> dict[str, object]:
@@ -300,6 +314,15 @@ async def requests_api(
             stmt = stmt.where(RequestRecord.endpoint.like(f"%{endpoint}%"))
         if model:
             stmt = stmt.where(RequestRecord.model == model)
+        if provider:
+            stmt = stmt.where(
+                or_(
+                    RequestRecord.billing_provider_slug == provider,
+                    RequestRecord.billing_provider_name == provider,
+                )
+            )
+        if route:
+            stmt = stmt.where(RequestRecord.model_route == route)
         if status_filter is not None:
             stmt = stmt.where(RequestRecord.response_status == status_filter)
         if run_filter is not None:
@@ -310,6 +333,19 @@ async def requests_api(
             stmt = stmt.where(RequestRecord.has_images.is_(True))
         if tool == "1":
             stmt = stmt.where(RequestRecord.has_tool_calls.is_(True))
+        if error == "1":
+            stmt = stmt.where(_request_error_condition())
+        if slow == "1":
+            stmt = stmt.where(RequestRecord.duration_ms >= SLOW_REQUEST_THRESHOLD_MS)
+        if large == "1":
+            stmt = stmt.where(
+                func.coalesce(
+                    RequestRecord.billing_total_tokens,
+                    RequestRecord.estimated_input_tokens,
+                    0,
+                )
+                >= LARGE_REQUEST_TOKEN_THRESHOLD
+            )
 
         total_records = _count_records(session, stmt)
         pagination = _pagination_context(
@@ -326,6 +362,16 @@ async def requests_api(
             )
         ]
         endpoints = [row[0] for row in session.execute(select(RequestRecord.endpoint).distinct())]
+        providers = _request_provider_options(session)
+        routes = [
+            row[0]
+            for row in session.execute(
+                select(RequestRecord.model_route)
+                .where(RequestRecord.model_route.is_not(None))
+                .distinct()
+                .order_by(RequestRecord.model_route)
+            )
+        ]
         run_options = session.scalars(select(TaskRun).order_by(desc(TaskRun.started_at))).all()
         stats = {
             "total": session.scalar(select(func.count()).select_from(RequestRecord)) or 0,
@@ -341,6 +387,23 @@ async def requests_api(
                 select(func.count()).where(RequestRecord.has_tool_calls.is_(True))
             )
             or 0,
+            "errors": session.scalar(select(func.count()).where(_request_error_condition()))
+            or 0,
+            "slow": session.scalar(
+                select(func.count()).where(RequestRecord.duration_ms >= SLOW_REQUEST_THRESHOLD_MS)
+            )
+            or 0,
+            "large": session.scalar(
+                select(func.count()).where(
+                    func.coalesce(
+                        RequestRecord.billing_total_tokens,
+                        RequestRecord.estimated_input_tokens,
+                        0,
+                    )
+                    >= LARGE_REQUEST_TOKEN_THRESHOLD
+                )
+            )
+            or 0,
         }
         upstream_url = get_upstream_url(session, request.app.state.settings)
         active_run = _task_run_summary(get_active_task_run(session), session)
@@ -352,14 +415,21 @@ async def requests_api(
         "filters": {
             "endpoint": endpoint or "",
             "model": model or "",
+            "provider": provider or "",
+            "route": route or "",
             "status": status_filter if status_filter is not None else "",
             "run": run_filter if run_filter is not None else "",
             "stream": stream == "1",
             "image": image == "1",
             "tool": tool == "1",
+            "error": error == "1",
+            "slow": slow == "1",
+            "large": large == "1",
             "page": pagination["page"],
             "per_page": pagination["per_page"],
         },
+        "provider_options": providers,
+        "route_options": routes,
         "run_options": [
             _task_run_summary_json(_task_run_summary(task_run, session=None))
             for task_run in run_options
@@ -2299,6 +2369,63 @@ def _plain_preview(value: object, limit: int = 160) -> str:
     return text
 
 
+def _request_is_error(status: object, error: object) -> bool:
+    if error:
+        return True
+    status_number = _coerce_number(status)
+    return status_number is not None and (status_number < 200 or status_number >= 400)
+
+
+def _request_is_slow(duration_ms: object) -> bool:
+    duration = _coerce_number(duration_ms)
+    return duration is not None and duration >= SLOW_REQUEST_THRESHOLD_MS
+
+
+def _request_is_large(total_tokens: object, estimated_input_tokens: object = None) -> bool:
+    total = _coerce_number(total_tokens)
+    if total is None:
+        total = _coerce_number(estimated_input_tokens)
+    return total is not None and total >= LARGE_REQUEST_TOKEN_THRESHOLD
+
+
+def _request_signals(record: dict[str, object]) -> dict[str, bool]:
+    return {
+        "stream": bool(record["is_stream"]),
+        "image": bool(record["has_images"]),
+        "tool": bool(record["has_tool_calls"]),
+        "error": _request_is_error(record["status"], record["error"]),
+        "slow": _request_is_slow(record["duration_ms"]),
+        "large": _request_is_large(
+            record["tokens"]["total"],
+            record.get("estimated_input_tokens"),
+        ),
+    }
+
+
+def _semantic_summary(record: dict[str, object]) -> str:
+    preview = _plain_preview(record.get("preview"))
+    signals = _request_signals(record)
+    status = record.get("status")
+    if signals["error"]:
+        if status and _coerce_number(status) and _coerce_number(status) >= 500:
+            prefix = f"Server error {status}"
+        elif status:
+            prefix = f"HTTP {status}"
+        else:
+            prefix = "Request error"
+        detail = _plain_preview(record.get("error") or preview)
+        return f"{prefix} · {detail}" if detail else prefix
+    if signals["tool"]:
+        summary = "Streaming response" if signals["stream"] else "Response"
+        return f"{summary} · Tool call detected"
+    if signals["stream"] and (not preview or preview.startswith("data:")):
+        return "Streaming response"
+    if signals["large"]:
+        total_display = format_compact_number(record["tokens"]["total"])
+        return f"Long response · {total_display} tokens" + (f" · {preview}" if preview else "")
+    return preview
+
+
 def _stats_json(stats: dict[str, object]) -> dict[str, object]:
     return {
         key: {
@@ -2389,6 +2516,20 @@ def _task_run_stats_detail_json(stats: dict[str, object]) -> dict[str, object]:
     return {
         "request_count": stats["request_count"],
         "request_count_display": format_compact_number(stats["request_count"]),
+        "success_count": stats["success_count"],
+        "success_count_display": format_compact_number(stats["success_count"]),
+        "error_count": stats["error_count"],
+        "error_count_display": format_compact_number(stats["error_count"]),
+        "pending_count": stats["pending_count"],
+        "pending_count_display": format_compact_number(stats["pending_count"]),
+        "success_rate": _json_safe_number(stats["success_rate"]),
+        "success_rate_display": format_percent(stats["success_rate"]),
+        "error_rate": _json_safe_number(stats["error_rate"]),
+        "error_rate_display": format_percent(stats["error_rate"]),
+        "last_activity": _datetime_iso(stats["last_activity"]),
+        "last_activity_fallback": _datetime_fallback(stats["last_activity"])
+        if stats["last_activity"]
+        else None,
         "llm_wall_time_ms": stats["llm_wall_time_ms"],
         "llm_wall_time_display": _duration_display(stats["llm_wall_time_ms"]),
         "run_open_duration_ms": stats["run_open_duration_ms"],
@@ -2430,6 +2571,8 @@ def _count_rows_json(rows: list[dict[str, object]]) -> list[dict[str, object]]:
 
 def _record_list_item_json(record: dict[str, object]) -> dict[str, object]:
     status_label = str(record["status"]) if record["status"] is not None else "pending"
+    signals = _request_signals(record)
+    semantic_summary = record.get("semantic_summary") or _semantic_summary(record)
     return {
         "id": record["id"],
         "created_at": _datetime_iso(record["created_at"]),
@@ -2456,9 +2599,13 @@ def _record_list_item_json(record: dict[str, object]) -> dict[str, object]:
         "cost_usd": _json_safe_number(record["cost_usd"]),
         "cost_display": format_usd(record["cost_usd"]),
         "billing_provider": record["billing_provider"],
+        "provider_name": record.get("provider_name") or record["billing_provider"],
         "billing_model": record["billing_model"],
+        "route_name": record.get("route_name") or record["model_route"] or "global fallback",
         "error": record["error"],
+        "signals": signals,
         "preview": _plain_preview(record["preview"]),
+        "semantic_summary": _plain_preview(semantic_summary),
     }
 
 
@@ -2683,6 +2830,40 @@ async def _runs_with_error(request: Request, error: str) -> HTMLResponse:
     )
 
 
+def _request_error_condition():
+    return or_(
+        RequestRecord.error.is_not(None),
+        RequestRecord.response_status < 200,
+        RequestRecord.response_status >= 400,
+    )
+
+
+def _request_provider_options(session) -> list[dict[str, str]]:
+    rows = session.execute(
+        select(
+            RequestRecord.billing_provider_slug,
+            RequestRecord.billing_provider_name,
+        )
+        .where(
+            or_(
+                RequestRecord.billing_provider_slug.is_not(None),
+                RequestRecord.billing_provider_name.is_not(None),
+            )
+        )
+        .distinct()
+        .order_by(RequestRecord.billing_provider_name, RequestRecord.billing_provider_slug)
+    ).all()
+    options: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for slug, name in rows:
+        value = slug or name
+        if not value or value in seen:
+            continue
+        seen.add(value)
+        options.append({"value": value, "label": name or slug or value})
+    return options
+
+
 def _request_list_items_for_page(
     session,
     stmt,
@@ -2773,7 +2954,7 @@ def _record_list_item_from_row(row, *, now: datetime | None = None) -> dict[str,
     preview = response_render.text
     if preview and not has_complete_preview:
         preview = f"{preview}..."
-    return {
+    item = {
         "id": row["id"],
         "created_at": row["created_at"],
         "method": row["method"],
@@ -2801,10 +2982,16 @@ def _record_list_item_from_row(row, *, now: datetime | None = None) -> dict[str,
         "tokens_per_second": _tokens_per_second(output_tokens, row["duration_ms"]),
         "cost_usd": row["billing_total_cost_usd"],
         "billing_provider": row["billing_provider_name"] or row["billing_provider_slug"],
+        "provider_name": row["billing_provider_name"] or row["billing_provider_slug"],
         "billing_model": row["billing_model"],
+        "route_name": row["model_route"] or "global fallback",
+        "estimated_input_tokens": row["estimated_input_tokens"],
         "error": row["error"],
         "preview": preview,
     }
+    item["signals"] = _request_signals(item)
+    item["semantic_summary"] = _semantic_summary(item)
+    return item
 
 
 def _task_run_summary_from_row(row, *, now: datetime | None = None) -> dict[str, object] | None:
@@ -2850,7 +3037,7 @@ def _record_list_item(record: RequestRecord, *, now: datetime | None = None) -> 
     )
     if input_is_estimated:
         input_tokens = record.estimated_input_tokens
-    return {
+    item = {
         "id": record.id,
         "created_at": record.created_at,
         "method": record.method,
@@ -2878,10 +3065,16 @@ def _record_list_item(record: RequestRecord, *, now: datetime | None = None) -> 
         "tokens_per_second": _tokens_per_second(output_tokens, record.duration_ms),
         "cost_usd": record.billing_total_cost_usd,
         "billing_provider": record.billing_provider_name or record.billing_provider_slug,
+        "provider_name": record.billing_provider_name or record.billing_provider_slug,
         "billing_model": record.billing_model,
+        "route_name": record.model_route or "global fallback",
+        "estimated_input_tokens": record.estimated_input_tokens,
         "error": record.error,
         "preview": response_render.text,
     }
+    item["signals"] = _request_signals(item)
+    item["semantic_summary"] = _semantic_summary(item)
+    return item
 
 
 def _record_token_usage(record: RequestRecord):
@@ -3068,6 +3261,29 @@ def _task_run_stats_detail(task_run: TaskRun, session) -> dict[str, object]:
             func.sum(RequestRecord.billing_total_cost_usd),
         ).where(RequestRecord.task_run_id == task_run.id)
     ).one()
+    health_row = session.execute(
+        select(
+            func.coalesce(
+                func.sum(
+                    case(
+                        (
+                            (RequestRecord.response_status >= 200)
+                            & (RequestRecord.response_status < 400),
+                            1,
+                        ),
+                        else_=0,
+                    )
+                ),
+                0,
+            ),
+            func.coalesce(func.sum(case((_request_error_condition(), 1), else_=0)), 0),
+            func.coalesce(
+                func.sum(case((RequestRecord.response_status.is_(None), 1), else_=0)),
+                0,
+            ),
+            func.max(RequestRecord.created_at),
+        ).where(RequestRecord.task_run_id == task_run.id)
+    ).one()
 
     token_totals = {
         "input": _coerce_int_or_none(token_row[0]),
@@ -3076,9 +3292,18 @@ def _task_run_stats_detail(task_run: TaskRun, session) -> dict[str, object]:
     }
     llm_wall_time_ms = base_stats["llm_wall_time_ms"]
     total_request_duration_ms = base_stats["total_request_duration_ms"]
+    request_count = int(base_stats["request_count"] or 0)
+    success_count = int(health_row[0] or 0)
+    error_count = int(health_row[1] or 0)
     return {
         **base_stats,
         "run_open_duration_ms": run_open_duration_ms,
+        "success_count": success_count,
+        "error_count": error_count,
+        "pending_count": int(health_row[2] or 0),
+        "success_rate": success_count / request_count if request_count else None,
+        "error_rate": error_count / request_count if request_count else None,
+        "last_activity": health_row[3],
         "tokens": token_totals,
         "cost_usd": token_row[3],
         "throughput": {
@@ -3106,7 +3331,7 @@ def _task_run_stats_detail(task_run: TaskRun, session) -> dict[str, object]:
             "streams": base_stats["streams"],
             "images": base_stats["images"],
             "tools": base_stats["tools"],
-            "errors": base_stats["errors"],
+            "errors": error_count,
         },
     }
 

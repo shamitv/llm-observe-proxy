@@ -118,6 +118,7 @@ if (whatIfPanel) {
 
   let priceOptions = [];
   let selectedKeys = [];
+  let latestScenarios = [];
 
   const setMessage = (text) => {
     if (!message) {
@@ -240,6 +241,48 @@ if (whatIfPanel) {
     });
   };
 
+  const renderSummary = (scenarios) => {
+    const summaryList = document.querySelector("[data-what-if-summary]");
+    if (!summaryList) {
+      return;
+    }
+    summaryList.replaceChildren();
+    if (!scenarios.length) {
+      const empty = document.createElement("p");
+      empty.className = "muted";
+      empty.textContent = "No comparisons selected.";
+      summaryList.append(empty);
+      return;
+    }
+    const baseline = scenarios[0]?.total_cost_usd;
+    scenarios.slice(0, 3).forEach((scenario, index) => {
+      const total = scenario.display?.total_cost_usd || "-";
+      let delta = index === 0 ? "Baseline" : "";
+      if (index > 0 && typeof baseline === "number" && typeof scenario.total_cost_usd === "number") {
+        const amount = scenario.total_cost_usd - baseline;
+        const percent = baseline ? (amount / baseline) * 100 : null;
+        delta = `${amount >= 0 ? "+" : ""}${amount.toFixed(4)}${percent === null ? "" : ` · ${percent >= 0 ? "+" : ""}${percent.toFixed(1)}%`}`;
+      }
+      const row = document.createElement("div");
+      row.className = `what-if-summary-row${index === 0 ? " current" : ""}`;
+      const labelWrap = document.createElement("span");
+      const label = document.createElement("strong");
+      label.textContent = scenario.label;
+      const meta = document.createElement("small");
+      meta.textContent = `${scenario.provider_name} / ${scenario.model}`;
+      labelWrap.append(label, meta);
+      const totalWrap = document.createElement("span");
+      const totalValue = document.createElement("strong");
+      totalValue.textContent = total;
+      const deltaValue = document.createElement("small");
+      deltaValue.textContent = delta;
+      totalWrap.append(totalValue, deltaValue);
+      row.append(labelWrap, totalWrap);
+      summaryList.append(row);
+    });
+  };
+  window.renderWhatIfSummary = () => renderSummary(latestScenarios);
+
   const selectedOption = (value) => {
     const needle = normalize(value);
     if (!needle) {
@@ -285,8 +328,11 @@ if (whatIfPanel) {
       const data = await response.json();
       priceOptions = Array.isArray(data.options) ? data.options : [];
       selectedKeys = Array.isArray(data.selected_keys) ? data.selected_keys : [];
+      const scenarios = Array.isArray(data.scenarios) ? data.scenarios : [];
+      latestScenarios = scenarios;
       renderOptions();
-      renderScenarios(Array.isArray(data.scenarios) ? data.scenarios : []);
+      renderScenarios(scenarios);
+      renderSummary(scenarios);
       setCount(`${data.compared_count || 0} compared`);
       setMessage(data.message || "");
     } catch (_error) {
@@ -1103,18 +1149,25 @@ const renderStatusPill = (statusLabel) => createNode("span", {
   textContent: statusLabel || "pending",
 });
 
+const signalDefinitions = [
+  ["stream", "Stream"],
+  ["tool", "Tool"],
+  ["image", "Image"],
+  ["error", "Error"],
+  ["slow", "Slow >10s"],
+  ["large", "Large"],
+];
+
 const renderSignals = (item) => {
   const wrap = createNode("div", { className: "signals" });
-  [
-    [item.is_stream, "Stream"],
-    [item.has_images, "Image"],
-    [item.has_tool_calls, "Tool"],
-    [item.error, "Error"],
-  ].forEach(([enabled, label]) => {
-    if (enabled) {
-      wrap.append(createNode("span", { textContent: label }));
+  signalDefinitions.forEach(([key, label]) => {
+    if (item.signals?.[key]) {
+      wrap.append(createNode("span", { className: `signal-${key}`, textContent: label }));
     }
   });
+  if (!wrap.children.length) {
+    wrap.append(createNode("span", { className: "signal-muted", textContent: "None" }));
+  }
   return wrap;
 };
 
@@ -1140,42 +1193,63 @@ const renderTokenTriplet = (tokens) => {
 };
 
 const renderCostCell = (item) => {
-  const wrap = document.createDocumentFragment();
+  const wrap = createNode("div", { className: "cost-cell" });
   wrap.append(createNode("strong", { textContent: valueOrDash(item.cost_display) }));
-  if (item.billing_provider) {
-    wrap.append(createNode("span", { className: "muted", textContent: item.billing_provider }));
+  if (item.provider_name || item.billing_provider) {
+    wrap.append(createNode("span", { className: "muted", textContent: item.provider_name || item.billing_provider }));
   }
   return wrap;
 };
+
+const renderRequestSummary = (item) => createNode("div", { className: "request-summary" }, [
+  createNode("span", { textContent: item.semantic_summary || item.preview || "" }),
+  createNode("a", {
+    className: "request-row-link",
+    href: `/admin/requests/${item.id}`,
+    textContent: "View full details",
+    "aria-label": `View full details for request #${item.id}`,
+  }),
+]);
 
 const renderRequestRows = (tbody, items, showRun) => {
   tbody.replaceChildren();
   if (!items.length) {
     const row = createNode("tr");
-    tableCell(row, "No captured requests yet.", "empty").colSpan = showRun ? 11 : 10;
+    tableCell(row, "No captured requests yet.", "empty").colSpan = showRun ? 9 : 8;
     tbody.append(row);
     return;
   }
   items.forEach((item) => {
-    const row = createNode("tr");
-    const timeCell = createNode("td");
-    timeCell.append(
+    const row = createNode("tr", {
+      className: "request-row",
+      tabindex: "0",
+      "data-request-row": true,
+      "data-request-id": item.id,
+    });
+    if (item.signals?.error) {
+      row.classList.add("has-error");
+    }
+    if (item.signals?.slow) {
+      row.classList.add("is-slow");
+    }
+    const requestCell = createNode("td", { className: "request-cell" });
+    requestCell.append(
       createNode("a", { href: `/admin/requests/${item.id}`, textContent: `#${item.id}` }),
       localTimeNode(item.created_at, item.created_at_table_fallback, "table"),
+      createNode("span", { className: "request-endpoint" }, [
+        createNode("span", { className: "method", textContent: item.method }),
+        createNode("code", { textContent: item.endpoint }),
+      ]),
     );
-    row.append(timeCell);
-
-    const endpointCell = createNode("td", { className: "request-endpoint" });
-    endpointCell.append(
-      createNode("span", { className: "method", textContent: item.method }),
-      createNode("code", { textContent: item.endpoint }),
-    );
-    row.append(endpointCell);
+    row.append(requestCell);
 
     const modelCell = createNode("td", { className: "request-model" });
-    modelCell.append(createNode("span", { textContent: valueOrDash(item.model) }));
-    if (item.model_route) {
-      modelCell.append(createNode("span", { className: "route-badge", textContent: item.model_route }));
+    modelCell.append(createNode("strong", { textContent: valueOrDash(item.model) }));
+    if (item.provider_name || item.billing_provider) {
+      modelCell.append(createNode("span", { className: "muted", textContent: item.provider_name || item.billing_provider }));
+    }
+    if (item.route_name) {
+      modelCell.append(createNode("span", { className: "route-badge", textContent: item.route_name }));
     }
     row.append(modelCell);
 
@@ -1186,6 +1260,7 @@ const renderRequestRows = (tbody, items, showRun) => {
           className: "run-badge",
           href: `/admin/runs/${item.task_run.id}`,
           textContent: item.task_run.name,
+          title: item.task_run.name,
         }));
       } else {
         runCell.append(createNode("span", { className: "muted", textContent: "-" }));
@@ -1201,21 +1276,23 @@ const renderRequestRows = (tbody, items, showRun) => {
         textContent: `${valueOrDash(item.duration_display)} so far`,
       })
       : item.duration_display;
-    tableCell(row, duration, "numeric");
-    tableCell(row, item.tokens_per_second_display, "numeric");
+    tableCell(row, createNode("div", { className: "performance-cell" }, [
+      createNode("strong", {}, [duration instanceof Node ? duration : valueOrDash(duration)]),
+      createNode("span", { className: "muted", textContent: `${valueOrDash(item.tokens_per_second_display)} TPS` }),
+    ]), "numeric");
     tableCell(row, renderTokenTriplet(item.tokens));
     tableCell(row, renderCostCell(item), "numeric");
     tableCell(row, renderSignals(item), "signals");
-    tableCell(row, createNode("span", { textContent: item.preview || "" }), "request-preview");
+    tableCell(row, renderRequestSummary(item), "request-preview");
     tbody.append(row);
   });
 };
 
-const renderPagination = (container, pagination) => {
+const renderPagination = (container, pagination, position = "bottom") => {
   if (!pagination) {
     return;
   }
-  const bar = createNode("div", { className: "pagination-bar" });
+  const bar = createNode("div", { className: `pagination-bar pagination-${position}` });
   const summary = createNode("span");
   summary.append(
     "Showing ",
@@ -1250,34 +1327,195 @@ const renderPagination = (container, pagination) => {
   container.append(bar);
 };
 
-const renderRequestsTable = (container, items, pagination, showRun) => {
+const renderMobileRequestList = (items, showRun) => {
+  const list = createNode("div", { className: "request-mobile-list" });
+  if (!items.length) {
+    list.append(createNode("div", { className: "empty-state", textContent: "No captured requests yet." }));
+    return list;
+  }
+  items.forEach((item) => {
+    const row = createNode("a", { className: "request-mobile-row", href: `/admin/requests/${item.id}` }, [
+      createNode("span", { className: "mobile-dot" }),
+      createNode("span", {}, [
+        createNode("strong", { textContent: `#${item.id}` }),
+        localTimeNode(item.created_at, item.created_at_table_fallback, "table"),
+      ]),
+      createNode("span", {}, [
+        createNode("strong", { textContent: valueOrDash(item.model) }),
+        createNode("small", { textContent: item.provider_name || item.billing_provider || item.route_name || "-" }),
+      ]),
+      renderStatusPill(item.status_label),
+      createNode("span", {}, [
+        createNode("strong", { textContent: valueOrDash(item.duration_display) }),
+        createNode("small", { textContent: `${valueOrDash(item.tokens_per_second_display)} TPS` }),
+      ]),
+      renderCostCell(item),
+      createNode("span", { className: "mobile-chevron", textContent: "›" }),
+    ]);
+    if (showRun && item.task_run) {
+      row.title = item.task_run.name;
+    }
+    if (item.signals?.error) {
+      row.classList.add("has-error");
+    }
+    list.append(row);
+  });
+  return list;
+};
+
+const renderRequestsTable = (container, items, pagination, showRun, options = {}) => {
   container.replaceChildren();
+  if (!options.compact) {
+    container.append(createNode("div", { className: "request-table-controls" }, [
+      createNode("button", {
+        className: "button ghost compact-button columns-button",
+        type: "button",
+        textContent: "Columns",
+        "aria-disabled": "true",
+        title: "Column presets will be added in a future pass.",
+      }),
+    ]));
+    renderPagination(container, pagination, "top");
+  }
   const table = createNode("table", { className: "requests-table" });
   const colgroup = createNode("colgroup");
   [
-    "col-time",
-    "col-endpoint",
-    "col-model",
+    "col-request",
+    "col-model-provider",
     ...(showRun ? ["col-run"] : []),
     "col-status",
-    "col-duration",
-    "col-tps",
+    "col-performance",
     "col-tokens",
     "col-cost",
     "col-signals",
-    "col-preview",
+    "col-summary",
   ].forEach((className) => colgroup.append(createNode("col", { className })));
   const thead = createNode("thead");
   const headRow = createNode("tr");
-  ["Time", "Endpoint", "Model", ...(showRun ? ["Run"] : []), "Status", "Duration", "TPS", "Tokens", "Cost", "Signals", "Preview"]
+  ["Request", "Model / Provider", ...(showRun ? ["Run"] : []), "Status", "Performance", "Tokens", "Cost", "Signals", "Summary"]
     .forEach((heading) => headRow.append(createNode("th", { textContent: heading })));
   thead.append(headRow);
   const tbody = createNode("tbody");
   renderRequestRows(tbody, items, showRun);
   table.append(colgroup, thead, tbody);
   container.append(table);
-  renderPagination(container, pagination);
+  container.append(renderMobileRequestList(items, showRun));
+  if (!options.compact) {
+    renderPagination(container, pagination);
+  }
   updatePendingElapsed();
+};
+
+const renderRequestInspector = (container, item) => {
+  if (!container) {
+    return;
+  }
+  container.replaceChildren();
+  if (!item) {
+    container.append(createNode("div", { className: "empty-state", textContent: "Select a request to inspect it." }));
+    return;
+  }
+  const signals = renderSignals(item);
+  const stats = createNode("div", { className: "inspector-stats" });
+  [
+    ["Input tokens", item.tokens?.input_display],
+    ["Output tokens", item.tokens?.output_display],
+    ["Total tokens", item.tokens?.total_display],
+    ["Model", item.model],
+    ["Provider", item.provider_name || item.billing_provider],
+  ].forEach(([label, value]) => {
+    stats.append(createNode("span", {}, [
+      createNode("small", { textContent: label }),
+      createNode("strong", { textContent: valueOrDash(value) }),
+    ]));
+  });
+  container.append(
+    createNode("header", { className: "request-inspector-header" }, [
+      createNode("div", {}, [
+        createNode("h2", { textContent: `Request #${item.id}` }),
+        renderStatusPill(item.status_label),
+      ]),
+      createNode("a", {
+        className: "button ghost compact-button",
+        href: `/admin/requests/${item.id}`,
+        textContent: "Open",
+      }),
+    ]),
+    createNode("div", { className: "inspector-tabs", "aria-label": "Request inspector sections" }, [
+      createNode("span", { className: "active", textContent: "Overview" }),
+      createNode("span", { textContent: "Route / Provider" }),
+      createNode("span", { textContent: "Tokens" }),
+      createNode("span", { textContent: "Preview" }),
+    ]),
+    createNode("dl", { className: "inspector-fields" }, [
+      createNode("dt", { textContent: "Time" }),
+      createNode("dd", {}, [localTimeNode(item.created_at, item.created_at_fallback, "full")]),
+      createNode("dt", { textContent: "Method" }),
+      createNode("dd", { textContent: item.method }),
+      createNode("dt", { textContent: "Endpoint" }),
+      createNode("dd", { textContent: item.endpoint }),
+      createNode("dt", { textContent: "Run" }),
+      createNode("dd", { textContent: item.task_run?.name || "-" }),
+      createNode("dt", { textContent: "Duration" }),
+      createNode("dd", { textContent: item.duration_display }),
+      createNode("dt", { textContent: "TPS" }),
+      createNode("dd", { textContent: item.tokens_per_second_display }),
+      createNode("dt", { textContent: "Cost" }),
+      createNode("dd", { textContent: `${item.cost_display} (${item.provider_name || item.billing_provider || "no provider"})` }),
+    ]),
+    createNode("section", { className: "inspector-card" }, [
+      createNode("h3", { textContent: "Signals" }),
+      signals,
+    ]),
+    createNode("section", { className: "inspector-card" }, [
+      createNode("h3", { textContent: "Summary" }),
+      createNode("p", { textContent: item.semantic_summary || item.preview || "-" }),
+    ]),
+    createNode("section", { className: "inspector-card" }, [
+      createNode("h3", { textContent: "Quick stats" }),
+      stats,
+    ]),
+    createNode("a", {
+      className: "button ghost inspector-detail-link",
+      href: `/admin/requests/${item.id}`,
+      textContent: "View full details →",
+    }),
+  );
+};
+
+const markSelectedRequest = (root, requestId) => {
+  root.querySelectorAll("[data-request-row]").forEach((row) => {
+    row.classList.toggle("is-selected", String(row.dataset.requestId) === String(requestId));
+  });
+};
+
+const renderRequestStats = (root, stats) => {
+  const container = root.querySelector("[data-live-request-stats]");
+  if (!container) {
+    return;
+  }
+  const params = new URLSearchParams(window.location.search);
+  const chips = [
+    ["total", "Total", stats.total?.display],
+    ["stream", "Streams", stats.streams?.display],
+    ["image", "Images", stats.images?.display],
+    ["tool", "Tools", stats.tools?.display],
+    ["error", "Errors", stats.errors?.display],
+    ["slow", "Slow >10s", stats.slow?.display],
+    ["large", "Large >10k tok", stats.large?.display],
+  ];
+  container.replaceChildren();
+  chips.forEach(([key, label, value]) => {
+    const active = key !== "total" && params.get(key) === "1";
+    container.append(createNode("button", {
+      className: `stat-chip${active ? " active" : ""} stat-${key}`,
+      type: "button",
+      "data-stat-filter": key,
+    }, [
+      createNode("strong", { textContent: valueOrDash(value) }),
+      label,
+    ]));
+  });
 };
 
 const renderRunControl = (container, activeRun, includeNotes) => {
@@ -1342,9 +1580,13 @@ const renderRunControl = (container, activeRun, includeNotes) => {
 
 const updateRequestFilterOptions = (root, data) => {
   const modelSelect = root.querySelector("select[name='model']");
+  const providerSelect = root.querySelector("select[name='provider']");
+  const routeSelect = root.querySelector("select[name='route']");
   const runSelect = root.querySelector("select[name='run']");
   const endpoints = root.querySelector("#endpoints");
   const currentModel = modelSelect?.value || "";
+  const currentProvider = providerSelect?.value || "";
+  const currentRoute = routeSelect?.value || "";
   const currentRun = runSelect?.value || "";
   if (modelSelect) {
     modelSelect.replaceChildren(createNode("option", { value: "", textContent: "Any model" }));
@@ -1353,6 +1595,26 @@ const updateRequestFilterOptions = (root, data) => {
         value: model,
         textContent: model,
         selected: model === currentModel,
+      }));
+    });
+  }
+  if (providerSelect) {
+    providerSelect.replaceChildren(createNode("option", { value: "", textContent: "Any provider" }));
+    (data.provider_options || []).forEach((provider) => {
+      providerSelect.append(createNode("option", {
+        value: provider.value,
+        textContent: provider.label,
+        selected: provider.value === currentProvider,
+      }));
+    });
+  }
+  if (routeSelect) {
+    routeSelect.replaceChildren(createNode("option", { value: "", textContent: "Any route" }));
+    (data.route_options || []).forEach((route) => {
+      routeSelect.append(createNode("option", {
+        value: route,
+        textContent: route,
+        selected: route === currentRoute,
       }));
     });
   }
@@ -1380,13 +1642,13 @@ const syncRequestFormFromUrl = (root) => {
     return;
   }
   const params = new URLSearchParams(window.location.search);
-  ["endpoint", "model", "run", "status"].forEach((name) => {
+  ["endpoint", "model", "provider", "route", "run", "status"].forEach((name) => {
     const field = form.elements[name];
     if (field) {
       field.value = params.get(name) || "";
     }
   });
-  ["stream", "image", "tool"].forEach((name) => {
+  ["stream", "image", "tool", "error", "slow", "large"].forEach((name) => {
     const field = form.elements[name];
     if (field) {
       field.checked = params.get(name) === "1";
@@ -1396,13 +1658,13 @@ const syncRequestFormFromUrl = (root) => {
 
 const requestQueryFromForm = (form) => {
   const params = new URLSearchParams();
-  ["endpoint", "model", "run", "status"].forEach((name) => {
+  ["endpoint", "model", "provider", "route", "run", "status"].forEach((name) => {
     const value = form.elements[name]?.value?.trim();
     if (value) {
       params.set(name, value);
     }
   });
-  ["stream", "image", "tool"].forEach((name) => {
+  ["stream", "image", "tool", "error", "slow", "large"].forEach((name) => {
     if (form.elements[name]?.checked) {
       params.set(name, "1");
     }
@@ -1470,9 +1732,11 @@ const startLivePoller = (root, load) => {
 
 const initRequestsLivePage = (root) => {
   const table = root.querySelector("[data-live-requests-table]");
-  const stats = root.querySelector("[data-live-request-stats]");
+  const inspector = root.querySelector("[data-live-request-inspector]");
   const runControl = root.querySelector("[data-live-run-control]");
   const form = root.querySelector("[data-live-request-filters]");
+  let latestItems = [];
+  let selectedRequestId = null;
 
   syncRequestFormFromUrl(root);
 
@@ -1487,16 +1751,18 @@ const initRequestsLivePage = (root) => {
     }
     updateRequestFilterOptions(root, data);
     syncRequestFormFromUrl(root);
-    if (stats) {
-      stats.replaceChildren(
-        createNode("span", {}, [createNode("strong", { textContent: data.stats.total.display }), "Total"]),
-        createNode("span", {}, [createNode("strong", { textContent: data.stats.streams.display }), "Streams"]),
-        createNode("span", {}, [createNode("strong", { textContent: data.stats.images.display }), "Images"]),
-        createNode("span", {}, [createNode("strong", { textContent: data.stats.tools.display }), "Tools"]),
-      );
-    }
+    latestItems = data.items || [];
+    renderRequestStats(root, data.stats || {});
     renderRunControl(runControl, data.active_run, false);
-    renderRequestsTable(table, data.items || [], data.pagination, true);
+    renderRequestsTable(table, latestItems, data.pagination, true);
+    if (!latestItems.some((item) => String(item.id) === String(selectedRequestId))) {
+      selectedRequestId = latestItems[0]?.id || null;
+    }
+    renderRequestInspector(
+      inspector,
+      latestItems.find((item) => String(item.id) === String(selectedRequestId)),
+    );
+    markSelectedRequest(root, selectedRequestId);
   };
 
   form?.addEventListener("submit", (event) => {
@@ -1512,14 +1778,58 @@ const initRequestsLivePage = (root) => {
     window.dispatchEvent(new Event("live:refresh"));
   });
   table?.addEventListener("click", (event) => {
+    const requestRow = event.target.closest("[data-request-row]");
     const link = event.target.closest("[data-live-page-number]");
-    if (!link) {
+    if (link) {
+      event.preventDefault();
+      const params = new URLSearchParams(window.location.search);
+      params.set("page", link.dataset.livePageNumber);
+      history.pushState({}, "", `/admin?${params}`);
+      window.dispatchEvent(new Event("live:refresh"));
       return;
     }
-    event.preventDefault();
+    if (!requestRow || event.target.closest("a, button")) {
+      return;
+    }
+    const requestId = requestRow.dataset.requestId;
+    if (window.matchMedia("(max-width: 760px)").matches) {
+      window.location.href = `/admin/requests/${requestId}`;
+      return;
+    }
+    selectedRequestId = requestId;
+    renderRequestInspector(
+      inspector,
+      latestItems.find((item) => String(item.id) === String(selectedRequestId)),
+    );
+    markSelectedRequest(root, selectedRequestId);
+  });
+  table?.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter") {
+      return;
+    }
+    const requestRow = event.target.closest("[data-request-row]");
+    if (requestRow) {
+      window.location.href = `/admin/requests/${requestRow.dataset.requestId}`;
+    }
+  });
+  root.querySelector("[data-live-request-stats]")?.addEventListener("click", (event) => {
+    const chip = event.target.closest("[data-stat-filter]");
+    if (!chip) {
+      return;
+    }
+    const key = chip.dataset.statFilter;
     const params = new URLSearchParams(window.location.search);
-    params.set("page", link.dataset.livePageNumber);
-    history.pushState({}, "", `/admin?${params}`);
+    ["stream", "image", "tool", "error", "slow", "large"].forEach((name) => {
+      if (key === "total" || name === key) {
+        params.delete(name);
+      }
+    });
+    if (key !== "total" && !chip.classList.contains("active")) {
+      params.set(key, "1");
+    }
+    params.delete("page");
+    history.pushState({}, "", params.toString() ? `/admin?${params}` : "/admin");
+    syncRequestFormFromUrl(root);
     window.dispatchEvent(new Event("live:refresh"));
   });
   window.addEventListener("popstate", () => {
@@ -1879,16 +2189,133 @@ const breakdownPanel = (title, rows, emptyText) => {
   ]);
 };
 
+const renderMetricRows = (rows) => createNode("div", { className: "metric-rows" }, rows.map(([label, value, className = ""]) => (
+  createNode("span", { className }, [
+    createNode("small", { textContent: label }),
+    createNode("strong", { textContent: valueOrDash(value) }),
+  ])
+)));
+
+const runStatusChip = (text, className = "") => createNode("span", {
+  className: `run-chip ${className}`.trim(),
+  textContent: text,
+});
+
+const statTile = (label, value, detail = "", className = "", title = "") => createNode("span", {
+  className: `run-stat-tile ${className}`.trim(),
+  title,
+}, [
+  createNode("small", { textContent: label }),
+  createNode("strong", { textContent: valueOrDash(value) }),
+  detail ? createNode("em", { textContent: detail }) : null,
+]);
+
+const countRows = (rows, limit = 3) => (rows || []).slice(0, limit).map((row) => [
+  row.label,
+  row.count_display,
+]);
+
+const renderRunOverview = (root, data) => {
+  const container = root.querySelector("[data-live-run-overview]");
+  if (!container) {
+    return;
+  }
+  const stats = data.stats;
+  const firstStatus = (stats.statuses || [])[0];
+  container.replaceChildren(
+    createNode("article", { className: "panel overview-card" }, [
+      createNode("header", {}, [
+        createNode("h2", { textContent: "Run health" }),
+        createNode("span", { className: "success-badge", textContent: stats.success_rate_display }),
+      ]),
+      renderMetricRows([
+        ["Success rate", stats.success_rate_display, "ok-text"],
+        ["Stream count", stats.signals.streams.display],
+        ["Tool calls", stats.signals.tools.display],
+        ["Image requests", stats.signals.images.display],
+        ["Last activity", stats.last_activity ? "Live" : "-"],
+      ]),
+    ]),
+    createNode("article", { className: "panel overview-card" }, [
+      createNode("header", {}, [createNode("h2", { textContent: "Top models" })]),
+      renderMetricRows(countRows(stats.models, 4)),
+    ]),
+    createNode("article", { className: "panel overview-card" }, [
+      createNode("header", {}, [createNode("h2", { textContent: "Status codes" })]),
+      renderMetricRows(countRows(stats.statuses, 4)),
+    ]),
+    createNode("article", { className: "panel overview-card" }, [
+      createNode("header", {}, [createNode("h2", { textContent: "Signals" })]),
+      renderMetricRows([
+        ["Streams", stats.signals.streams.display],
+        ["Tools", stats.signals.tools.display],
+        ["Images", stats.signals.images.display],
+        ["Errors", stats.signals.errors.display, stats.error_count ? "error-text" : ""],
+      ]),
+    ]),
+    createNode("article", { className: "panel overview-card what-if-summary-card" }, [
+      createNode("header", {}, [createNode("h2", { textContent: "What-if cost" })]),
+      createNode("div", { className: "what-if-summary-list", "data-what-if-summary": true }, [
+        createNode("p", { className: "muted", textContent: "Loading comparisons..." }),
+      ]),
+    ]),
+    createNode("article", { className: "panel overview-card run-insights" }, [
+      createNode("header", {}, [
+        createNode("h2", { textContent: "Run insights" }),
+        createNode("span", { className: data.run.is_active ? "live-dot" : "muted", textContent: data.run.is_active ? "Live" : "Complete" }),
+      ]),
+      renderMetricRows([
+        ["Active route", firstStatus ? `${firstStatus.label} · ${firstStatus.count_display}` : "-"],
+        ["Top provider", data.items?.[0]?.provider_name || data.items?.[0]?.billing_provider || "-"],
+        ["Busiest model", stats.models?.[0] ? `${stats.models[0].label} · ${stats.models[0].count_display}` : "-"],
+        ["Error rate", stats.error_rate_display, stats.error_count ? "error-text" : ""],
+      ]),
+      createNode("p", { className: "muted live-copy", textContent: "Live updates every 1s" }),
+    ]),
+  );
+  window.renderWhatIfSummary?.();
+};
+
+const renderRunSupplementalTabs = (root, data) => {
+  const models = root.querySelector("[data-live-run-models]");
+  models?.replaceChildren(
+    createNode("section", { className: "split" }, [
+      breakdownPanel("Models", data.stats.models || [], "No model usage yet."),
+      breakdownPanel("Endpoints", data.stats.endpoints || [], "No endpoint usage yet."),
+    ]),
+  );
+  const diagnostics = root.querySelector("[data-live-run-diagnostics]");
+  diagnostics?.replaceChildren(
+    createNode("section", { className: "split" }, [
+      breakdownPanel("Status Codes", data.stats.statuses || [], "No status codes yet."),
+      createNode("article", { className: "panel" }, [
+        createNode("header", {}, [createNode("h2", { textContent: "Diagnostics" })]),
+        renderMetricRows([
+          ["Errors", data.stats.error_count_display],
+          ["Error rate", data.stats.error_rate_display],
+          ["Pending", data.stats.pending_count_display],
+          ["Slow threshold", "10 s"],
+          ["Large threshold", "10k tokens"],
+        ]),
+      ]),
+    ]),
+  );
+};
+
 const renderRunDetail = (root, data) => {
   const run = data.run;
   document.title = `Run: ${run.name} - LLM Observe Proxy`;
   const header = root.querySelector("[data-live-run-detail-header]");
   if (header) {
-    const meta = createNode("div", { className: "detail-meta" });
+    const meta = createNode("div", { className: "detail-meta run-meta" });
     meta.append(
-      metaSpan("Started", localTimeNode(run.started_at, run.started_at_fallback, "full")),
-      metaSpan("Ended", run.ended_at ? localTimeNode(run.ended_at, run.ended_at_fallback, "full") : "active"),
+      runStatusChip(`Started ${run.started_at_fallback}`),
+      runStatusChip(`Open for ${run.open_duration_display}`),
+      runStatusChip(`Status ${run.is_active ? "active" : "complete"}`, run.is_active ? "ok-chip" : ""),
     );
+    if (data.stats.error_count) {
+      meta.append(runStatusChip(`${data.stats.error_count_display} errors`, "error-chip"));
+    }
     const side = createNode("div", { className: "run-summary-side" }, [meta]);
     if (run.is_active) {
       side.append(createNode("form", {
@@ -1904,49 +2331,41 @@ const renderRunDetail = (root, data) => {
     const topline = createNode("div", { className: "run-summary-topline" }, [
       createNode("div", { className: "run-summary-title" }, [
         createNode("p", { className: "eyebrow", textContent: run.is_active ? "Run in progress" : "Completed run" }),
-        createNode("h1", { textContent: `Run: ${run.name}` }),
+        createNode("div", { className: "run-title-line" }, [
+          createNode("h1", { textContent: `Run: ${run.name}` }),
+          runStatusChip(run.is_active ? "LIVE" : "DONE", run.is_active ? "live-chip" : ""),
+        ]),
         run.notes ? createNode("p", { className: "muted", textContent: run.notes }) : null,
+        meta,
       ]),
       side,
     ]);
     const strip = createNode("div", { className: "run-stat-strip", "data-live-run-stat-strip": true });
     [
       ["Requests", data.stats.request_count_display],
-      ["LLM wall time", data.stats.llm_wall_time_display],
-      ["Run open", data.stats.run_open_duration_display],
-      ["Request duration", data.stats.total_request_duration_display],
+      ["Success", data.stats.success_count_display, data.stats.success_rate_display, "ok-text"],
+      ["Errors", data.stats.error_count_display, data.stats.error_rate_display, data.stats.error_count ? "error-text" : ""],
+      ["Run open", data.stats.run_open_duration_display, "", "", "Clock time since the run started."],
+      ["LLM wall time", data.stats.llm_wall_time_display, "", "", "First request timestamp to latest completed request timestamp."],
       ["Input tokens", data.stats.tokens.input.display],
       ["Output tokens", data.stats.tokens.output.display],
       ["Total tokens", data.stats.tokens.total.display],
-      ["Estimated cost", data.stats.cost_display],
-      ["Output tok/s", data.stats.throughput.output_observed.display],
-    ].forEach(([label, value]) => {
-      strip.append(createNode("span", {}, [
-        createNode("small", { textContent: label }),
-        createNode("strong", { textContent: valueOrDash(value) }),
-      ]));
+      ["Estimated cost", data.stats.cost_display, "USD"],
+      ["Output tok/s", data.stats.throughput.output_observed.display, "avg", "", "Output tokens divided by total observed request duration."],
+    ].forEach(([label, value, detail, className, title]) => {
+      strip.append(statTile(label, value, detail, className, title));
     });
     header.replaceChildren(topline, strip);
   }
 
-  const breakdowns = root.querySelector("[data-live-run-breakdowns]");
-  breakdowns?.replaceChildren(
-    createNode("section", { className: "split" }, [
-      breakdownPanel("Models", data.stats.models || [], "No model usage yet."),
-      breakdownPanel("Endpoints", data.stats.endpoints || [], "No endpoint usage yet."),
-    ]),
-    createNode("section", { className: "split" }, [
-      breakdownPanel("Status Codes", data.stats.statuses || [], "No status codes yet."),
-      createNode("article", { className: "panel" }, [
-        createNode("header", {}, [createNode("h2", { textContent: "Signals" })]),
-        createNode("div", { className: "breakdown-list" }, [
-          createNode("span", {}, [createNode("strong", { textContent: data.stats.signals.streams.display }), "Streams"]),
-          createNode("span", {}, [createNode("strong", { textContent: data.stats.signals.images.display }), "Images"]),
-          createNode("span", {}, [createNode("strong", { textContent: data.stats.signals.tools.display }), "Tools"]),
-          createNode("span", {}, [createNode("strong", { textContent: data.stats.signals.errors.display }), "Errors"]),
-        ]),
-      ]),
-    ]),
+  renderRunOverview(root, data);
+  renderRunSupplementalTabs(root, data);
+  renderRequestsTable(
+    root.querySelector("[data-live-recent-traffic]"),
+    (data.items || []).slice(0, 6),
+    null,
+    false,
+    { compact: true },
   );
   renderRequestsTable(
     root.querySelector("[data-live-requests-table]"),
@@ -1957,6 +2376,16 @@ const renderRunDetail = (root, data) => {
 };
 
 const initRunDetailLivePage = (root) => {
+  const activateTab = (tabName) => {
+    root.querySelectorAll("[data-run-tab]").forEach((tab) => {
+      tab.classList.toggle("active", tab.dataset.runTab === tabName);
+    });
+    root.querySelectorAll("[data-run-tab-panel]").forEach((panel) => {
+      const active = panel.dataset.runTabPanel === tabName;
+      panel.classList.toggle("active", active);
+      panel.hidden = !active;
+    });
+  };
   const apiUrlForQuery = () => {
     const url = new URL(root.dataset.apiUrl, window.location.origin);
     const params = new URLSearchParams(window.location.search);
@@ -1974,7 +2403,12 @@ const initRunDetailLivePage = (root) => {
     }
     renderRunDetail(root, data);
   };
-  root.querySelector("[data-live-requests-table]")?.addEventListener("click", (event) => {
+  root.addEventListener("click", (event) => {
+    const tab = event.target.closest("[data-run-tab], [data-run-tab-jump]");
+    if (tab) {
+      activateTab(tab.dataset.runTab || tab.dataset.runTabJump);
+      return;
+    }
     const link = event.target.closest("[data-live-page-number]");
     if (!link) {
       return;
