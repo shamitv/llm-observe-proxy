@@ -1701,12 +1701,13 @@ const renderRunControl = (container, activeRun, includeNotes) => {
       name: "name",
       placeholder: "Video processing benchmark",
       required: true,
+      "data-live-pause-poll": true,
     }),
   ]));
   if (includeNotes) {
     form.append(createNode("label", {}, [
       "Notes",
-      createNode("input", { name: "notes", placeholder: "Optional context" }),
+      createNode("input", { name: "notes", placeholder: "Optional context", "data-live-pause-poll": true }),
     ]));
   }
   form.append(createNode("button", {
@@ -1831,6 +1832,12 @@ const startLivePoller = (root, load) => {
 
   const refresh = async ({ replace = false } = {}) => {
     if (document.hidden) {
+      schedule();
+      return;
+    }
+
+    // Pause polling while user is typing in an input that would be destroyed by re-render
+    if (document.activeElement?.closest("[data-live-pause-poll]")) {
       schedule();
       return;
     }
