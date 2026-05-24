@@ -258,6 +258,7 @@ TEST_IMAGE_DATA_URL = (
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII="
 )
 DEFAULT_RUN_WHAT_IF_KEYS = ("openai:gpt-5.5", "openai:gpt-5.4-mini")
+LIST_RESPONSE_PREVIEW_BYTES = 64 * 1024
 
 
 @router.get("", response_class=HTMLResponse)
@@ -317,15 +318,7 @@ async def requests_api(
             page=page,
             per_page=per_page,
         )
-        rendered_at = datetime.now(UTC)
-        records = [
-            _record_list_item(record, now=rendered_at)
-            for record in session.scalars(
-                stmt.order_by(desc(RequestRecord.created_at))
-                .offset(pagination["offset"])
-                .limit(pagination["per_page"])
-            ).all()
-        ]
+        records = _request_list_items_for_page(session, stmt, pagination)
         models = [
             row[0]
             for row in session.execute(
@@ -529,13 +522,7 @@ async def run_detail_api(
             page=page,
             per_page=per_page,
         )
-        request_records = session.scalars(
-            request_stmt.order_by(desc(RequestRecord.created_at))
-            .offset(pagination["offset"])
-            .limit(pagination["per_page"])
-        ).all()
-        rendered_at = datetime.now(UTC)
-        records = [_record_list_item(record, now=rendered_at) for record in request_records]
+        records = _request_list_items_for_page(session, request_stmt, pagination)
         stats = _task_run_stats_detail(task_run, session)
         active_run = _task_run_summary(get_active_task_run(session), session)
         upstream_url = get_upstream_url(session, request.app.state.settings)
@@ -2696,6 +2683,149 @@ async def _runs_with_error(request: Request, error: str) -> HTMLResponse:
     )
 
 
+def _request_list_items_for_page(
+    session,
+    stmt,
+    pagination: dict[str, object],
+) -> list[dict[str, object]]:
+    rendered_at = datetime.now(UTC)
+    preview = func.substr(RequestRecord.response_body, 1, LIST_RESPONSE_PREVIEW_BYTES)
+    response_length = func.length(RequestRecord.response_body)
+    rows = session.execute(
+        stmt.with_only_columns(
+            RequestRecord.id.label("id"),
+            RequestRecord.task_run_id.label("task_run_id"),
+            RequestRecord.created_at.label("created_at"),
+            RequestRecord.completed_at.label("completed_at"),
+            RequestRecord.method.label("method"),
+            RequestRecord.endpoint.label("endpoint"),
+            RequestRecord.model.label("model"),
+            RequestRecord.upstream_model.label("upstream_model"),
+            RequestRecord.model_route.label("model_route"),
+            RequestRecord.response_status.label("response_status"),
+            RequestRecord.response_content_type.label("response_content_type"),
+            RequestRecord.duration_ms.label("duration_ms"),
+            RequestRecord.is_stream.label("is_stream"),
+            RequestRecord.has_images.label("has_images"),
+            RequestRecord.has_tool_calls.label("has_tool_calls"),
+            RequestRecord.billing_provider_slug.label("billing_provider_slug"),
+            RequestRecord.billing_provider_name.label("billing_provider_name"),
+            RequestRecord.billing_model.label("billing_model"),
+            RequestRecord.billing_input_tokens.label("billing_input_tokens"),
+            RequestRecord.billing_cached_input_tokens.label("billing_cached_input_tokens"),
+            RequestRecord.billing_output_tokens.label("billing_output_tokens"),
+            RequestRecord.billing_total_tokens.label("billing_total_tokens"),
+            RequestRecord.billing_total_cost_usd.label("billing_total_cost_usd"),
+            RequestRecord.estimated_input_tokens.label("estimated_input_tokens"),
+            RequestRecord.error.label("error"),
+            preview.label("response_body_preview"),
+            response_length.label("response_body_length"),
+            TaskRun.id.label("run_id"),
+            TaskRun.name.label("run_name"),
+            TaskRun.notes.label("run_notes"),
+            TaskRun.started_at.label("run_started_at"),
+            TaskRun.ended_at.label("run_ended_at"),
+        )
+        .outerjoin(TaskRun, RequestRecord.task_run_id == TaskRun.id)
+        .order_by(desc(RequestRecord.created_at))
+        .offset(pagination["offset"])
+        .limit(pagination["per_page"])
+    ).mappings()
+    return [_record_list_item_from_row(row, now=rendered_at) for row in rows]
+
+
+def _record_list_item_from_row(row, *, now: datetime | None = None) -> dict[str, object]:
+    response_body = row["response_body_preview"]
+    response_length = row["response_body_length"] or 0
+    has_complete_preview = response_length <= LIST_RESPONSE_PREVIEW_BYTES
+    response_render = render_payload(
+        response_body,
+        row["response_content_type"],
+        "text",
+    )
+    token_usage = (
+        _record_token_usage_from_body(row["is_stream"], response_body)
+        if has_complete_preview
+        else ExtractedTokenUsage()
+    )
+    input_tokens = row["billing_input_tokens"]
+    if input_tokens is None:
+        input_tokens = token_usage.input_tokens
+    output_tokens = row["billing_output_tokens"]
+    if output_tokens is None:
+        output_tokens = token_usage.output_tokens
+    total_tokens = row["billing_total_tokens"]
+    if total_tokens is None:
+        total_tokens = token_usage.total_tokens
+    duration = _record_duration_from_values(
+        row["created_at"],
+        row["completed_at"],
+        row["duration_ms"],
+        now=now,
+    )
+    input_is_estimated = (
+        input_tokens is None
+        and row["completed_at"] is None
+        and row["estimated_input_tokens"] is not None
+    )
+    if input_is_estimated:
+        input_tokens = row["estimated_input_tokens"]
+    preview = response_render.text
+    if preview and not has_complete_preview:
+        preview = f"{preview}..."
+    return {
+        "id": row["id"],
+        "created_at": row["created_at"],
+        "method": row["method"],
+        "endpoint": row["endpoint"],
+        "model": row["model"] or "unknown",
+        "upstream_model": row["upstream_model"],
+        "model_route": row["model_route"],
+        "status": row["response_status"],
+        "duration_ms": row["duration_ms"],
+        "duration_display_ms": duration["duration_display_ms"],
+        "duration_is_elapsed": duration["duration_is_elapsed"],
+        "is_stream": row["is_stream"],
+        "has_images": row["has_images"],
+        "has_tool_calls": row["has_tool_calls"],
+        "task_run": _task_run_summary_from_row(row, now=now),
+        "tokens": {
+            "input": input_tokens,
+            "input_estimated": input_is_estimated,
+            "cached_input": row["billing_cached_input_tokens"]
+            if row["billing_cached_input_tokens"] is not None
+            else token_usage.cached_input_tokens,
+            "output": output_tokens,
+            "total": total_tokens,
+        },
+        "tokens_per_second": _tokens_per_second(output_tokens, row["duration_ms"]),
+        "cost_usd": row["billing_total_cost_usd"],
+        "billing_provider": row["billing_provider_name"] or row["billing_provider_slug"],
+        "billing_model": row["billing_model"],
+        "error": row["error"],
+        "preview": preview,
+    }
+
+
+def _task_run_summary_from_row(row, *, now: datetime | None = None) -> dict[str, object] | None:
+    if row["run_id"] is None:
+        return None
+    ended_at = row["run_ended_at"]
+    return {
+        "id": row["run_id"],
+        "name": row["run_name"],
+        "notes": row["run_notes"],
+        "started_at": row["run_started_at"],
+        "ended_at": ended_at,
+        "is_active": ended_at is None,
+        "open_duration_ms": _duration_ms(
+            row["run_started_at"],
+            ended_at or now or datetime.now(UTC),
+        ),
+        "request_count": None,
+    }
+
+
 def _record_list_item(record: RequestRecord, *, now: datetime | None = None) -> dict[str, object]:
     response_render = render_payload(
         record.response_body,
@@ -2755,10 +2885,16 @@ def _record_list_item(record: RequestRecord, *, now: datetime | None = None) -> 
 
 
 def _record_token_usage(record: RequestRecord):
-    if record.is_stream:
-        return _stream_token_usage(record.response_body)
-    else:
-        payload = decode_json_bytes(record.response_body)
+    return _record_token_usage_from_body(record.is_stream, record.response_body)
+
+
+def _record_token_usage_from_body(
+    is_stream: bool,
+    response_body: bytes | None,
+) -> ExtractedTokenUsage:
+    if is_stream:
+        return _stream_token_usage(response_body)
+    payload = decode_json_bytes(response_body)
     return extract_token_usage(payload)
 
 
@@ -2852,10 +2988,25 @@ def _record_detail(record: RequestRecord, *, now: datetime | None = None) -> dic
 
 
 def _record_duration(record: RequestRecord, *, now: datetime | None) -> dict[str, object]:
-    if record.duration_ms is not None:
-        return {"duration_display_ms": record.duration_ms, "duration_is_elapsed": False}
-    if record.completed_at is None:
-        elapsed_ms = _duration_ms(record.created_at, now or datetime.now(UTC))
+    return _record_duration_from_values(
+        record.created_at,
+        record.completed_at,
+        record.duration_ms,
+        now=now,
+    )
+
+
+def _record_duration_from_values(
+    created_at: datetime,
+    completed_at: datetime | None,
+    duration_ms: int | None,
+    *,
+    now: datetime | None,
+) -> dict[str, object]:
+    if duration_ms is not None:
+        return {"duration_display_ms": duration_ms, "duration_is_elapsed": False}
+    if completed_at is None:
+        elapsed_ms = _duration_ms(created_at, now or datetime.now(UTC))
         return {"duration_display_ms": elapsed_ms, "duration_is_elapsed": elapsed_ms is not None}
     return {"duration_display_ms": None, "duration_is_elapsed": False}
 

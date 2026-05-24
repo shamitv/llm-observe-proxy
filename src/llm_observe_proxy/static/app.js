@@ -1420,30 +1420,51 @@ const apiUrlWithCurrentQuery = (root) => {
 const startLivePoller = (root, load) => {
   const interval = Number(root.dataset.pollInterval || "1000");
   let controller = null;
-  const refresh = async () => {
+  let inFlight = false;
+  let timer = null;
+
+  const schedule = () => {
+    window.clearTimeout(timer);
+    timer = window.setTimeout(refresh, interval);
+  };
+
+  const refresh = async ({ replace = false } = {}) => {
     if (document.hidden) {
+      schedule();
       return;
     }
-    if (controller) {
+
+    if (inFlight && !replace) {
+      return;
+    }
+    if (inFlight && replace && controller) {
       controller.abort();
     }
-    controller = new AbortController();
+
+    const currentController = new AbortController();
+    controller = currentController;
+    inFlight = true;
     try {
-      await load(controller.signal);
+      await load(currentController.signal);
       setLiveStatus(root, "Live");
     } catch (error) {
       if (error.name !== "AbortError") {
         setLiveStatus(root, "Update failed; showing last data.", true);
       }
+    } finally {
+      if (controller === currentController) {
+        controller = null;
+        inFlight = false;
+        schedule();
+      }
     }
   };
-  window.setInterval(refresh, interval);
   document.addEventListener("visibilitychange", () => {
     if (!document.hidden) {
-      refresh();
+      refresh({ replace: true });
     }
   });
-  window.addEventListener("live:refresh", refresh);
+  window.addEventListener("live:refresh", () => refresh({ replace: true }));
   refresh();
 };
 

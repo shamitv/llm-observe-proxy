@@ -213,3 +213,47 @@ def test_live_run_rest_actions_and_missing_resources(proxy_client: TestClient) -
 
     assert proxy_client.get("/admin/api/requests/999").status_code == 404
     assert proxy_client.get("/admin/api/runs/999").status_code == 404
+
+
+def test_requests_api_uses_bounded_preview_and_detail_keeps_full_body(
+    proxy_client: TestClient,
+    proxy_app,
+) -> None:
+    large_response = "x" * (70 * 1024)
+    with proxy_app.state.session_factory() as session:
+        record = RequestRecord(
+            completed_at=datetime.now(UTC),
+            method="POST",
+            path="/v1/chat/completions",
+            endpoint="/v1/chat/completions",
+            model="large-model",
+            upstream_url="http://localhost:8080/v1/chat/completions",
+            request_headers_json="{}",
+            request_body=b"{}",
+            response_status=200,
+            response_headers_json="{}",
+            response_body=large_response.encode(),
+            response_content_type="text/plain",
+            duration_ms=1000,
+            billing_input_tokens=1,
+            billing_output_tokens=2,
+            billing_total_tokens=3,
+        )
+        session.add(record)
+        session.commit()
+        record_id = record.id
+
+    listed = proxy_client.get("/admin/api/requests")
+    assert listed.status_code == 200
+    item = listed.json()["items"][0]
+    assert item["id"] == record_id
+    assert item["model"] == "large-model"
+    assert item["preview"].endswith("...")
+    assert len(item["preview"]) < 200
+    assert item["tokens"]["input_display"] == "1"
+    assert item["tokens"]["output_display"] == "2"
+    assert item["tokens"]["total_display"] == "3"
+
+    detail = proxy_client.get(f"/admin/api/requests/{record_id}?mode=text")
+    assert detail.status_code == 200
+    assert detail.json()["response_render"]["text"] == large_response

@@ -78,7 +78,9 @@ def test_live_request_run_shells_and_polling_script(proxy_client: TestClient) ->
         assert marker in response.text
         assert 'data-poll-interval="1000"' in response.text
 
-    assert "window.setInterval(refresh, interval);" in app_js
+    assert "window.setTimeout(refresh, interval);" in app_js
+    assert "if (inFlight && !replace)" in app_js
+    assert "refresh({ replace: true })" in app_js
     assert 'fetch(apiUrlWithCurrentQuery(root)' in app_js
     assert 'root.querySelector("[data-live-mode-tabs]")' in app_js
     assert 'data-live-run-start' in app_js
