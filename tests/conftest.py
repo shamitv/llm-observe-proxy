@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import socket
+import sys
 import threading
 import time
 from collections.abc import Iterator
@@ -18,11 +19,12 @@ from fastapi.testclient import TestClient
 from llm_observe_proxy.app import create_app
 from llm_observe_proxy.config import Settings
 
-UPSTREAM_URL = "http://localhost:8080/v1"
-
 
 class FakeUpstreamState:
-    def __init__(self) -> None:
+    def __init__(self, port: int) -> None:
+        self.port = port
+        self.upstream_url = f"http://localhost:{port}/v1"
+        self.route_upstream_url = f"http://127.0.0.1:{port}/v1"
         self.requests: list[dict[str, Any]] = []
 
     def reset(self) -> None:
@@ -35,14 +37,14 @@ class FakeUpstreamState:
 
 @pytest.fixture(scope="session")
 def fake_upstream() -> Iterator[FakeUpstreamState]:
-    state = FakeUpstreamState()
+    port = _free_tcp_port()
+    state = FakeUpstreamState(port)
     app = _build_upstream_app(state)
-    _assert_port_available(8080)
-    config = uvicorn.Config(app, host="127.0.0.1", port=8080, log_level="warning")
+    config = uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning")
     server = uvicorn.Server(config)
     thread = threading.Thread(target=server.run, daemon=True)
     thread.start()
-    _wait_for_upstream()
+    _wait_for_upstream(port)
     try:
         yield state
     finally:
@@ -52,16 +54,20 @@ def fake_upstream() -> Iterator[FakeUpstreamState]:
 
 @pytest.fixture(autouse=True)
 def reset_fake_upstream(fake_upstream: FakeUpstreamState) -> Iterator[None]:
+    _patch_test_upstream_constants(fake_upstream)
     fake_upstream.reset()
     yield
     fake_upstream.reset()
 
 
 @pytest.fixture
-def proxy_app(tmp_path: Path) -> Iterator[FastAPI]:
+def proxy_app(tmp_path: Path, fake_upstream: FakeUpstreamState) -> Iterator[FastAPI]:
     db_path = tmp_path / "proxy.sqlite3"
     app = create_app(
-        Settings(database_url=f"sqlite:///{db_path.as_posix()}", upstream_url=UPSTREAM_URL)
+        Settings(
+            database_url=f"sqlite:///{db_path.as_posix()}",
+            upstream_url=fake_upstream.upstream_url,
+        )
     )
     yield app
 
@@ -392,12 +398,12 @@ def _json_or_none(body: bytes) -> Any | None:
         return None
 
 
-def _wait_for_upstream() -> None:
+def _wait_for_upstream(port: int) -> None:
     deadline = time.time() + 10
     last_error: Exception | None = None
     while time.time() < deadline:
         try:
-            response = httpx.get("http://localhost:8080/healthz", timeout=0.5)
+            response = httpx.get(f"http://localhost:{port}/healthz", timeout=0.5)
             if response.status_code == 200:
                 return
         except Exception as exc:  # pragma: no cover - diagnostic only
@@ -406,8 +412,23 @@ def _wait_for_upstream() -> None:
     raise RuntimeError(f"fake upstream did not start: {last_error}")
 
 
-def _assert_port_available(port: int) -> None:
+def _free_tcp_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
-        probe.settimeout(0.2)
-        if probe.connect_ex(("127.0.0.1", port)) == 0:
-            pytest.fail(f"localhost:{port} is already in use; tests require that upstream port.")
+        probe.bind(("127.0.0.1", 0))
+        return int(probe.getsockname()[1])
+
+
+def _patch_test_upstream_constants(fake_upstream: FakeUpstreamState) -> None:
+    for module_name in (
+        "test_admin_ui",
+        "tests.test_admin_ui",
+        "test_proxy_capture",
+        "tests.test_proxy_capture",
+    ):
+        module = sys.modules.get(module_name)
+        if module is None:
+            continue
+        if hasattr(module, "GLOBAL_UPSTREAM_URL"):
+            module.GLOBAL_UPSTREAM_URL = fake_upstream.upstream_url
+        if hasattr(module, "ROUTE_UPSTREAM_URL"):
+            module.ROUTE_UPSTREAM_URL = fake_upstream.route_upstream_url

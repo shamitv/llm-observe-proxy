@@ -1,78 +1,64 @@
 {% extends "base.html" %}
 {% block content %}
-<section class="page-heading">
-  <div>
-    <p class="eyebrow">OpenAI-compatible traffic</p>
-    <h1>Request Browser</h1>
-  </div>
-  <div class="stats">
-    <span><strong>{{ stats.total | compact_number }}</strong>Total</span>
-    <span><strong>{{ stats.streams | compact_number }}</strong>Streams</span>
-    <span><strong>{{ stats.images | compact_number }}</strong>Images</span>
-    <span><strong>{{ stats.tools | compact_number }}</strong>Tools</span>
-  </div>
-</section>
+<section
+  data-live-page="requests"
+  data-api-url="/admin/api/requests"
+  data-poll-interval="1000"
+>
+  <section class="page-heading">
+    <div>
+      <p class="eyebrow">OpenAI-compatible traffic</p>
+      <h1>Request Browser</h1>
+    </div>
+    <div class="stats" data-live-request-stats>
+      <span><strong>-</strong>Total</span>
+      <span><strong>-</strong>Streams</span>
+      <span><strong>-</strong>Images</span>
+      <span><strong>-</strong>Tools</span>
+    </div>
+  </section>
 
-<section class="run-control">
-  {% if active_run %}
-  <div>
-    <p class="eyebrow">Run in progress</p>
-    <h2><a href="/admin/runs/{{ active_run.id }}">{{ active_run.name }}</a></h2>
-    <p class="muted">{{ active_run.request_count | compact_number }} request{{ '' if active_run.request_count == 1 else 's' }} · {{ active_run.open_duration_ms | duration_ms }} open</p>
-  </div>
-  <form method="post" action="/admin/runs/end">
-    <button class="button danger" type="submit">End run</button>
-  </form>
-  {% else %}
-  <form class="run-start-form" method="post" action="/admin/runs/start">
+  <div class="live-status" data-live-status aria-live="polite">Loading requests...</div>
+
+  <section class="run-control" data-live-run-control data-run-notes="false">
+    <div>
+      <p class="eyebrow">Run status</p>
+      <h2>Loading</h2>
+      <p class="muted">Checking active run...</p>
+    </div>
+  </section>
+
+  <form class="toolbar" data-live-request-filters>
     <label>
-      Run name
-      <input name="name" placeholder="Video processing benchmark" required>
+      Endpoint
+      <input name="endpoint" list="endpoints" placeholder="/v1/chat/completions">
     </label>
-    <button class="button primary" type="submit">Start run</button>
+    <label>
+      Model
+      <select name="model">
+        <option value="">Any model</option>
+      </select>
+    </label>
+    <label>
+      Run
+      <select name="run">
+        <option value="">Any run</option>
+      </select>
+    </label>
+    <label>
+      Status
+      <input name="status" inputmode="numeric" placeholder="200">
+    </label>
+    <label class="check"><input type="checkbox" name="stream" value="1"> Streaming</label>
+    <label class="check"><input type="checkbox" name="image" value="1"> Images</label>
+    <label class="check"><input type="checkbox" name="tool" value="1"> Tools</label>
+    <button class="button primary" type="submit">Filter</button>
+    <a class="button ghost" href="/admin" data-live-reset>Reset</a>
+    <datalist id="endpoints"></datalist>
   </form>
-  {% endif %}
+
+  <section class="table-shell" data-live-requests-table data-show-run="true">
+    <div class="empty-state">Loading captured requests...</div>
+  </section>
 </section>
-
-<form class="toolbar" method="get" action="/admin">
-  <label>
-    Endpoint
-    <input name="endpoint" value="{{ filters.endpoint }}" list="endpoints" placeholder="/v1/chat/completions">
-  </label>
-  <label>
-    Model
-    <select name="model">
-      <option value="">Any model</option>
-      {% for item in models %}
-      <option value="{{ item }}" {% if filters.model == item %}selected{% endif %}>{{ item }}</option>
-      {% endfor %}
-    </select>
-  </label>
-  <label>
-    Run
-    <select name="run">
-      <option value="">Any run</option>
-      {% for item in run_options %}
-      <option value="{{ item.id }}" {% if filters.run == item.id %}selected{% endif %}>{{ item.name }}</option>
-      {% endfor %}
-    </select>
-  </label>
-  <label>
-    Status
-    <input name="status" value="{{ filters.status }}" inputmode="numeric" placeholder="200">
-  </label>
-  <label class="check"><input type="checkbox" name="stream" value="1" {% if filters.stream %}checked{% endif %}> Streaming</label>
-  <label class="check"><input type="checkbox" name="image" value="1" {% if filters.image %}checked{% endif %}> Images</label>
-  <label class="check"><input type="checkbox" name="tool" value="1" {% if filters.tool %}checked{% endif %}> Tools</label>
-  <button class="button primary" type="submit">Filter</button>
-  <a class="button ghost" href="/admin">Reset</a>
-  <datalist id="endpoints">
-    {% for item in endpoints %}
-    <option value="{{ item }}"></option>
-    {% endfor %}
-  </datalist>
-</form>
-
-{% set show_run = true %}
-{% include "_requests_table.html" %}
 {% endblock %}

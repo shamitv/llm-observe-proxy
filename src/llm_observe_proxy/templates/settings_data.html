@@ -1,6 +1,7 @@
 {% extends "settings_base.html" %}
 {% import "_connection_summary.html" as summaries %}
 {% import "_status_badge.html" as badges %}
+{% import "_icons.html" as icons %}
 {% block summary_cards %}
 {{ summaries.summary_card("DB", "Stored rows", summary.stored_rows | compact_number, "Captured requests") }}
 {{ summaries.summary_card("FS", "Database file", storage_stats.database_file_size | compact_number if storage_stats.database_file_size is not none else "-", "SQLite bytes on disk") }}
@@ -48,8 +49,8 @@
     </div>
     <p class="muted">Older than {{ days }} days: {{ trim_count | compact_number }} row{{ "" if trim_count == 1 else "s" }} will be deleted.</p>
     <div class="button-row">
-      <button class="button danger button-danger" type="submit" data-danger-submit>Trim records</button>
-      <a class="button ghost button-ghost" href="/admin/settings/data?days={{ days }}">Refresh count</a>
+      <button class="button danger button-danger" type="submit" data-danger-submit>{{ icons.icon("trash", class_name="button-icon") }}<span>Trim records</span></button>
+      <a class="button ghost button-ghost" href="/admin/settings/data?days={{ days }}">{{ icons.icon("runs", class_name="button-icon") }}<span>Refresh count</span></a>
     </div>
   </form>
 

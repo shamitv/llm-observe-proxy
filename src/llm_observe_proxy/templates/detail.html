@@ -1,159 +1,54 @@
 {% extends "base.html" %}
 {% block content %}
-<section class="page-heading">
-  <div>
-    <p class="eyebrow">{{ record.method }} {{ record.endpoint }}</p>
-    <h1>Request #{{ record.id }}</h1>
-  </div>
-  <div class="detail-meta">
-    <span>Status <strong>{{ record.response_status | default('pending', true) }}</strong></span>
-    <span>Duration <strong>{% if record.duration_is_elapsed %}<span class="elapsed-duration" data-pending-start="{{ record.created_at | utc_iso }}">{{ record.duration_display_ms | duration_ms }} so far</span>{% else %}{{ record.duration_display_ms | duration_ms }}{% endif %}</strong></span>
-    <span>Created <strong><time class="local-time" datetime="{{ record.created_at | utc_iso }}" data-local-time="full">{{ record.created_at | utc_fallback }}</time></strong></span>
-    {% if record.completed_at %}
-    <span>Completed <strong><time class="local-time" datetime="{{ record.completed_at | utc_iso }}" data-local-time="full">{{ record.completed_at | utc_fallback }}</time></strong></span>
-    {% endif %}
-    <span>Cost <strong>{{ record.billing_total_cost_usd | usd }}</strong></span>
-    <span>Model <strong>{{ record.model | default('unknown', true) }}</strong></span>
-    {% if record.upstream_model %}
-    <span>Upstream Model <strong>{{ record.upstream_model }}</strong></span>
-    {% endif %}
-    {% if record.model_route %}
-    <span>Route <strong>{{ record.model_route }}</strong></span>
-    {% endif %}
-    {% if record.task_run %}
-    <span>Run <strong><a href="/admin/runs/{{ record.task_run.id }}">{{ record.task_run.name }}</a></strong></span>
-    {% endif %}
-    {% if record.response_was_rewritten %}
-    <span>Compatibility <strong>rewritten</strong></span>
-    {% elif record.compat_fix_errors_json %}
-    <span>Compatibility <strong>warned</strong></span>
-    {% endif %}
-  </div>
-</section>
+<section
+  data-live-page="request-detail"
+  data-api-url="/admin/api/requests/{{ record_id }}"
+  data-record-id="{{ record_id }}"
+  data-render-mode="{{ mode }}"
+  data-poll-interval="1000"
+>
+  <section class="page-heading" data-live-request-detail-header>
+    <div>
+      <p class="eyebrow">Loading request</p>
+      <h1>Request #{{ record_id }}</h1>
+    </div>
+    <div class="detail-meta">
+      <span>Status <strong>loading</strong></span>
+    </div>
+  </section>
 
-{% if record.error %}
-<div class="alert">{{ record.error }}</div>
-{% endif %}
+  <div class="live-status" data-live-status aria-live="polite">Loading request...</div>
+  <div data-live-request-alert></div>
 
-<section class="split">
-  <article class="panel">
-    <header>
-      <h2>Request</h2>
-      <span>{{ record.request_content_type | default('body', true) }}</span>
-    </header>
-    <pre class="code">{{ request_render.text }}</pre>
-  </article>
+  <section class="split">
+    <article class="panel">
+      <header>
+        <h2>Request</h2>
+        <span data-live-request-content-type>body</span>
+      </header>
+      <pre class="code" data-live-request-body>Loading...</pre>
+    </article>
 
-  <article class="panel">
-    <header>
-      <h2>Response</h2>
-      <div class="mode-tabs">
-        {% for option in ["auto", "json", "text", "markdown", "tool", "sse"] %}
-        <a class="{{ option | active_mode }}" href="/admin/requests/{{ record.id }}?mode={{ option }}">{{ option }}</a>
-        {% endfor %}
+    <article class="panel">
+      <header>
+        <h2>Response</h2>
+        <div class="mode-tabs" data-live-mode-tabs>
+          {% for option in ["auto", "json", "text", "markdown", "tool", "sse"] %}
+          <a class="{{ 'active' if option == mode else '' }}" href="/admin/requests/{{ record_id }}?mode={{ option }}" data-mode="{{ option }}">{{ option }}</a>
+          {% endfor %}
+        </div>
+      </header>
+      <div data-live-response-body>
+        <pre class="code">Loading...</pre>
       </div>
-    </header>
-    {% if response_render.mode == "markdown" and response_render.html %}
-    <div class="markdown-body">{{ response_render.html | safe }}</div>
-    {% elif response_render.mode == "tool" and response_render.tool_blocks %}
-    <div class="tool-list">
-      {% for block in response_render.tool_blocks %}
-      <section class="tool-block">
-        <strong>{{ block.kind }}</strong>
-        <pre class="code">{{ block.payload | tojson(indent=2) }}</pre>
-      </section>
-      {% endfor %}
-    </div>
-    {% else %}
-    <pre class="code">{{ response_render.text }}</pre>
-    {% endif %}
-  </article>
-</section>
+    </article>
+  </section>
 
-{% if record.compat_fixes_json or record.compat_fix_errors_json %}
-<section class="split">
-  <article class="panel">
-    <header><h2>Compatibility Fixes</h2></header>
-    <pre class="code compact-code">{{ record.compat_fixes_json | default('{}', true) }}</pre>
-  </article>
-  <article class="panel">
-    <header><h2>Compatibility Warnings</h2></header>
-    <pre class="code compact-code">{{ record.compat_fix_errors_json | default('{}', true) }}</pre>
-  </article>
-</section>
-{% endif %}
-
-{% if raw_response_render %}
-<section class="panel">
-  <header>
-    <h2>Raw Upstream Response</h2>
-    <span>Before compatibility fixes</span>
-  </header>
-  <pre class="code">{{ raw_response_render.text }}</pre>
-</section>
-{% endif %}
-
-{% if images %}
-<section class="panel">
-  <header>
-    <h2>Images Sent</h2>
-    <span>{{ images | length }} image{{ '' if images | length == 1 else 's' }}</span>
-  </header>
-  <div class="image-grid">
-    {% for image in images %}
-    <figure>
-      <img src="{{ image.source }}" alt="Request image {{ loop.index }}">
-      <figcaption>{{ image.mime_type | default(image.kind, true) }}</figcaption>
-    </figure>
-    {% endfor %}
-  </div>
-</section>
-{% endif %}
-
-<section class="split">
-  <article class="panel">
-    <header>
-      <h2>Cost Estimate</h2>
-      <span>{{ record.billing_provider_name or record.billing_provider_slug or 'no provider' }}</span>
-    </header>
-    <div class="breakdown-list">
-      <span><strong>{{ record.display_input_tokens | compact_number }}</strong>Input tokens</span>
-      {% if record.completed_at is none and record.display_input_tokens is none and record.estimated_input_tokens %}
-      <span class="estimated-token"><strong>~{{ record.estimated_input_tokens | compact_number }}</strong>Est. input tokens</span>
-      {% endif %}
-      <span><strong>{{ record.display_cached_input_tokens | compact_number }}</strong>Cached input tokens</span>
-      <span><strong>{{ record.display_output_tokens | compact_number }}</strong>Output tokens</span>
-      <span><strong>{{ record.display_total_tokens | compact_number }}</strong>Total tokens</span>
-      <span><strong>{{ record.billing_total_cost_usd | usd }}</strong>Estimated cost</span>
-      <span><strong>{{ record.billing_model | default('-', true) }}</strong>Billing model</span>
-      {% if record.estimated_input_tokenizer %}
-      <span><strong>{{ record.estimated_input_tokenizer }}</strong>Estimate tokenizer</span>
-      {% endif %}
-    </div>
-  </article>
-
-  <article class="panel">
-    <header><h2>Pricing Snapshot</h2></header>
-    <pre class="code compact-code">{{ record.pricing_snapshot_json | default('{}', true) }}</pre>
-  </article>
-</section>
-
-<section class="split">
-  <article class="panel">
-    <header><h2>Request Headers</h2></header>
-    <pre class="code">{{ record.request_headers_json }}</pre>
-  </article>
-  <article class="panel">
-    <header><h2>Response Headers</h2></header>
-    <pre class="code">{{ record.response_headers_json | default('{}', true) }}</pre>
-  </article>
-</section>
-
-<section class="panel">
-  <header>
-    <h2>Upstream</h2>
-    <span>{{ record.model_route | default('global fallback', true) }}</span>
-  </header>
-  <code>{{ record.upstream_url }}</code>
+  <div data-live-compat-section></div>
+  <div data-live-raw-response-section></div>
+  <div data-live-images-section></div>
+  <div data-live-cost-section></div>
+  <div data-live-headers-section></div>
+  <div data-live-upstream-section></div>
 </section>
 {% endblock %}

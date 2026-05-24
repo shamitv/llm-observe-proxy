@@ -482,6 +482,375 @@ document.querySelectorAll("[data-table-filter], [data-table-status-filter], [dat
   control.addEventListener("change", () => applyTableFilters(tableId));
 });
 
+document.querySelectorAll("[data-pricing-catalog]").forEach((panel) => {
+  const previewUrl = panel.dataset.previewUrl;
+  const applyUrl = panel.dataset.applyUrl;
+  const form = panel.querySelector("[data-pricing-catalog-form]");
+  const tbody = panel.querySelector("[data-pricing-catalog-rows]");
+  const message = panel.querySelector("[data-pricing-catalog-message]");
+  const applyButton = panel.querySelector("[data-pricing-catalog-apply]");
+  let previewItems = [];
+
+  const setCatalogMessage = (text, isError = false) => {
+    if (!message) {
+      return;
+    }
+    message.textContent = text || "";
+    message.hidden = !text;
+    message.classList.toggle("error-text", isError);
+  };
+
+  const catalogPayload = () => ({
+    source: form?.querySelector("[name='source']")?.value || "huggingface-router",
+    search: form?.querySelector("[name='search']")?.value || "",
+    limit: form?.querySelector("[name='limit']")?.value || "25",
+    include_base_rows: Boolean(form?.querySelector("[name='include_base_rows']")?.checked),
+    include_provider_rows: Boolean(form?.querySelector("[name='include_provider_rows']")?.checked),
+    reprice_missing: Boolean(form?.querySelector("[name='reprice_missing']")?.checked),
+  });
+
+  const selectedCatalogKeys = () => Array.from(
+    panel.querySelectorAll("[data-pricing-catalog-key]:checked"),
+  ).map((checkbox) => checkbox.value);
+
+  const updateCatalogApplyState = () => {
+    if (applyButton) {
+      applyButton.disabled = selectedCatalogKeys().length === 0;
+    }
+  };
+
+  const appendCatalogCell = (row, text) => {
+    const cell = document.createElement("td");
+    cell.textContent = text || "-";
+    row.append(cell);
+    return cell;
+  };
+
+  const renderCatalogStatus = (row, status) => {
+    const cell = document.createElement("td");
+    const badge = document.createElement("span");
+    badge.className = `status-badge status-${(status || "unknown").replaceAll("_", "-")}`;
+    badge.textContent = status || "unknown";
+    cell.append(badge);
+    row.append(cell);
+  };
+
+  const renderCatalogRows = (items) => {
+    if (!tbody) {
+      return;
+    }
+    tbody.replaceChildren();
+    previewItems = Array.isArray(items) ? items : [];
+    if (!previewItems.length) {
+      const row = document.createElement("tr");
+      const cell = document.createElement("td");
+      cell.className = "empty";
+      cell.colSpan = 10;
+      cell.textContent = "No catalog pricing rows matched.";
+      row.append(cell);
+      tbody.append(row);
+      updateCatalogApplyState();
+      return;
+    }
+
+    previewItems.forEach((item) => {
+      const row = document.createElement("tr");
+      const selectCell = document.createElement("td");
+      const checkbox = document.createElement("input");
+      checkbox.type = "checkbox";
+      checkbox.value = item.key || "";
+      checkbox.checked = Boolean(item.selected);
+      checkbox.dataset.pricingCatalogKey = item.key || "";
+      checkbox.setAttribute("aria-label", `Apply ${item.display_name || item.model}`);
+      checkbox.addEventListener("change", updateCatalogApplyState);
+      selectCell.append(checkbox);
+      row.append(selectCell);
+
+      renderCatalogStatus(row, item.status);
+
+      const modelCell = document.createElement("td");
+      const model = document.createElement("code");
+      model.textContent = item.model || "-";
+      const name = document.createElement("small");
+      name.textContent = item.display_name || "";
+      modelCell.append(model, name);
+      row.append(modelCell);
+
+      appendCatalogCell(row, item.external_provider || item.row_kind);
+      appendCatalogCell(row, item.display?.input_usd_per_million);
+      appendCatalogCell(row, item.display?.cached_input_usd_per_million);
+      appendCatalogCell(row, item.display?.output_usd_per_million);
+      appendCatalogCell(row, item.display?.context_length);
+      appendCatalogCell(row, item.display?.supports_tools);
+      appendCatalogCell(row, item.checked_at);
+      tbody.append(row);
+    });
+    updateCatalogApplyState();
+  };
+
+  const postCatalog = async (url, payload) => {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.detail || `Pricing catalog returned ${response.status}`);
+    }
+    return data;
+  };
+
+  form?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    if (!previewUrl) {
+      return;
+    }
+    setCatalogMessage("Loading catalog...");
+    renderCatalogRows([]);
+    try {
+      const data = await postCatalog(previewUrl, catalogPayload());
+      renderCatalogRows(data.items || []);
+      setCatalogMessage(
+        `${data.total || 0} rows: ${data.counts?.new || 0} new, ${data.counts?.update || 0} updates, ${data.counts?.unchanged || 0} unchanged.`,
+      );
+    } catch (error) {
+      renderCatalogRows([]);
+      setCatalogMessage(error.message || "Catalog preview failed.", true);
+    }
+  });
+
+  applyButton?.addEventListener("click", async () => {
+    if (!applyUrl) {
+      return;
+    }
+    const keys = selectedCatalogKeys();
+    if (!keys.length) {
+      setCatalogMessage("Choose at least one catalog row to apply.", true);
+      return;
+    }
+    const payload = { ...catalogPayload(), keys };
+    applyButton.disabled = true;
+    setCatalogMessage("Applying selected rows...");
+    try {
+      const data = await postCatalog(applyUrl, payload);
+      renderCatalogRows(data.preview?.items || previewItems);
+      setCatalogMessage(
+        `${data.applied || 0} applied: ${data.created || 0} created, ${data.updated || 0} updated, ${data.unchanged || 0} unchanged. ${data.repriced_missing || 0} missing-cost requests repriced.`,
+      );
+    } catch (error) {
+      setCatalogMessage(error.message || "Catalog apply failed.", true);
+      updateCatalogApplyState();
+    }
+  });
+
+  updateCatalogApplyState();
+});
+
+const closeEnhancedSelects = (except = null) => {
+  document.querySelectorAll(".enhanced-select").forEach((wrapper) => {
+    if (wrapper === except) {
+      return;
+    }
+    const button = wrapper.querySelector(".enhanced-select-button");
+    const menu = wrapper.querySelector(".enhanced-select-menu");
+    button?.setAttribute("aria-expanded", "false");
+    if (menu) {
+      menu.hidden = true;
+      menu.classList.remove("opens-up");
+    }
+  });
+};
+
+const activeEnhancedOption = (wrapper) => wrapper.querySelector(".enhanced-select-option.is-active");
+
+const setEnhancedActiveOption = (wrapper, index) => {
+  const options = Array.from(wrapper.querySelectorAll(".enhanced-select-option"));
+  if (!options.length) {
+    return;
+  }
+  const nextIndex = Math.max(0, Math.min(index, options.length - 1));
+  options.forEach((option) => option.classList.remove("is-active"));
+  options[nextIndex].classList.add("is-active");
+  options[nextIndex].scrollIntoView({ block: "nearest" });
+};
+
+const updateEnhancedSelectLabel = (wrapper) => {
+  const select = wrapper.querySelector("select");
+  const label = wrapper.querySelector(".button-label");
+  if (!select || !label) {
+    return;
+  }
+  label.textContent = select.selectedOptions[0]?.textContent?.trim() || "Select provider";
+  wrapper.querySelectorAll(".enhanced-select-option").forEach((option) => {
+    const selected = option.dataset.value === select.value;
+    option.setAttribute("aria-selected", selected ? "true" : "false");
+    option.classList.toggle("is-active", selected);
+  });
+};
+
+const openEnhancedSelect = (wrapper) => {
+  closeEnhancedSelects(wrapper);
+  const button = wrapper.querySelector(".enhanced-select-button");
+  const menu = wrapper.querySelector(".enhanced-select-menu");
+  if (!button || !menu) {
+    return;
+  }
+  menu.hidden = false;
+  button.setAttribute("aria-expanded", "true");
+  const buttonRect = button.getBoundingClientRect();
+  const roomBelow = window.innerHeight - buttonRect.bottom;
+  menu.classList.toggle("opens-up", roomBelow < Math.min(260, menu.scrollHeight + 20));
+  if (!activeEnhancedOption(wrapper)) {
+    setEnhancedActiveOption(wrapper, 0);
+  }
+};
+
+const closeEnhancedSelect = (wrapper, focusButton = false) => {
+  const button = wrapper.querySelector(".enhanced-select-button");
+  const menu = wrapper.querySelector(".enhanced-select-menu");
+  button?.setAttribute("aria-expanded", "false");
+  if (menu) {
+    menu.hidden = true;
+    menu.classList.remove("opens-up");
+  }
+  if (focusButton) {
+    button?.focus();
+  }
+};
+
+const selectEnhancedOption = (wrapper, option) => {
+  const select = wrapper.querySelector("select");
+  if (!select || !option) {
+    return;
+  }
+  select.value = option.dataset.value || "";
+  select.dispatchEvent(new Event("change", { bubbles: true }));
+  updateEnhancedSelectLabel(wrapper);
+  closeEnhancedSelect(wrapper, true);
+};
+
+const moveEnhancedSelect = (wrapper, direction) => {
+  const options = Array.from(wrapper.querySelectorAll(".enhanced-select-option"));
+  const current = options.indexOf(activeEnhancedOption(wrapper));
+  const fallback = direction > 0 ? -1 : options.length;
+  setEnhancedActiveOption(wrapper, (current === -1 ? fallback : current) + direction);
+};
+
+document.querySelectorAll("select[data-enhanced-select]").forEach((select, index) => {
+  const wrapper = document.createElement("div");
+  wrapper.className = "enhanced-select";
+  wrapper.dataset.enhancedSelectFor = select.name || `enhanced-select-${index}`;
+  select.parentNode.insertBefore(wrapper, select);
+  wrapper.append(select);
+  select.classList.add("native-select");
+
+  const button = document.createElement("button");
+  const menu = document.createElement("div");
+  const label = document.createElement("span");
+  const icon = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  const menuId = `enhanced-select-menu-${index}`;
+
+  button.type = "button";
+  button.className = "enhanced-select-button";
+  button.setAttribute("aria-haspopup", "listbox");
+  button.setAttribute("aria-expanded", "false");
+  button.setAttribute("aria-controls", menuId);
+  label.className = "button-label";
+  icon.setAttribute("class", "ui-icon");
+  icon.setAttribute("viewBox", "0 0 24 24");
+  icon.setAttribute("fill", "none");
+  icon.setAttribute("stroke", "currentColor");
+  icon.setAttribute("stroke-width", "2");
+  icon.setAttribute("stroke-linecap", "round");
+  icon.setAttribute("stroke-linejoin", "round");
+  icon.setAttribute("aria-hidden", "true");
+  path.setAttribute("d", "m6 9 6 6 6-6");
+  icon.append(path);
+  button.append(label, icon);
+
+  menu.id = menuId;
+  menu.className = "enhanced-select-menu";
+  menu.setAttribute("role", "listbox");
+  menu.setAttribute("aria-label", select.dataset.enhancedSelectLabel || select.name || "Options");
+  menu.hidden = true;
+
+  Array.from(select.options).forEach((nativeOption) => {
+    const option = document.createElement("button");
+    option.type = "button";
+    option.className = "enhanced-select-option";
+    option.setAttribute("role", "option");
+    option.dataset.value = nativeOption.value;
+    option.textContent = nativeOption.textContent.trim();
+    option.addEventListener("click", () => selectEnhancedOption(wrapper, option));
+    option.addEventListener("keydown", (event) => {
+      if (event.key === "ArrowDown") {
+        event.preventDefault();
+        moveEnhancedSelect(wrapper, 1);
+      } else if (event.key === "ArrowUp") {
+        event.preventDefault();
+        moveEnhancedSelect(wrapper, -1);
+      } else if (event.key === "Home") {
+        event.preventDefault();
+        setEnhancedActiveOption(wrapper, 0);
+      } else if (event.key === "End") {
+        event.preventDefault();
+        setEnhancedActiveOption(wrapper, menu.querySelectorAll(".enhanced-select-option").length - 1);
+      } else if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        selectEnhancedOption(wrapper, activeEnhancedOption(wrapper) || option);
+      } else if (event.key === "Escape") {
+        event.preventDefault();
+        closeEnhancedSelect(wrapper, true);
+      }
+    });
+    menu.append(option);
+  });
+
+  button.addEventListener("click", () => {
+    if (menu.hidden) {
+      openEnhancedSelect(wrapper);
+      return;
+    }
+    closeEnhancedSelect(wrapper);
+  });
+  button.addEventListener("keydown", (event) => {
+    if ((event.key === "Enter" || event.key === " ") && !menu.hidden) {
+      event.preventDefault();
+      selectEnhancedOption(wrapper, activeEnhancedOption(wrapper));
+    } else if (event.key === "ArrowDown") {
+      event.preventDefault();
+      openEnhancedSelect(wrapper);
+      moveEnhancedSelect(wrapper, 1);
+    } else if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      openEnhancedSelect(wrapper);
+    } else if (event.key === "ArrowUp") {
+      event.preventDefault();
+      openEnhancedSelect(wrapper);
+      moveEnhancedSelect(wrapper, -1);
+    } else if (event.key === "Escape") {
+      closeEnhancedSelect(wrapper);
+    }
+  });
+  select.addEventListener("change", () => updateEnhancedSelectLabel(wrapper));
+  wrapper.append(button, menu);
+  updateEnhancedSelectLabel(wrapper);
+});
+
+document.addEventListener("click", (event) => {
+  if (!event.target.closest(".enhanced-select")) {
+    closeEnhancedSelects();
+  }
+});
+
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") {
+    closeEnhancedSelects();
+  }
+});
+
 const setFieldValue = (form, selector, value) => {
   const field = form.querySelector(selector);
   if (!field) {
@@ -604,6 +973,7 @@ document.querySelectorAll("[data-route-simulator]").forEach((form) => {
 document.querySelectorAll("[data-provider-health]").forEach((button) => {
   button.addEventListener("click", async () => {
     const tables = document.querySelectorAll("[data-provider-health-table] tbody");
+    const originalMarkup = button.innerHTML;
     button.disabled = true;
     button.textContent = "Checking...";
     try {
@@ -631,7 +1001,1013 @@ document.querySelectorAll("[data-provider-health]").forEach((button) => {
       window.alert("Provider health checks are unavailable.");
     } finally {
       button.disabled = false;
-      button.textContent = "Run health checks";
+      button.innerHTML = originalMarkup;
     }
   });
 });
+
+const liveRoot = document.querySelector("[data-live-page]");
+
+const valueOrDash = (value) => {
+  if (value === null || value === undefined || value === "") {
+    return "-";
+  }
+  return String(value);
+};
+
+const createNode = (tagName, attributes = {}, children = []) => {
+  const element = document.createElement(tagName);
+  Object.entries(attributes).forEach(([key, value]) => {
+    if (value === false || value === null || value === undefined) {
+      return;
+    }
+    if (key === "className") {
+      element.className = value;
+      return;
+    }
+    if (key === "textContent") {
+      element.textContent = value;
+      return;
+    }
+    if (key === "html") {
+      element.innerHTML = value;
+      return;
+    }
+    element.setAttribute(key, value === true ? "" : value);
+  });
+  children.forEach((child) => {
+    if (child === null || child === undefined) {
+      return;
+    }
+    if (typeof child === "string" || typeof child === "number") {
+      element.append(document.createTextNode(String(child)));
+      return;
+    }
+    element.append(child);
+  });
+  return element;
+};
+
+const setLiveStatus = (root, text, isError = false) => {
+  const status = root?.querySelector("[data-live-status]");
+  if (!status) {
+    return;
+  }
+  status.textContent = text || "";
+  status.classList.toggle("error-text", isError);
+  status.hidden = !text;
+};
+
+const localTimeNode = (isoValue, fallback, mode = "full") => {
+  const time = createNode("time", {
+    className: mode === "table" ? "local-time table-time muted" : "local-time",
+    datetime: isoValue || "",
+    "data-local-time": mode,
+    textContent: fallback || "-",
+  });
+  if (!isoValue) {
+    return time;
+  }
+  const date = new Date(isoValue);
+  if (Number.isNaN(date.getTime())) {
+    return time;
+  }
+  const full = fullDateTime.format(date);
+  time.title = fallback ? `${full} (${fallback})` : full;
+  if (mode === "table") {
+    time.replaceChildren(
+      createNode("span", { textContent: tableDate.format(date) }),
+      createNode("span", { textContent: tableTime.format(date) }),
+    );
+    return time;
+  }
+  time.textContent = full;
+  return time;
+};
+
+const tableCell = (row, content, className = "") => {
+  const cell = createNode("td", className ? { className } : {});
+  if (Array.isArray(content)) {
+    content.forEach((item) => cell.append(item));
+  } else if (content instanceof Node) {
+    cell.append(content);
+  } else {
+    cell.textContent = valueOrDash(content);
+  }
+  row.append(cell);
+  return cell;
+};
+
+const renderStatusPill = (statusLabel) => createNode("span", {
+  className: `pill status-${statusLabel || "pending"}`,
+  textContent: statusLabel || "pending",
+});
+
+const renderSignals = (item) => {
+  const wrap = createNode("div", { className: "signals" });
+  [
+    [item.is_stream, "Stream"],
+    [item.has_images, "Image"],
+    [item.has_tool_calls, "Tool"],
+    [item.error, "Error"],
+  ].forEach(([enabled, label]) => {
+    if (enabled) {
+      wrap.append(createNode("span", { textContent: label }));
+    }
+  });
+  return wrap;
+};
+
+const renderTokenTriplet = (tokens) => {
+  const wrap = createNode("div", { className: "token-triplet" });
+  [
+    ["input", tokens?.input_display, tokens?.input_estimated ? "Est. input" : "Input"],
+    ["output", tokens?.output_display, "Output"],
+    ["total", tokens?.total_display, "Total"],
+  ].forEach(([key, display, label]) => {
+    const span = createNode("span", {
+      className: key === "input" && tokens?.input_estimated ? "estimated-token" : "",
+    });
+    span.append(
+      createNode("strong", {
+        textContent: `${key === "input" && tokens?.input_estimated ? "~" : ""}${valueOrDash(display)}`,
+      }),
+      createNode("small", { textContent: label }),
+    );
+    wrap.append(span);
+  });
+  return wrap;
+};
+
+const renderCostCell = (item) => {
+  const wrap = document.createDocumentFragment();
+  wrap.append(createNode("strong", { textContent: valueOrDash(item.cost_display) }));
+  if (item.billing_provider) {
+    wrap.append(createNode("span", { className: "muted", textContent: item.billing_provider }));
+  }
+  return wrap;
+};
+
+const renderRequestRows = (tbody, items, showRun) => {
+  tbody.replaceChildren();
+  if (!items.length) {
+    const row = createNode("tr");
+    tableCell(row, "No captured requests yet.", "empty").colSpan = showRun ? 11 : 10;
+    tbody.append(row);
+    return;
+  }
+  items.forEach((item) => {
+    const row = createNode("tr");
+    const timeCell = createNode("td");
+    timeCell.append(
+      createNode("a", { href: `/admin/requests/${item.id}`, textContent: `#${item.id}` }),
+      localTimeNode(item.created_at, item.created_at_table_fallback, "table"),
+    );
+    row.append(timeCell);
+
+    const endpointCell = createNode("td", { className: "request-endpoint" });
+    endpointCell.append(
+      createNode("span", { className: "method", textContent: item.method }),
+      createNode("code", { textContent: item.endpoint }),
+    );
+    row.append(endpointCell);
+
+    const modelCell = createNode("td", { className: "request-model" });
+    modelCell.append(createNode("span", { textContent: valueOrDash(item.model) }));
+    if (item.model_route) {
+      modelCell.append(createNode("span", { className: "route-badge", textContent: item.model_route }));
+    }
+    row.append(modelCell);
+
+    if (showRun) {
+      const runCell = createNode("td");
+      if (item.task_run) {
+        runCell.append(createNode("a", {
+          className: "run-badge",
+          href: `/admin/runs/${item.task_run.id}`,
+          textContent: item.task_run.name,
+        }));
+      } else {
+        runCell.append(createNode("span", { className: "muted", textContent: "-" }));
+      }
+      row.append(runCell);
+    }
+
+    tableCell(row, renderStatusPill(item.status_label));
+    const duration = item.duration_is_elapsed
+      ? createNode("span", {
+        className: "elapsed-duration",
+        "data-pending-start": item.created_at,
+        textContent: `${valueOrDash(item.duration_display)} so far`,
+      })
+      : item.duration_display;
+    tableCell(row, duration, "numeric");
+    tableCell(row, item.tokens_per_second_display, "numeric");
+    tableCell(row, renderTokenTriplet(item.tokens));
+    tableCell(row, renderCostCell(item), "numeric");
+    tableCell(row, renderSignals(item), "signals");
+    tableCell(row, createNode("span", { textContent: item.preview || "" }), "request-preview");
+    tbody.append(row);
+  });
+};
+
+const renderPagination = (container, pagination) => {
+  if (!pagination) {
+    return;
+  }
+  const bar = createNode("div", { className: "pagination-bar" });
+  const summary = createNode("span");
+  summary.append(
+    "Showing ",
+    createNode("strong", {
+      textContent: `${pagination.display?.start || "0"}-${pagination.display?.end || "0"}`,
+    }),
+    " of ",
+    createNode("strong", { textContent: pagination.display?.total || "0" }),
+    createNode("small", { textContent: `${pagination.per_page} per page` }),
+  );
+  const nav = createNode("nav", {
+    className: "pagination-links",
+    "aria-label": "Request table pages",
+  });
+  const pageLink = (label, page, disabled = false, active = false) => {
+    const attrs = {
+      className: `button ghost compact-button${disabled ? " disabled" : ""}${active ? " active" : ""}`,
+      textContent: label,
+    };
+    if (!disabled) {
+      attrs.href = "#";
+      attrs["data-live-page-number"] = page;
+    }
+    return createNode(disabled ? "span" : "a", attrs);
+  };
+  nav.append(pageLink("Previous", pagination.page - 1, !pagination.has_previous));
+  (pagination.pages || []).forEach((page) => {
+    nav.append(pageLink(String(page.number), page.number, false, page.current));
+  });
+  nav.append(pageLink("Next", pagination.page + 1, !pagination.has_next));
+  bar.append(summary, nav);
+  container.append(bar);
+};
+
+const renderRequestsTable = (container, items, pagination, showRun) => {
+  container.replaceChildren();
+  const table = createNode("table", { className: "requests-table" });
+  const colgroup = createNode("colgroup");
+  [
+    "col-time",
+    "col-endpoint",
+    "col-model",
+    ...(showRun ? ["col-run"] : []),
+    "col-status",
+    "col-duration",
+    "col-tps",
+    "col-tokens",
+    "col-cost",
+    "col-signals",
+    "col-preview",
+  ].forEach((className) => colgroup.append(createNode("col", { className })));
+  const thead = createNode("thead");
+  const headRow = createNode("tr");
+  ["Time", "Endpoint", "Model", ...(showRun ? ["Run"] : []), "Status", "Duration", "TPS", "Tokens", "Cost", "Signals", "Preview"]
+    .forEach((heading) => headRow.append(createNode("th", { textContent: heading })));
+  thead.append(headRow);
+  const tbody = createNode("tbody");
+  renderRequestRows(tbody, items, showRun);
+  table.append(colgroup, thead, tbody);
+  container.append(table);
+  renderPagination(container, pagination);
+  updatePendingElapsed();
+};
+
+const renderRunControl = (container, activeRun, includeNotes) => {
+  if (!container) {
+    return;
+  }
+  container.replaceChildren();
+  if (activeRun) {
+    const copy = createNode("div");
+    copy.append(
+      createNode("p", { className: "eyebrow", textContent: "Run in progress" }),
+      createNode("h2", {}, [
+        createNode("a", { href: `/admin/runs/${activeRun.id}`, textContent: activeRun.name }),
+      ]),
+      createNode("p", {
+        className: "muted",
+        textContent: `${activeRun.request_count_display} request${activeRun.request_count === 1 ? "" : "s"} · ${activeRun.open_duration_display} open`,
+      }),
+    );
+    const form = createNode("form", {
+      method: "post",
+      action: "/admin/runs/end",
+      "data-live-run-end": true,
+      "data-api-url": "/admin/api/runs/end",
+    });
+    form.append(createNode("button", {
+      className: "button danger",
+      type: "submit",
+      textContent: "End run",
+    }));
+    container.append(copy, form);
+    return;
+  }
+  const form = createNode("form", {
+    className: "run-start-form",
+    method: "post",
+    action: "/admin/runs/start",
+    "data-live-run-start": true,
+    "data-api-url": "/admin/api/runs/start",
+  });
+  form.append(createNode("label", {}, [
+    "Run name",
+    createNode("input", {
+      name: "name",
+      placeholder: "Video processing benchmark",
+      required: true,
+    }),
+  ]));
+  if (includeNotes) {
+    form.append(createNode("label", {}, [
+      "Notes",
+      createNode("input", { name: "notes", placeholder: "Optional context" }),
+    ]));
+  }
+  form.append(createNode("button", {
+    className: "button primary",
+    type: "submit",
+    textContent: "Start run",
+  }));
+  container.append(form);
+};
+
+const updateRequestFilterOptions = (root, data) => {
+  const modelSelect = root.querySelector("select[name='model']");
+  const runSelect = root.querySelector("select[name='run']");
+  const endpoints = root.querySelector("#endpoints");
+  const currentModel = modelSelect?.value || "";
+  const currentRun = runSelect?.value || "";
+  if (modelSelect) {
+    modelSelect.replaceChildren(createNode("option", { value: "", textContent: "Any model" }));
+    (data.models || []).forEach((model) => {
+      modelSelect.append(createNode("option", {
+        value: model,
+        textContent: model,
+        selected: model === currentModel,
+      }));
+    });
+  }
+  if (runSelect) {
+    runSelect.replaceChildren(createNode("option", { value: "", textContent: "Any run" }));
+    (data.run_options || []).forEach((run) => {
+      runSelect.append(createNode("option", {
+        value: run.id,
+        textContent: run.name,
+        selected: String(run.id) === String(currentRun),
+      }));
+    });
+  }
+  if (endpoints) {
+    endpoints.replaceChildren();
+    (data.endpoints || []).forEach((endpoint) => {
+      endpoints.append(createNode("option", { value: endpoint }));
+    });
+  }
+};
+
+const syncRequestFormFromUrl = (root) => {
+  const form = root.querySelector("[data-live-request-filters]");
+  if (!form) {
+    return;
+  }
+  const params = new URLSearchParams(window.location.search);
+  ["endpoint", "model", "run", "status"].forEach((name) => {
+    const field = form.elements[name];
+    if (field) {
+      field.value = params.get(name) || "";
+    }
+  });
+  ["stream", "image", "tool"].forEach((name) => {
+    const field = form.elements[name];
+    if (field) {
+      field.checked = params.get(name) === "1";
+    }
+  });
+};
+
+const requestQueryFromForm = (form) => {
+  const params = new URLSearchParams();
+  ["endpoint", "model", "run", "status"].forEach((name) => {
+    const value = form.elements[name]?.value?.trim();
+    if (value) {
+      params.set(name, value);
+    }
+  });
+  ["stream", "image", "tool"].forEach((name) => {
+    if (form.elements[name]?.checked) {
+      params.set(name, "1");
+    }
+  });
+  return params;
+};
+
+const apiUrlWithCurrentQuery = (root) => {
+  const url = new URL(root.dataset.apiUrl, window.location.origin);
+  const params = new URLSearchParams(window.location.search);
+  params.forEach((value, key) => url.searchParams.set(key, value));
+  return url;
+};
+
+const startLivePoller = (root, load) => {
+  const interval = Number(root.dataset.pollInterval || "1000");
+  let controller = null;
+  const refresh = async () => {
+    if (document.hidden) {
+      return;
+    }
+    if (controller) {
+      controller.abort();
+    }
+    controller = new AbortController();
+    try {
+      await load(controller.signal);
+      setLiveStatus(root, "Live");
+    } catch (error) {
+      if (error.name !== "AbortError") {
+        setLiveStatus(root, "Update failed; showing last data.", true);
+      }
+    }
+  };
+  window.setInterval(refresh, interval);
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) {
+      refresh();
+    }
+  });
+  window.addEventListener("live:refresh", refresh);
+  refresh();
+};
+
+const initRequestsLivePage = (root) => {
+  const table = root.querySelector("[data-live-requests-table]");
+  const stats = root.querySelector("[data-live-request-stats]");
+  const runControl = root.querySelector("[data-live-run-control]");
+  const form = root.querySelector("[data-live-request-filters]");
+
+  syncRequestFormFromUrl(root);
+
+  const load = async (signal) => {
+    const response = await fetch(apiUrlWithCurrentQuery(root), {
+      headers: { Accept: "application/json" },
+      signal,
+    });
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.detail || `Requests API returned ${response.status}`);
+    }
+    updateRequestFilterOptions(root, data);
+    syncRequestFormFromUrl(root);
+    if (stats) {
+      stats.replaceChildren(
+        createNode("span", {}, [createNode("strong", { textContent: data.stats.total.display }), "Total"]),
+        createNode("span", {}, [createNode("strong", { textContent: data.stats.streams.display }), "Streams"]),
+        createNode("span", {}, [createNode("strong", { textContent: data.stats.images.display }), "Images"]),
+        createNode("span", {}, [createNode("strong", { textContent: data.stats.tools.display }), "Tools"]),
+      );
+    }
+    renderRunControl(runControl, data.active_run, false);
+    renderRequestsTable(table, data.items || [], data.pagination, true);
+  };
+
+  form?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const query = requestQueryFromForm(form).toString();
+    history.pushState({}, "", query ? `/admin?${query}` : "/admin");
+    window.dispatchEvent(new Event("live:refresh"));
+  });
+  root.querySelector("[data-live-reset]")?.addEventListener("click", (event) => {
+    event.preventDefault();
+    history.pushState({}, "", "/admin");
+    syncRequestFormFromUrl(root);
+    window.dispatchEvent(new Event("live:refresh"));
+  });
+  table?.addEventListener("click", (event) => {
+    const link = event.target.closest("[data-live-page-number]");
+    if (!link) {
+      return;
+    }
+    event.preventDefault();
+    const params = new URLSearchParams(window.location.search);
+    params.set("page", link.dataset.livePageNumber);
+    history.pushState({}, "", `/admin?${params}`);
+    window.dispatchEvent(new Event("live:refresh"));
+  });
+  window.addEventListener("popstate", () => {
+    syncRequestFormFromUrl(root);
+    window.dispatchEvent(new Event("live:refresh"));
+  });
+
+  startLivePoller(root, load);
+};
+
+const renderRunsTable = (container, items) => {
+  container.replaceChildren();
+  const table = createNode("table", { className: "runs-table" });
+  const thead = createNode("thead");
+  const headRow = createNode("tr");
+  ["Run", "Status", "Requests", "LLM Wall Time", "Total Tokens", "Cost", "Output tok/s", "Signals"]
+    .forEach((heading) => headRow.append(createNode("th", { textContent: heading })));
+  thead.append(headRow);
+  const tbody = createNode("tbody");
+  if (!items.length) {
+    const row = createNode("tr");
+    tableCell(row, "No runs yet.", "empty").colSpan = 8;
+    tbody.append(row);
+  }
+  items.forEach((run) => {
+    const row = createNode("tr");
+    const runCell = createNode("td");
+    runCell.append(
+      createNode("a", { href: `/admin/runs/${run.id}` }, [
+        createNode("strong", { textContent: run.name }),
+      ]),
+      localTimeNode(run.started_at, run.started_at_table_fallback, "table"),
+    );
+    row.append(runCell);
+    tableCell(row, renderStatusPill(run.is_active ? "active" : "complete"));
+    tableCell(row, run.request_count_display);
+    tableCell(row, run.llm_wall_time_display);
+    tableCell(row, run.total_tokens_display);
+    tableCell(row, run.total_cost_display);
+    tableCell(row, run.output_tokens_per_second_display);
+    const signals = createNode("div", { className: "signals" });
+    [
+      ["streams", "Stream"],
+      ["images", "Image"],
+      ["tools", "Tool"],
+      ["errors", "Error"],
+    ].forEach(([key, label]) => {
+      const value = run.signals?.[key]?.value || 0;
+      if (value) {
+        signals.append(createNode("span", { textContent: `${run.signals[key].display} ${label}` }));
+      }
+    });
+    tableCell(row, signals, "signals");
+    tbody.append(row);
+  });
+  table.append(thead, tbody);
+  container.append(table);
+};
+
+const initRunsLivePage = (root) => {
+  const table = root.querySelector("[data-live-runs-table]");
+  const stats = root.querySelector("[data-live-run-stats]");
+  const runControl = root.querySelector("[data-live-run-control]");
+
+  const load = async (signal) => {
+    const response = await fetch(root.dataset.apiUrl, {
+      headers: { Accept: "application/json" },
+      signal,
+    });
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.detail || `Runs API returned ${response.status}`);
+    }
+    if (stats) {
+      stats.replaceChildren(
+        createNode("span", {}, [createNode("strong", { textContent: data.stats.shown_display }), "Shown"]),
+        createNode("span", {}, [createNode("strong", { textContent: String(data.stats.active) }), "Active"]),
+      );
+    }
+    renderRunControl(runControl, data.active_run, true);
+    renderRunsTable(table, data.items || []);
+  };
+
+  startLivePoller(root, load);
+};
+
+const renderRenderedPayload = (container, rendered) => {
+  if (!container) {
+    return;
+  }
+  container.replaceChildren();
+  if (!rendered) {
+    container.append(createNode("pre", { className: "code", textContent: "" }));
+    return;
+  }
+  if (rendered.mode === "markdown" && rendered.html) {
+    container.append(createNode("div", { className: "markdown-body", html: rendered.html }));
+    return;
+  }
+  if (rendered.mode === "tool" && rendered.tool_blocks?.length) {
+    const list = createNode("div", { className: "tool-list" });
+    rendered.tool_blocks.forEach((block) => {
+      list.append(createNode("section", { className: "tool-block" }, [
+        createNode("strong", { textContent: block.kind }),
+        createNode("pre", {
+          className: "code",
+          textContent: JSON.stringify(block.payload, null, 2),
+        }),
+      ]));
+    });
+    container.append(list);
+    return;
+  }
+  container.append(createNode("pre", { className: "code", textContent: rendered.text || "" }));
+};
+
+const metaSpan = (label, content) => {
+  const span = createNode("span");
+  span.append(`${label} `, createNode("strong", {}, [content instanceof Node ? content : valueOrDash(content)]));
+  return span;
+};
+
+const renderRequestDetail = (root, data) => {
+  const record = data.record;
+  document.title = `Request #${record.id} - LLM Observe Proxy`;
+  const header = root.querySelector("[data-live-request-detail-header]");
+  if (header) {
+    const meta = createNode("div", { className: "detail-meta" });
+    meta.append(
+      metaSpan("Status", record.status_label),
+      metaSpan("Duration", record.duration_is_elapsed
+        ? createNode("span", {
+          className: "elapsed-duration",
+          "data-pending-start": record.created_at,
+          textContent: `${record.duration_display} so far`,
+        })
+        : record.duration_display),
+      metaSpan("Created", localTimeNode(record.created_at, record.created_at_fallback, "full")),
+    );
+    if (record.completed_at) {
+      meta.append(metaSpan("Completed", localTimeNode(record.completed_at, record.completed_at_fallback, "full")));
+    }
+    meta.append(
+      metaSpan("Cost", record.billing_total_cost_display),
+      metaSpan("Model", record.model || "unknown"),
+    );
+    if (record.upstream_model) {
+      meta.append(metaSpan("Upstream Model", record.upstream_model));
+    }
+    if (record.model_route) {
+      meta.append(metaSpan("Route", record.model_route));
+    }
+    if (record.task_run) {
+      meta.append(metaSpan("Run", createNode("a", {
+        href: `/admin/runs/${record.task_run.id}`,
+        textContent: record.task_run.name,
+      })));
+    }
+    if (record.response_was_rewritten) {
+      meta.append(metaSpan("Compatibility", "rewritten"));
+    } else if (record.compat_fix_errors_json) {
+      meta.append(metaSpan("Compatibility", "warned"));
+    }
+    header.replaceChildren(
+      createNode("div", {}, [
+        createNode("p", { className: "eyebrow", textContent: `${record.method} ${record.endpoint}` }),
+        createNode("h1", { textContent: `Request #${record.id}` }),
+      ]),
+      meta,
+    );
+  }
+
+  const alert = root.querySelector("[data-live-request-alert]");
+  alert?.replaceChildren();
+  if (record.error && alert) {
+    alert.append(createNode("div", { className: "alert", textContent: record.error }));
+  }
+
+  const contentType = root.querySelector("[data-live-request-content-type]");
+  if (contentType) {
+    contentType.textContent = record.request_content_type || "body";
+  }
+  const requestBody = root.querySelector("[data-live-request-body]");
+  if (requestBody) {
+    requestBody.textContent = data.request_render?.text || "";
+  }
+  renderRenderedPayload(root.querySelector("[data-live-response-body]"), data.response_render);
+
+  root.querySelectorAll("[data-live-mode-tabs] a").forEach((link) => {
+    link.classList.toggle("active", link.dataset.mode === data.mode);
+  });
+
+  const compat = root.querySelector("[data-live-compat-section]");
+  compat?.replaceChildren();
+  if (compat && (record.compat_fixes_json || record.compat_fix_errors_json)) {
+    compat.append(createNode("section", { className: "split" }, [
+      createNode("article", { className: "panel" }, [
+        createNode("header", {}, [createNode("h2", { textContent: "Compatibility Fixes" })]),
+        createNode("pre", { className: "code compact-code", textContent: record.compat_fixes_json || "{}" }),
+      ]),
+      createNode("article", { className: "panel" }, [
+        createNode("header", {}, [createNode("h2", { textContent: "Compatibility Warnings" })]),
+        createNode("pre", { className: "code compact-code", textContent: record.compat_fix_errors_json || "{}" }),
+      ]),
+    ]));
+  }
+
+  const raw = root.querySelector("[data-live-raw-response-section]");
+  raw?.replaceChildren();
+  if (raw && data.raw_response_render) {
+    const body = createNode("div");
+    renderRenderedPayload(body, data.raw_response_render);
+    raw.append(createNode("section", { className: "panel" }, [
+      createNode("header", {}, [
+        createNode("h2", { textContent: "Raw Upstream Response" }),
+        createNode("span", { textContent: "Before compatibility fixes" }),
+      ]),
+      body,
+    ]));
+  }
+
+  const images = root.querySelector("[data-live-images-section]");
+  images?.replaceChildren();
+  if (images && data.images?.length) {
+    const grid = createNode("div", { className: "image-grid" });
+    data.images.forEach((image, index) => {
+      grid.append(createNode("figure", {}, [
+        createNode("img", { src: image.source, alt: `Request image ${index + 1}` }),
+        createNode("figcaption", { textContent: image.mime_type || image.kind }),
+      ]));
+    });
+    images.append(createNode("section", { className: "panel" }, [
+      createNode("header", {}, [
+        createNode("h2", { textContent: "Images Sent" }),
+        createNode("span", { textContent: `${data.images.length} image${data.images.length === 1 ? "" : "s"}` }),
+      ]),
+      grid,
+    ]));
+  }
+
+  const cost = root.querySelector("[data-live-cost-section]");
+  cost?.replaceChildren();
+  if (cost) {
+    const breakdown = createNode("div", { className: "breakdown-list" });
+    [
+      [record.display_input_tokens_display, "Input tokens"],
+      [record.display_cached_input_tokens_display, "Cached input tokens"],
+      [record.display_output_tokens_display, "Output tokens"],
+      [record.display_total_tokens_display, "Total tokens"],
+      [record.billing_total_cost_display, "Estimated cost"],
+      [record.billing_model || "-", "Billing model"],
+    ].forEach(([value, label]) => {
+      breakdown.append(createNode("span", {}, [
+        createNode("strong", { textContent: valueOrDash(value) }),
+        label,
+      ]));
+    });
+    if (!record.completed_at && record.display_input_tokens === null && record.estimated_input_tokens) {
+      breakdown.append(createNode("span", { className: "estimated-token" }, [
+        createNode("strong", { textContent: `~${record.estimated_input_tokens_display}` }),
+        "Est. input tokens",
+      ]));
+    }
+    if (record.estimated_input_tokenizer) {
+      breakdown.append(createNode("span", {}, [
+        createNode("strong", { textContent: record.estimated_input_tokenizer }),
+        "Estimate tokenizer",
+      ]));
+    }
+    cost.append(createNode("section", { className: "split" }, [
+      createNode("article", { className: "panel" }, [
+        createNode("header", {}, [
+          createNode("h2", { textContent: "Cost Estimate" }),
+          createNode("span", { textContent: record.billing_provider_name || record.billing_provider_slug || "no provider" }),
+        ]),
+        breakdown,
+      ]),
+      createNode("article", { className: "panel" }, [
+        createNode("header", {}, [createNode("h2", { textContent: "Pricing Snapshot" })]),
+        createNode("pre", { className: "code compact-code", textContent: record.pricing_snapshot_json || "{}" }),
+      ]),
+    ]));
+  }
+
+  const headers = root.querySelector("[data-live-headers-section]");
+  headers?.replaceChildren();
+  headers?.append(createNode("section", { className: "split" }, [
+    createNode("article", { className: "panel" }, [
+      createNode("header", {}, [createNode("h2", { textContent: "Request Headers" })]),
+      createNode("pre", { className: "code", textContent: record.request_headers_json || "{}" }),
+    ]),
+    createNode("article", { className: "panel" }, [
+      createNode("header", {}, [createNode("h2", { textContent: "Response Headers" })]),
+      createNode("pre", { className: "code", textContent: record.response_headers_json || "{}" }),
+    ]),
+  ]));
+
+  const upstream = root.querySelector("[data-live-upstream-section]");
+  upstream?.replaceChildren();
+  upstream?.append(createNode("section", { className: "panel" }, [
+    createNode("header", {}, [
+      createNode("h2", { textContent: "Upstream" }),
+      createNode("span", { textContent: record.model_route || "global fallback" }),
+    ]),
+    createNode("code", { textContent: record.upstream_url }),
+  ]));
+  updatePendingElapsed();
+};
+
+const initRequestDetailLivePage = (root) => {
+  const modeFromUrl = () => new URLSearchParams(window.location.search).get("mode")
+    || root.dataset.renderMode
+    || "auto";
+  let mode = modeFromUrl();
+  const load = async (signal) => {
+    const url = new URL(root.dataset.apiUrl, window.location.origin);
+    url.searchParams.set("mode", mode);
+    const response = await fetch(url, { headers: { Accept: "application/json" }, signal });
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.detail || `Request API returned ${response.status}`);
+    }
+    renderRequestDetail(root, data);
+  };
+  root.querySelector("[data-live-mode-tabs]")?.addEventListener("click", (event) => {
+    const link = event.target.closest("[data-mode]");
+    if (!link) {
+      return;
+    }
+    event.preventDefault();
+    mode = link.dataset.mode || "auto";
+    history.pushState({}, "", `/admin/requests/${root.dataset.recordId}?mode=${mode}`);
+    window.dispatchEvent(new Event("live:refresh"));
+  });
+  window.addEventListener("popstate", () => {
+    mode = modeFromUrl();
+    window.dispatchEvent(new Event("live:refresh"));
+  });
+  startLivePoller(root, load);
+};
+
+const breakdownPanel = (title, rows, emptyText) => {
+  const list = createNode("div", { className: "breakdown-list" });
+  if (!rows.length) {
+    list.append(createNode("p", { className: "muted", textContent: emptyText }));
+  } else {
+    rows.forEach((row) => {
+      list.append(createNode("span", {}, [
+        createNode("strong", { textContent: row.count_display }),
+        row.label,
+      ]));
+    });
+  }
+  return createNode("article", { className: "panel" }, [
+    createNode("header", {}, [createNode("h2", { textContent: title })]),
+    list,
+  ]);
+};
+
+const renderRunDetail = (root, data) => {
+  const run = data.run;
+  document.title = `Run: ${run.name} - LLM Observe Proxy`;
+  const header = root.querySelector("[data-live-run-detail-header]");
+  if (header) {
+    const meta = createNode("div", { className: "detail-meta" });
+    meta.append(
+      metaSpan("Started", localTimeNode(run.started_at, run.started_at_fallback, "full")),
+      metaSpan("Ended", run.ended_at ? localTimeNode(run.ended_at, run.ended_at_fallback, "full") : "active"),
+    );
+    const side = createNode("div", { className: "run-summary-side" }, [meta]);
+    if (run.is_active) {
+      side.append(createNode("form", {
+        className: "run-summary-action",
+        method: "post",
+        action: "/admin/runs/end",
+        "data-live-run-end": true,
+        "data-api-url": "/admin/api/runs/end",
+      }, [
+        createNode("button", { className: "button danger", type: "submit", textContent: "End run" }),
+      ]));
+    }
+    const topline = createNode("div", { className: "run-summary-topline" }, [
+      createNode("div", { className: "run-summary-title" }, [
+        createNode("p", { className: "eyebrow", textContent: run.is_active ? "Run in progress" : "Completed run" }),
+        createNode("h1", { textContent: `Run: ${run.name}` }),
+        run.notes ? createNode("p", { className: "muted", textContent: run.notes }) : null,
+      ]),
+      side,
+    ]);
+    const strip = createNode("div", { className: "run-stat-strip", "data-live-run-stat-strip": true });
+    [
+      ["Requests", data.stats.request_count_display],
+      ["LLM wall time", data.stats.llm_wall_time_display],
+      ["Run open", data.stats.run_open_duration_display],
+      ["Request duration", data.stats.total_request_duration_display],
+      ["Input tokens", data.stats.tokens.input.display],
+      ["Output tokens", data.stats.tokens.output.display],
+      ["Total tokens", data.stats.tokens.total.display],
+      ["Estimated cost", data.stats.cost_display],
+      ["Output tok/s", data.stats.throughput.output_observed.display],
+    ].forEach(([label, value]) => {
+      strip.append(createNode("span", {}, [
+        createNode("small", { textContent: label }),
+        createNode("strong", { textContent: valueOrDash(value) }),
+      ]));
+    });
+    header.replaceChildren(topline, strip);
+  }
+
+  const breakdowns = root.querySelector("[data-live-run-breakdowns]");
+  breakdowns?.replaceChildren(
+    createNode("section", { className: "split" }, [
+      breakdownPanel("Models", data.stats.models || [], "No model usage yet."),
+      breakdownPanel("Endpoints", data.stats.endpoints || [], "No endpoint usage yet."),
+    ]),
+    createNode("section", { className: "split" }, [
+      breakdownPanel("Status Codes", data.stats.statuses || [], "No status codes yet."),
+      createNode("article", { className: "panel" }, [
+        createNode("header", {}, [createNode("h2", { textContent: "Signals" })]),
+        createNode("div", { className: "breakdown-list" }, [
+          createNode("span", {}, [createNode("strong", { textContent: data.stats.signals.streams.display }), "Streams"]),
+          createNode("span", {}, [createNode("strong", { textContent: data.stats.signals.images.display }), "Images"]),
+          createNode("span", {}, [createNode("strong", { textContent: data.stats.signals.tools.display }), "Tools"]),
+          createNode("span", {}, [createNode("strong", { textContent: data.stats.signals.errors.display }), "Errors"]),
+        ]),
+      ]),
+    ]),
+  );
+  renderRequestsTable(
+    root.querySelector("[data-live-requests-table]"),
+    data.items || [],
+    data.pagination,
+    false,
+  );
+};
+
+const initRunDetailLivePage = (root) => {
+  const apiUrlForQuery = () => {
+    const url = new URL(root.dataset.apiUrl, window.location.origin);
+    const params = new URLSearchParams(window.location.search);
+    params.forEach((value, key) => url.searchParams.set(key, value));
+    return url;
+  };
+  const load = async (signal) => {
+    const response = await fetch(apiUrlForQuery(), {
+      headers: { Accept: "application/json" },
+      signal,
+    });
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.detail || `Run API returned ${response.status}`);
+    }
+    renderRunDetail(root, data);
+  };
+  root.querySelector("[data-live-requests-table]")?.addEventListener("click", (event) => {
+    const link = event.target.closest("[data-live-page-number]");
+    if (!link) {
+      return;
+    }
+    event.preventDefault();
+    const params = new URLSearchParams(window.location.search);
+    params.set("page", link.dataset.livePageNumber);
+    history.pushState({}, "", `/admin/runs/${root.dataset.runId}?${params}`);
+    window.dispatchEvent(new Event("live:refresh"));
+  });
+  window.addEventListener("popstate", () => window.dispatchEvent(new Event("live:refresh")));
+  startLivePoller(root, load);
+};
+
+document.addEventListener("submit", async (event) => {
+  const startForm = event.target.closest("[data-live-run-start]");
+  const endForm = event.target.closest("[data-live-run-end]");
+  if (!startForm && !endForm) {
+    return;
+  }
+  event.preventDefault();
+  const form = startForm || endForm;
+  const payload = startForm
+    ? {
+      name: form.elements.name?.value || "",
+      notes: form.elements.notes?.value || "",
+    }
+    : {};
+  try {
+    const response = await fetch(form.dataset.apiUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.detail || `Run action returned ${response.status}`);
+    }
+    if (startForm && data.run?.id) {
+      window.location.href = `/admin/runs/${data.run.id}`;
+      return;
+    }
+    window.dispatchEvent(new Event("live:refresh"));
+  } catch (error) {
+    window.alert(error.message || "Run action failed.");
+  }
+});
+
+if (liveRoot?.dataset.livePage === "requests") {
+  initRequestsLivePage(liveRoot);
+} else if (liveRoot?.dataset.livePage === "runs") {
+  initRunsLivePage(liveRoot);
+} else if (liveRoot?.dataset.livePage === "request-detail") {
+  initRequestDetailLivePage(liveRoot);
+} else if (liveRoot?.dataset.livePage === "run-detail") {
+  initRunDetailLivePage(liveRoot);
+}

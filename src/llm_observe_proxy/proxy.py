@@ -11,6 +11,7 @@ import httpx
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 
+from llm_observe_proxy.billing import resolve_billing_model
 from llm_observe_proxy.capture import (
     compact_json,
     decode_json_bytes,
@@ -181,10 +182,12 @@ async def proxy_openai(path: str, request: Request) -> Response:
             record = session.get(RequestRecord, record_id)
             if record is not None:
                 token_usage = extract_token_usage(response_payload)
-                billing_model = (
-                    routing_decision.upstream_model
-                    or extract_model(response_payload)
-                    or record.model
+                billing_model = resolve_billing_model(
+                    provider_slug=routing_decision.provider_slug,
+                    request_payload=request_payload,
+                    upstream_model=routing_decision.upstream_model,
+                    response_model=extract_model(response_payload),
+                    record_model=record.model,
                 )
                 apply_cost_estimate(
                     record,
@@ -306,7 +309,13 @@ async def _proxy_streaming(
                 record = session.get(RequestRecord, record_id)
                 if record is not None:
                     token_usage = extract_stream_token_usage(response_body)
-                    billing_model = _extract_payload_model(stream_events) or billing_fallback_model
+                    billing_model = resolve_billing_model(
+                        provider_slug=provider_slug,
+                        request_payload=request_payload,
+                        upstream_model=billing_fallback_model,
+                        response_model=_extract_payload_model(stream_events),
+                        record_model=None,
+                    )
                     apply_cost_estimate(
                         record,
                         estimate_cost(

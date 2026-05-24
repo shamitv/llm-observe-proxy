@@ -1,10 +1,11 @@
+{% import "_icons.html" as icons %}
 <!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{{ page_title }} - LLM Observe Proxy</title>
-  <link rel="stylesheet" href="{{ url_for('admin_static', path='/styles.css') }}?v=v05-admin-ui">
+  <link rel="stylesheet" href="{{ url_for('admin_static', path='/styles.css') }}?v=v05-live-admin">
 </head>
 <body>
   <header class="topbar">
@@ -16,10 +17,10 @@
       </span>
     </a>
     <nav class="nav main-nav" aria-label="Main navigation">
-      <a href="/admin" class="{{ 'active' if active_nav | default('') == 'requests' else '' }}">Requests</a>
-      <a href="/admin/runs" class="{{ 'active' if active_nav | default('') == 'runs' else '' }}">Runs</a>
-      <a href="/admin/settings" class="{{ 'active' if active_nav | default('') == 'settings' else '' }}">Settings</a>
-      <a href="/healthz">Health</a>
+      <a href="/admin" class="{{ 'active' if active_nav | default('') == 'requests' else '' }}">{{ icons.icon("requests", class_name="nav-link-icon") }}<span>Requests</span></a>
+      <a href="/admin/runs" class="{{ 'active' if active_nav | default('') == 'runs' else '' }}">{{ icons.icon("runs", class_name="nav-link-icon") }}<span>Runs</span></a>
+      <a href="/admin/settings" class="{{ 'active' if active_nav | default('') == 'settings' else '' }}">{{ icons.icon("settings", class_name="nav-link-icon") }}<span>Settings</span></a>
+      <a href="/healthz">{{ icons.icon("health", class_name="nav-link-icon") }}<span>Health</span></a>
     </nav>
     <div class="user-avatar" aria-label="Local admin">LA</div>
   </header>
@@ -30,6 +31,6 @@
     </main>
     {% endblock %}
   </div>
-  <script src="{{ url_for('admin_static', path='/app.js') }}?v=v05-admin-ui"></script>
+  <script src="{{ url_for('admin_static', path='/app.js') }}?v=v05-live-admin"></script>
 </body>
 </html>

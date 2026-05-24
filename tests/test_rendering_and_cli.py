@@ -623,9 +623,14 @@ def test_init_db_seeds_model_pricing_without_overwriting_edits(tmp_path) -> None
         price_count = session.scalar(text("SELECT count(*) FROM model_prices"))
     engine.dispose()
 
-    assert {"alibaba", "deepseek", "huggingface-router", "moonshot", "openrouter"} <= set(
-        providers
-    )
+    assert {
+        "alibaba",
+        "deepseek",
+        "huggingface-router",
+        "local-llm",
+        "moonshot",
+        "openrouter",
+    } <= set(providers)
     assert edited_price.input_usd_per_million == Decimal("123.000000")
     assert edited_openrouter_price.input_usd_per_million == Decimal("999.000000")
     assert price_count >= 51

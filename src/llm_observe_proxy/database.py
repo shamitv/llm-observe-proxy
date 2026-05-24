@@ -90,6 +90,14 @@ IBM_GRANITE_RELEASE_URL = (
 )
 DEFAULT_MODEL_PROVIDERS = (
     {
+        "slug": "local-llm",
+        "name": "Local LLM",
+        "upstream_url": "http://localhost:8000/v1",
+        "currency": "USD",
+        "api_key_env": None,
+        "capabilities_json": '{"text":true,"tool_calling":true,"vision":false}',
+    },
+    {
         "slug": "openai",
         "name": "OpenAI",
         "upstream_url": "https://api.openai.com/v1",

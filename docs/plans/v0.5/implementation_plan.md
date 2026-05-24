@@ -2,9 +2,10 @@
 
 ## Overview
 
-This plan breaks the v0.5 admin UI redesign into **6 sequential phases**, each independently
+This plan breaks the v0.5 admin UI redesign into **8 sequential phases**, each independently
 verifiable. Phases are ordered so that each one builds on the previous: data model first,
-then engine, then API, then UI foundation, then tab content, then polish.
+then engine, then API, then UI foundation, then tab content, then polish, then
+after-implementation review fixes.
 
 ## Phase Summary
 
@@ -16,6 +17,8 @@ then engine, then API, then UI foundation, then tab content, then polish.
 | 4 | [UI Foundation](phase-4-ui-foundation/plan.md) | App shell & CSS | Sidebar, tabs, connection summary, design system, status badges |
 | 5 | [Tab Implementations](phase-5-tab-implementations/plan.md) | Core UI tabs | Server, Providers, and Routing tab templates and wiring |
 | 6 | [Polish & Remaining](phase-6-polish/plan.md) | Fit & finish | Pricing tab, confirmation modals, accessibility, responsive, documentation |
+| 7 | [After-Implementation Review & Fixes](phase-7-after-implementation-review-and-fixes/plan.md) | Audit fixes | Firefox fallback provider UX, icon parity, related tests and docs |
+| 8 | [REST Live Requests/Runs UI](phase-8-rest-live-requests-runs/plan.md) | Live request/run UI | REST request/run APIs, 1-second polling shells, dynamic upstream test ports |
 
 ## Dependency Graph
 
@@ -26,6 +29,8 @@ graph LR
     P3 --> P4["Phase 4: UI Foundation"]
     P4 --> P5["Phase 5: Tab UIs"]
     P5 --> P6["Phase 6: Polish"]
+    P6 --> P7["Phase 7: Review Fixes"]
+    P7 --> P8["Phase 8: REST Live UI"]
 ```
 
 ## Phase Details
@@ -136,6 +141,40 @@ graph LR
 
 ---
 
+### Phase 7 — After-Implementation Review & Fixes
+
+**Goal**: Address the Linux Firefox after-implementation audit findings.
+
+- Keep fallback provider controls usable in Firefox and return saves to the originating tab
+- Replace Settings initials/text-only mockup placeholders with server-rendered SVG icons
+- Add provider icon badges and action-control icons while preserving accessible labels
+- Add focused tests for fallback redirects, enhanced select markup, and icon rendering
+
+**Inputs**: Phase 6 completed Settings UI, after-implementation audit
+**Outputs**: Firefox fallback UX fixes, icon parity, tests, docs
+**Plan**: [phase-7-after-implementation-review-and-fixes/plan.md](phase-7-after-implementation-review-and-fixes/plan.md)
+**TODO**: [phase-7-after-implementation-review-and-fixes/todo.md](phase-7-after-implementation-review-and-fixes/todo.md)
+
+---
+
+### Phase 8 — REST Live Requests/Runs UI
+
+**Goal**: Convert request and run data regions from server-rendered HTML to REST-backed
+live views.
+
+- Add JSON APIs for request list/detail and run list/detail
+- Keep request/run pages as lightweight shells with API wiring and loading states
+- Poll every second while visible for new requests, status changes, and run metrics
+- Submit run start/end through REST while preserving legacy HTML fallbacks
+- Move pytest fake upstream to a dynamic free port so `8080` can remain occupied
+
+**Inputs**: Phase 7 admin UI, existing request/run helpers
+**Outputs**: REST-backed live request/run pages, tests, docs
+**Plan**: [phase-8-rest-live-requests-runs/plan.md](phase-8-rest-live-requests-runs/plan.md)
+**TODO**: [phase-8-rest-live-requests-runs/todo.md](phase-8-rest-live-requests-runs/todo.md)
+
+---
+
 ## Quality Gates
 
 Each phase must pass before proceeding to the next:
@@ -155,7 +194,9 @@ main
       ├── phase-3 commits (backend API)
       ├── phase-4 commits (UI foundation)
       ├── phase-5 commits (tab UIs)
-      └── phase-6 commits (polish)
+      ├── phase-6 commits (polish)
+      ├── phase-7 commits (review fixes)
+      └── phase-8 commits (REST live request/run UI)
 ```
 
-Merge to main after Phase 6 passes all quality gates.
+Merge to main after Phase 8 passes all quality gates.

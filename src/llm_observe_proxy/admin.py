@@ -11,7 +11,7 @@ from typing import Annotated, Any
 from urllib.parse import unquote, urlencode
 
 import httpx
-from fastapi import APIRouter, Form, Query, Request
+from fastapi import APIRouter, Form, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from jinja2 import Undefined, pass_context
 from sqlalchemy import desc, func, select
@@ -29,7 +29,11 @@ from llm_observe_proxy.compatibility import (
     normalize_fix_ids,
 )
 from llm_observe_proxy.config import normalize_upstream_url
-from llm_observe_proxy.costing import RunCostEstimate, estimate_run_cost
+from llm_observe_proxy.costing import (
+    RunCostEstimate,
+    backfill_missing_cost_estimates,
+    estimate_run_cost,
+)
 from llm_observe_proxy.database import (
     ModelPrice,
     ModelProvider,
@@ -71,6 +75,11 @@ from llm_observe_proxy.database import (
     upsert_model_price_tier,
     upsert_model_provider,
     upsert_model_route_db,
+)
+from llm_observe_proxy.pricing_catalog import (
+    CatalogFetchError,
+    PricingCatalogRow,
+    fetch_catalog_rows,
 )
 from llm_observe_proxy.rendering import escape_preview, render_payload
 from llm_observe_proxy.routing import (
@@ -239,6 +248,9 @@ templates.env.filters["utc_iso"] = format_utc_iso
 templates.env.filters["usd"] = format_usd
 
 router = APIRouter(prefix="/admin", include_in_schema=False)
+SETTINGS_FALLBACK_RETURN_PATHS = frozenset(
+    {"/admin/settings/server", "/admin/settings/routing", "/admin/settings/providers"}
+)
 
 TEST_PROMPT_DEFAULT = "Reply with a short upstream connectivity check."
 TEST_IMAGE_DATA_URL = (
@@ -252,27 +264,45 @@ DEFAULT_RUN_WHAT_IF_KEYS = ("openai:gpt-5.5", "openai:gpt-5.4-mini")
 @router.get("/", response_class=HTMLResponse)
 async def index(
     request: Request,
+) -> HTMLResponse:
+    upstream_url = _upstream_url_for_shell(request)
+    return templates.TemplateResponse(
+        request,
+        "index.html",
+        {
+            "upstream_url": upstream_url,
+            "active_nav": "requests",
+            "page_title": "Request Browser",
+        },
+    )
+
+
+@router.get("/api/requests", response_model=None)
+async def requests_api(
+    request: Request,
     endpoint: str | None = None,
     model: str | None = None,
-    status: int | None = None,
-    run: int | None = None,
+    status: str | None = None,
+    run: str | None = None,
     stream: str | None = None,
     image: str | None = None,
     tool: str | None = None,
     page: int = Query(1, ge=1),
     per_page: int = Query(50, ge=1, le=200),
-) -> HTMLResponse:
+) -> dict[str, object]:
     session_factory: SessionFactory = request.app.state.session_factory
+    status_filter = _optional_query_int(status, "status")
+    run_filter = _optional_query_int(run, "run")
     with session_scope(session_factory) as session:
         stmt = select(RequestRecord)
         if endpoint:
             stmt = stmt.where(RequestRecord.endpoint.like(f"%{endpoint}%"))
         if model:
             stmt = stmt.where(RequestRecord.model == model)
-        if status is not None:
-            stmt = stmt.where(RequestRecord.response_status == status)
-        if run is not None:
-            stmt = stmt.where(RequestRecord.task_run_id == run)
+        if status_filter is not None:
+            stmt = stmt.where(RequestRecord.response_status == status_filter)
+        if run_filter is not None:
+            stmt = stmt.where(RequestRecord.task_run_id == run_filter)
         if stream == "1":
             stmt = stmt.where(RequestRecord.is_stream.is_(True))
         if image == "1":
@@ -322,46 +352,60 @@ async def index(
         upstream_url = get_upstream_url(session, request.app.state.settings)
         active_run = _task_run_summary(get_active_task_run(session), session)
 
-    return templates.TemplateResponse(
-        request,
-        "index.html",
-        {
-            "records": records,
-            "models": models,
-            "endpoints": endpoints,
-            "filters": {
-                "endpoint": endpoint or "",
-                "model": model or "",
-                "status": status or "",
-                "run": run or "",
-                "stream": stream == "1",
-                "image": image == "1",
-                "tool": tool == "1",
-                "page": pagination["page"],
-                "per_page": pagination["per_page"],
-            },
-            "run_options": [_task_run_summary(task_run, session=None) for task_run in run_options],
-            "active_run": active_run,
-            "stats": stats,
-            "pagination": pagination,
-            "upstream_url": upstream_url,
-            "page_title": "Request Browser",
+    return {
+        "items": [_record_list_item_json(record) for record in records],
+        "models": models,
+        "endpoints": endpoints,
+        "filters": {
+            "endpoint": endpoint or "",
+            "model": model or "",
+            "status": status_filter if status_filter is not None else "",
+            "run": run_filter if run_filter is not None else "",
+            "stream": stream == "1",
+            "image": image == "1",
+            "tool": tool == "1",
+            "page": pagination["page"],
+            "per_page": pagination["per_page"],
         },
-    )
+        "run_options": [
+            _task_run_summary_json(_task_run_summary(task_run, session=None))
+            for task_run in run_options
+        ],
+        "active_run": _task_run_summary_json(active_run),
+        "stats": _stats_json(stats),
+        "pagination": _pagination_json(pagination),
+        "upstream_url": upstream_url,
+        "poll_interval_ms": 1000,
+    }
 
 
 @router.get("/requests/{record_id}", response_class=HTMLResponse)
 async def detail(request: Request, record_id: int, mode: str = "auto") -> HTMLResponse:
+    upstream_url = _upstream_url_for_shell(request)
+    return templates.TemplateResponse(
+        request,
+        "detail.html",
+        {
+            "record_id": record_id,
+            "mode": _normalize_render_mode(mode),
+            "upstream_url": upstream_url,
+            "active_nav": "requests",
+            "page_title": f"Request #{record_id}",
+        },
+    )
+
+
+@router.get("/api/requests/{record_id}", response_model=None)
+async def request_detail_api(
+    request: Request,
+    record_id: int,
+    mode: str = "auto",
+) -> dict[str, object] | JSONResponse:
     session_factory: SessionFactory = request.app.state.session_factory
     with session_scope(session_factory) as session:
         record = session.get(RequestRecord, record_id)
         if record is None:
-            return templates.TemplateResponse(
-                request,
-                "not_found.html",
-                {"record_id": record_id, "page_title": "Not Found"},
-                status_code=404,
-            )
+            return JSONResponse({"detail": "Request not found."}, status_code=404)
         images = [
             {
                 "kind": image.kind,
@@ -375,6 +419,7 @@ async def detail(request: Request, record_id: int, mode: str = "auto") -> HTMLRe
         upstream_url = get_upstream_url(session, request.app.state.settings)
         active_run = _task_run_summary(get_active_task_run(session), session)
 
+    render_mode = _normalize_render_mode(mode)
     request_render = render_payload(
         detail_record["request_body"],
         detail_record["request_content_type"],
@@ -383,36 +428,46 @@ async def detail(request: Request, record_id: int, mode: str = "auto") -> HTMLRe
     response_render = render_payload(
         detail_record["response_body"],
         detail_record["response_content_type"],
-        mode,
+        render_mode,
     )
     raw_response_render = (
         render_payload(
             detail_record["upstream_response_body_raw"],
             detail_record["response_content_type"],
-            mode,
+            render_mode,
         )
         if detail_record["upstream_response_body_raw"]
         else None
     )
-    return templates.TemplateResponse(
-        request,
-        "detail.html",
-        {
-            "record": detail_record,
-            "images": images,
-            "request_render": request_render,
-            "response_render": response_render,
-            "raw_response_render": raw_response_render,
-            "mode": response_render.mode if mode == "auto" else mode,
-            "active_run": active_run,
-            "upstream_url": upstream_url,
-            "page_title": f"Request #{record_id}",
-        },
-    )
+    return {
+        "record": _record_detail_json(detail_record),
+        "images": images,
+        "request_render": _rendered_payload_json(request_render),
+        "response_render": _rendered_payload_json(response_render),
+        "raw_response_render": _rendered_payload_json(raw_response_render),
+        "mode": response_render.mode if render_mode == "auto" else render_mode,
+        "active_run": _task_run_summary_json(active_run),
+        "upstream_url": upstream_url,
+        "poll_interval_ms": 1000,
+    }
 
 
 @router.get("/runs", response_class=HTMLResponse)
 async def runs(request: Request) -> HTMLResponse:
+    upstream_url = _upstream_url_for_shell(request)
+    return templates.TemplateResponse(
+        request,
+        "runs.html",
+        {
+            "upstream_url": upstream_url,
+            "active_nav": "runs",
+            "page_title": "Runs",
+        },
+    )
+
+
+@router.get("/api/runs", response_model=None)
+async def runs_api(request: Request) -> dict[str, object]:
     session_factory: SessionFactory = request.app.state.session_factory
     with session_scope(session_factory) as session:
         runs_with_stats = [
@@ -422,35 +477,50 @@ async def runs(request: Request) -> HTMLResponse:
         active_run = _task_run_summary(get_active_task_run(session), session)
         upstream_url = get_upstream_url(session, request.app.state.settings)
 
-    return templates.TemplateResponse(
-        request,
-        "runs.html",
-        {
-            "runs": runs_with_stats,
-            "active_run": active_run,
-            "upstream_url": upstream_url,
-            "page_title": "Runs",
+    return {
+        "items": [_task_run_list_item_json(run) for run in runs_with_stats],
+        "active_run": _task_run_summary_json(active_run),
+        "stats": {
+            "shown": len(runs_with_stats),
+            "shown_display": format_compact_number(len(runs_with_stats)),
+            "active": 1 if active_run else 0,
         },
-    )
+        "upstream_url": upstream_url,
+        "poll_interval_ms": 1000,
+    }
 
 
 @router.get("/runs/{run_id}", response_class=HTMLResponse)
 async def run_detail(
     request: Request,
     run_id: int,
+) -> HTMLResponse:
+    upstream_url = _upstream_url_for_shell(request)
+    return templates.TemplateResponse(
+        request,
+        "run_detail.html",
+        {
+            "run_id": run_id,
+            "what_if_api_url": f"/admin/api/runs/{run_id}/what-if",
+            "upstream_url": upstream_url,
+            "active_nav": "runs",
+            "page_title": f"Run #{run_id}",
+        },
+    )
+
+
+@router.get("/api/runs/{run_id}", response_model=None)
+async def run_detail_api(
+    request: Request,
+    run_id: int,
     page: int = Query(1, ge=1),
     per_page: int = Query(50, ge=1, le=200),
-) -> HTMLResponse:
+) -> dict[str, object] | JSONResponse:
     session_factory: SessionFactory = request.app.state.session_factory
     with session_scope(session_factory) as session:
         task_run = session.get(TaskRun, run_id)
         if task_run is None:
-            return templates.TemplateResponse(
-                request,
-                "not_found.html",
-                {"record_id": run_id, "page_title": "Run Not Found"},
-                status_code=404,
-            )
+            return JSONResponse({"detail": "Run not found."}, status_code=404)
         request_stmt = select(RequestRecord).where(RequestRecord.task_run_id == run_id)
         total_records = _count_records(session, request_stmt)
         pagination = _pagination_context(
@@ -470,20 +540,16 @@ async def run_detail(
         active_run = _task_run_summary(get_active_task_run(session), session)
         upstream_url = get_upstream_url(session, request.app.state.settings)
 
-    return templates.TemplateResponse(
-        request,
-        "run_detail.html",
-        {
-            "run": _task_run_summary(task_run, session=None),
-            "records": records,
-            "stats": stats,
-            "what_if_api_url": f"/admin/api/runs/{run_id}/what-if",
-            "pagination": pagination,
-            "active_run": active_run,
-            "upstream_url": upstream_url,
-            "page_title": f"Run: {task_run.name}",
-        },
-    )
+    return {
+        "run": _task_run_summary_json(_task_run_summary(task_run, session=None)),
+        "items": [_record_list_item_json(record) for record in records],
+        "stats": _task_run_stats_detail_json(stats),
+        "what_if_api_url": f"/admin/api/runs/{run_id}/what-if",
+        "pagination": _pagination_json(pagination),
+        "active_run": _task_run_summary_json(active_run),
+        "upstream_url": upstream_url,
+        "poll_interval_ms": 1000,
+    }
 
 
 @router.get("/api/runs/{run_id}/what-if", response_model=None)
@@ -502,6 +568,37 @@ async def run_what_if_api(
             session,
             requested_keys=key,
         )
+
+
+@router.post("/api/runs/start", response_model=None)
+async def start_run_api(
+    request: Request,
+    payload: dict[str, object] | None = None,
+) -> dict[str, object] | JSONResponse:
+    payload = payload or {}
+    session_factory: SessionFactory = request.app.state.session_factory
+    try:
+        with session_scope(session_factory) as session:
+            task_run = start_task_run(
+                session,
+                str(payload.get("name") or ""),
+                str(payload.get("notes") or ""),
+            )
+            return {"run": _task_run_summary_json(_task_run_summary(task_run, session))}
+    except ValueError as exc:
+        return JSONResponse({"detail": str(exc)}, status_code=400)
+
+
+@router.post("/api/runs/end", response_model=None)
+async def end_run_api(request: Request) -> dict[str, object]:
+    session_factory: SessionFactory = request.app.state.session_factory
+    with session_scope(session_factory) as session:
+        task_run = end_active_task_run(session)
+        return {
+            "run": _task_run_summary_json(_task_run_summary(task_run, session))
+            if task_run
+            else None
+        }
 
 
 @router.post("/runs/start", response_class=HTMLResponse)
@@ -669,6 +766,7 @@ async def update_upstream_defaults(
     default_provider_slug: str = Form(""),
     default_model: str = Form(""),
     fallback_enabled: str | None = Form("yes"),
+    return_to: str = Form("/admin/settings/server"),
 ) -> HTMLResponse:
     try:
         normalized = normalize_upstream_url(upstream_url)
@@ -683,7 +781,11 @@ async def update_upstream_defaults(
             set_fallback_enabled(session, fallback_is_enabled)
     except ValueError as exc:
         return await _settings_with_error(request, str(exc))
-    return RedirectResponse("/admin/settings/server", status_code=303)
+    return RedirectResponse(_settings_fallback_return_path(return_to), status_code=303)
+
+
+def _settings_fallback_return_path(value: str) -> str:
+    return value if value in SETTINGS_FALLBACK_RETURN_PATHS else "/admin/settings/server"
 
 
 @router.post("/settings/compat-fixes", response_class=HTMLResponse)
@@ -1093,6 +1195,81 @@ async def api_trim_records(request: Request):
     return {"deleted": deleted}
 
 
+@router.post("/api/pricing/catalog/preview", response_model=None)
+async def api_pricing_catalog_preview(request: Request):
+    payload = await _json_payload(request)
+    try:
+        rows, options = await _pricing_catalog_rows(request, payload)
+    except CatalogFetchError as exc:
+        return JSONResponse({"detail": str(exc)}, status_code=400)
+    session_factory: SessionFactory = request.app.state.session_factory
+    with session_scope(session_factory) as session:
+        return _pricing_catalog_preview(session, rows, options)
+
+
+@router.post("/api/pricing/catalog/apply", response_model=None)
+async def api_pricing_catalog_apply(request: Request):
+    payload = await _json_payload(request)
+    selected_keys = _pricing_catalog_selected_keys(payload)
+    if not selected_keys:
+        return JSONResponse({"detail": "Choose at least one catalog row to apply."}, 400)
+    try:
+        rows, options = await _pricing_catalog_rows(request, payload)
+    except CatalogFetchError as exc:
+        return JSONResponse({"detail": str(exc)}, status_code=400)
+
+    rows_by_key = {row.key: row for row in rows}
+    missing_keys = [key for key in selected_keys if key not in rows_by_key]
+    if missing_keys:
+        return JSONResponse(
+            {
+                "detail": "Selected catalog rows are no longer available.",
+                "missing_keys": missing_keys,
+            },
+            status_code=400,
+        )
+
+    session_factory: SessionFactory = request.app.state.session_factory
+    counts: Counter[str] = Counter()
+    with session_scope(session_factory) as session:
+        for key in selected_keys:
+            row = rows_by_key[key]
+            status = _pricing_catalog_row_status(session, row)
+            upsert_model_price(
+                session,
+                provider_slug=row.provider_slug,
+                model=row.model,
+                display_name=row.display_name,
+                aliases=list(row.aliases),
+                input_usd_per_million=row.input_usd_per_million,
+                cached_input_usd_per_million=(
+                    row.cached_input_usd_per_million
+                    if row.cached_input_usd_per_million is not None
+                    else ""
+                ),
+                output_usd_per_million=row.output_usd_per_million,
+                active=True,
+                source_url=row.source_url,
+                checked_at=row.checked_at,
+                notes=row.notes,
+            )
+            counts[status] += 1
+        repriced_missing = (
+            backfill_missing_cost_estimates(session)
+            if _truthy_default(payload, "reprice_missing", True)
+            else 0
+        )
+        preview = _pricing_catalog_preview(session, rows, options)
+    return {
+        "applied": len(selected_keys),
+        "created": counts["new"],
+        "updated": counts["update"],
+        "unchanged": counts["unchanged"],
+        "repriced_missing": repriced_missing,
+        "preview": preview,
+    }
+
+
 @router.get("/api/providers", response_model=None)
 async def api_list_providers(
     request: Request,
@@ -1390,6 +1567,178 @@ def _truthy(value: object) -> bool:
     if value is None:
         return False
     return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _truthy_default(payload: dict[str, Any], key: str, default: bool) -> bool:
+    if key not in payload:
+        return default
+    return _truthy(payload.get(key))
+
+
+async def _pricing_catalog_rows(
+    request: Request,
+    payload: dict[str, Any],
+) -> tuple[list[PricingCatalogRow], dict[str, object]]:
+    source = str(payload.get("source") or "huggingface-router").strip()
+    search = str(payload.get("search") or "").strip()
+    try:
+        limit = int(payload.get("limit") or 25)
+    except (TypeError, ValueError):
+        limit = 25
+    include_base_rows = _truthy_default(payload, "include_base_rows", True)
+    include_provider_rows = _truthy_default(payload, "include_provider_rows", True)
+    api_key = _pricing_catalog_api_key(request, source)
+    rows = await fetch_catalog_rows(
+        request.app.state.http_client,
+        source=source,
+        search=search,
+        limit=limit,
+        include_base_rows=include_base_rows,
+        include_provider_rows=include_provider_rows,
+        api_key=api_key,
+    )
+    options = {
+        "source": source,
+        "search": search,
+        "limit": max(1, min(limit, 100)),
+        "include_base_rows": include_base_rows,
+        "include_provider_rows": include_provider_rows,
+    }
+    return rows, options
+
+
+def _pricing_catalog_api_key(request: Request, source: str) -> str | None:
+    session_factory: SessionFactory = request.app.state.session_factory
+    with session_scope(session_factory) as session:
+        provider = session.get(ModelProvider, source)
+        if provider is None:
+            raise CatalogFetchError("Catalog source provider is not configured.")
+        env_name = provider.api_key_env
+    if not env_name:
+        return None
+    value = os.getenv(env_name)
+    return value.strip() if value and value.strip() else None
+
+
+def _pricing_catalog_selected_keys(payload: dict[str, Any]) -> list[str]:
+    values = payload.get("keys", payload.get("selected_keys", []))
+    if isinstance(values, str):
+        candidates = [chunk.strip() for chunk in values.splitlines() for chunk in chunk.split(",")]
+    elif isinstance(values, list):
+        candidates = [str(value).strip() for value in values]
+    else:
+        candidates = []
+    selected: list[str] = []
+    for key in candidates:
+        if key and key not in selected:
+            selected.append(key)
+    return selected
+
+
+def _pricing_catalog_preview(
+    session,
+    rows: list[PricingCatalogRow],
+    options: dict[str, object],
+) -> dict[str, object]:
+    items = [
+        _pricing_catalog_row_payload(row, _pricing_catalog_row_status(session, row))
+        for row in rows
+    ]
+    counts = Counter(str(item["status"]) for item in items)
+    return {
+        **options,
+        "items": items,
+        "total": len(items),
+        "counts": {
+            "new": counts["new"],
+            "update": counts["update"],
+            "unchanged": counts["unchanged"],
+        },
+    }
+
+
+def _pricing_catalog_row_status(session, row: PricingCatalogRow) -> str:
+    existing = session.scalar(
+        select(ModelPrice).where(
+            ModelPrice.provider_slug == row.provider_slug,
+            ModelPrice.model == row.model,
+        )
+    )
+    if existing is None:
+        return "new"
+    if not existing.active:
+        return "update"
+    comparisons = (
+        existing.display_name == (row.display_name or None),
+        tuple(_model_price_aliases(existing)) == tuple(row.aliases),
+        existing.input_usd_per_million == row.input_usd_per_million,
+        existing.cached_input_usd_per_million == row.cached_input_usd_per_million,
+        existing.output_usd_per_million == row.output_usd_per_million,
+        (existing.source_url or "") == (row.source_url or ""),
+        (existing.checked_at or "") == (row.checked_at or ""),
+        (existing.notes or "") == (row.notes or ""),
+    )
+    return "unchanged" if all(comparisons) else "update"
+
+
+def _pricing_catalog_row_payload(row: PricingCatalogRow, status: str) -> dict[str, object]:
+    return {
+        "key": row.key,
+        "source": row.source,
+        "provider_slug": row.provider_slug,
+        "model": row.model,
+        "display_name": row.display_name,
+        "aliases": list(row.aliases),
+        "input_usd_per_million": str(row.input_usd_per_million),
+        "cached_input_usd_per_million": (
+            str(row.cached_input_usd_per_million)
+            if row.cached_input_usd_per_million is not None
+            else None
+        ),
+        "output_usd_per_million": str(row.output_usd_per_million),
+        "source_url": row.source_url,
+        "checked_at": row.checked_at,
+        "notes": row.notes,
+        "row_kind": row.row_kind,
+        "external_provider": row.external_provider,
+        "context_length": row.context_length,
+        "supports_tools": row.supports_tools,
+        "status": status,
+        "selected": status in {"new", "update"},
+        "display": {
+            "input_usd_per_million": format_usd(row.input_usd_per_million),
+            "cached_input_usd_per_million": format_usd(row.cached_input_usd_per_million),
+            "output_usd_per_million": format_usd(row.output_usd_per_million),
+            "context_length": format_compact_number(row.context_length),
+            "supports_tools": (
+                "Yes" if row.supports_tools else "No" if row.supports_tools is False else "-"
+            ),
+        },
+    }
+
+
+def _model_price_aliases(price: ModelPrice) -> list[str]:
+    if not price.aliases_json:
+        return []
+    try:
+        aliases = json.loads(price.aliases_json)
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(aliases, list):
+        return []
+    return [alias for alias in aliases if isinstance(alias, str)]
+
+
+def _optional_query_int(value: object, field_name: str) -> int | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        return int(text)
+    except ValueError:
+        raise HTTPException(status_code=422, detail=f"{field_name} must be an integer.") from None
 
 
 def _api_settings_summary(request: Request, session, *, days: int = 30) -> dict[str, object]:
@@ -1931,6 +2280,300 @@ def _json_safe_number(value: object) -> int | float | None:
 
 def _model_price_key(price: ModelPrice) -> str:
     return f"{price.provider_slug}:{price.model}"
+
+
+def _upstream_url_for_shell(request: Request) -> str:
+    session_factory: SessionFactory = request.app.state.session_factory
+    with session_scope(session_factory) as session:
+        return get_upstream_url(session, request.app.state.settings)
+
+
+def _normalize_render_mode(value: str) -> str:
+    return value if value in {"auto", "json", "text", "markdown", "tool", "sse"} else "auto"
+
+
+def _datetime_iso(value: object) -> str | None:
+    text = format_utc_iso(value)
+    return text or None
+
+
+def _datetime_fallback(value: object, variant: str = "full") -> str:
+    return format_utc_fallback(value, variant)
+
+
+def _duration_display(value: object) -> str:
+    return format_duration_ms(value)
+
+
+def _plain_preview(value: object, limit: int = 160) -> str:
+    text = " ".join(str(value or "").split())
+    if len(text) > limit:
+        return f"{text[: limit - 1]}..."
+    return text
+
+
+def _stats_json(stats: dict[str, object]) -> dict[str, object]:
+    return {
+        key: {
+            "value": value,
+            "display": format_compact_number(value),
+        }
+        for key, value in stats.items()
+    }
+
+
+def _pagination_json(pagination: dict[str, object]) -> dict[str, object]:
+    return {
+        "page": pagination["page"],
+        "per_page": pagination["per_page"],
+        "total": pagination["total"],
+        "total_pages": pagination["total_pages"],
+        "start": pagination["start"],
+        "end": pagination["end"],
+        "has_previous": pagination["has_previous"],
+        "has_next": pagination["has_next"],
+        "previous_url": pagination["previous_url"],
+        "next_url": pagination["next_url"],
+        "pages": [
+            {
+                "number": item["number"],
+                "url": item["url"],
+                "current": item["current"],
+            }
+            for item in pagination["pages"]
+        ],
+        "display": {
+            "start": format_compact_number(pagination["start"]),
+            "end": format_compact_number(pagination["end"]),
+            "total": format_compact_number(pagination["total"]),
+        },
+    }
+
+
+def _task_run_summary_json(task_run: dict[str, object] | None) -> dict[str, object] | None:
+    if task_run is None:
+        return None
+    return {
+        "id": task_run["id"],
+        "name": task_run["name"],
+        "notes": task_run["notes"],
+        "started_at": _datetime_iso(task_run["started_at"]),
+        "started_at_fallback": _datetime_fallback(task_run["started_at"]),
+        "started_at_table_fallback": _datetime_fallback(task_run["started_at"], "table"),
+        "ended_at": _datetime_iso(task_run["ended_at"]),
+        "ended_at_fallback": _datetime_fallback(task_run["ended_at"])
+        if task_run["ended_at"]
+        else None,
+        "is_active": task_run["is_active"],
+        "open_duration_ms": task_run["open_duration_ms"],
+        "open_duration_display": _duration_display(task_run["open_duration_ms"]),
+        "request_count": task_run["request_count"],
+        "request_count_display": format_compact_number(task_run["request_count"]),
+    }
+
+
+def _task_run_list_item_json(run: dict[str, object]) -> dict[str, object]:
+    summary = _task_run_summary_json(run)
+    if summary is None:
+        return {}
+    return {
+        **summary,
+        "llm_wall_time_ms": run["llm_wall_time_ms"],
+        "llm_wall_time_display": _duration_display(run["llm_wall_time_ms"]),
+        "total_tokens": run["total_tokens"],
+        "total_tokens_display": format_compact_number(run["total_tokens"]),
+        "total_cost_usd": _json_safe_number(run["total_cost_usd"]),
+        "total_cost_display": format_usd(run["total_cost_usd"]),
+        "output_tokens_per_second": run["output_tokens_per_second"],
+        "output_tokens_per_second_display": format_compact_rate(
+            run["output_tokens_per_second"]
+        ),
+        "signals": {
+            key: {
+                "value": value,
+                "display": format_compact_number(value),
+            }
+            for key, value in run["signals"].items()
+        },
+    }
+
+
+def _task_run_stats_detail_json(stats: dict[str, object]) -> dict[str, object]:
+    return {
+        "request_count": stats["request_count"],
+        "request_count_display": format_compact_number(stats["request_count"]),
+        "llm_wall_time_ms": stats["llm_wall_time_ms"],
+        "llm_wall_time_display": _duration_display(stats["llm_wall_time_ms"]),
+        "run_open_duration_ms": stats["run_open_duration_ms"],
+        "run_open_duration_display": _duration_display(stats["run_open_duration_ms"]),
+        "total_request_duration_ms": stats["total_request_duration_ms"],
+        "total_request_duration_display": _duration_display(
+            stats["total_request_duration_ms"]
+        ),
+        "tokens": {
+            key: {"value": value, "display": format_compact_number(value)}
+            for key, value in stats["tokens"].items()
+        },
+        "cost_usd": _json_safe_number(stats["cost_usd"]),
+        "cost_display": format_usd(stats["cost_usd"]),
+        "throughput": {
+            key: {"value": value, "display": format_compact_rate(value)}
+            for key, value in stats["throughput"].items()
+        },
+        "models": _count_rows_json(stats["models"]),
+        "endpoints": _count_rows_json(stats["endpoints"]),
+        "statuses": _count_rows_json(stats["statuses"]),
+        "signals": {
+            key: {"value": value, "display": format_compact_number(value)}
+            for key, value in stats["signals"].items()
+        },
+    }
+
+
+def _count_rows_json(rows: list[dict[str, object]]) -> list[dict[str, object]]:
+    return [
+        {
+            "label": row["label"],
+            "count": row["count"],
+            "count_display": format_compact_number(row["count"]),
+        }
+        for row in rows
+    ]
+
+
+def _record_list_item_json(record: dict[str, object]) -> dict[str, object]:
+    status_label = str(record["status"]) if record["status"] is not None else "pending"
+    return {
+        "id": record["id"],
+        "created_at": _datetime_iso(record["created_at"]),
+        "created_at_fallback": _datetime_fallback(record["created_at"]),
+        "created_at_table_fallback": _datetime_fallback(record["created_at"], "table"),
+        "method": record["method"],
+        "endpoint": record["endpoint"],
+        "model": record["model"],
+        "upstream_model": record["upstream_model"],
+        "model_route": record["model_route"],
+        "status": record["status"],
+        "status_label": status_label,
+        "duration_ms": record["duration_ms"],
+        "duration_display_ms": record["duration_display_ms"],
+        "duration_display": _duration_display(record["duration_display_ms"]),
+        "duration_is_elapsed": record["duration_is_elapsed"],
+        "is_stream": record["is_stream"],
+        "has_images": record["has_images"],
+        "has_tool_calls": record["has_tool_calls"],
+        "task_run": _task_run_summary_json(record["task_run"]),
+        "tokens": _token_triplet_json(record["tokens"]),
+        "tokens_per_second": record["tokens_per_second"],
+        "tokens_per_second_display": format_compact_rate(record["tokens_per_second"]),
+        "cost_usd": _json_safe_number(record["cost_usd"]),
+        "cost_display": format_usd(record["cost_usd"]),
+        "billing_provider": record["billing_provider"],
+        "billing_model": record["billing_model"],
+        "error": record["error"],
+        "preview": _plain_preview(record["preview"]),
+    }
+
+
+def _token_triplet_json(tokens: dict[str, object]) -> dict[str, object]:
+    return {
+        "input": tokens["input"],
+        "input_display": format_compact_number(tokens["input"]),
+        "input_estimated": tokens["input_estimated"],
+        "cached_input": tokens["cached_input"],
+        "cached_input_display": format_compact_number(tokens["cached_input"]),
+        "output": tokens["output"],
+        "output_display": format_compact_number(tokens["output"]),
+        "total": tokens["total"],
+        "total_display": format_compact_number(tokens["total"]),
+    }
+
+
+def _record_detail_json(record: dict[str, object]) -> dict[str, object]:
+    list_shape = _record_list_item_json(
+        {
+            **record,
+            "status": record["response_status"],
+            "tokens": {
+                "input": record["display_input_tokens"],
+                "input_estimated": False,
+                "cached_input": record["display_cached_input_tokens"],
+                "output": record["display_output_tokens"],
+                "total": record["display_total_tokens"],
+            },
+            "tokens_per_second": _tokens_per_second(
+                record["display_output_tokens"],
+                record["duration_ms"],
+            ),
+            "cost_usd": record["billing_total_cost_usd"],
+            "billing_provider": record["billing_provider_name"]
+            or record["billing_provider_slug"],
+            "preview": "",
+        }
+    )
+    return {
+        **list_shape,
+        "path": record["path"],
+        "query_string": record["query_string"],
+        "completed_at": _datetime_iso(record["completed_at"]),
+        "completed_at_fallback": _datetime_fallback(record["completed_at"])
+        if record["completed_at"]
+        else None,
+        "upstream_url": record["upstream_url"],
+        "request_headers_json": record["request_headers_json"],
+        "request_content_type": record["request_content_type"],
+        "response_headers_json": record["response_headers_json"],
+        "response_content_type": record["response_content_type"],
+        "billing_provider_slug": record["billing_provider_slug"],
+        "billing_provider_name": record["billing_provider_name"],
+        "billing_model": record["billing_model"],
+        "billing_input_tokens": record["billing_input_tokens"],
+        "billing_cached_input_tokens": record["billing_cached_input_tokens"],
+        "billing_output_tokens": record["billing_output_tokens"],
+        "billing_total_tokens": record["billing_total_tokens"],
+        "billing_input_cost_usd": _json_safe_number(record["billing_input_cost_usd"]),
+        "billing_output_cost_usd": _json_safe_number(record["billing_output_cost_usd"]),
+        "billing_total_cost_usd": _json_safe_number(record["billing_total_cost_usd"]),
+        "billing_total_cost_display": format_usd(record["billing_total_cost_usd"]),
+        "pricing_snapshot_json": record["pricing_snapshot_json"],
+        "estimated_input_tokens": record["estimated_input_tokens"],
+        "estimated_input_tokens_display": format_compact_number(
+            record["estimated_input_tokens"]
+        ),
+        "estimated_input_tokenizer": record["estimated_input_tokenizer"],
+        "estimated_input_model": record["estimated_input_model"],
+        "response_was_rewritten": record["response_was_rewritten"],
+        "compat_fixes_json": record["compat_fixes_json"],
+        "compat_fix_errors_json": record["compat_fix_errors_json"],
+        "display_input_tokens": record["display_input_tokens"],
+        "display_input_tokens_display": format_compact_number(
+            record["display_input_tokens"]
+        ),
+        "display_cached_input_tokens": record["display_cached_input_tokens"],
+        "display_cached_input_tokens_display": format_compact_number(
+            record["display_cached_input_tokens"]
+        ),
+        "display_output_tokens": record["display_output_tokens"],
+        "display_output_tokens_display": format_compact_number(
+            record["display_output_tokens"]
+        ),
+        "display_total_tokens": record["display_total_tokens"],
+        "display_total_tokens_display": format_compact_number(
+            record["display_total_tokens"]
+        ),
+    }
+
+
+def _rendered_payload_json(rendered) -> dict[str, object] | None:
+    if rendered is None:
+        return None
+    return {
+        "mode": rendered.mode,
+        "title": rendered.title,
+        "text": rendered.text,
+        "html": rendered.html,
+        "tool_blocks": rendered.tool_blocks or [],
+    }
 
 
 def _count_records(session, stmt) -> int:

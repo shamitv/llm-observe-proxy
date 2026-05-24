@@ -1,0 +1,50 @@
+{% import "_icons.html" as icons %}
+{% import "_status_badge.html" as badges %}
+
+{% macro fallback_defaults_form(title, description, providers, default_provider_slug, default_model, fallback_enabled, upstream_url, return_to, submit_text, include_upstream=false, helper_text="") %}
+<form class="card form-card fallback-defaults-card" method="post" action="/admin/settings/upstream-defaults">
+  <div class="card-header">
+    <div>
+      <h2>{{ title }}</h2>
+      <p>{{ description }}</p>
+    </div>
+    {{ badges.status_badge("Enabled" if fallback_enabled else "Inactive") }}
+  </div>
+  {% if not include_upstream %}
+  <input type="hidden" name="upstream_url" value="{{ upstream_url }}">
+  {% endif %}
+  <input type="hidden" name="return_to" value="{{ return_to }}">
+  <div class="form-grid two-col">
+    {% if include_upstream %}
+    <label class="form-field wide">
+      <span>Global upstream URL</span>
+      <input name="upstream_url" value="{{ upstream_url }}" placeholder="http://localhost:8000/v1" required>
+    </label>
+    {% endif %}
+    <label class="form-field fallback-provider-field">
+      <span>Default provider</span>
+      <select name="default_provider_slug" data-enhanced-select data-enhanced-select-label="Default provider">
+        <option value="">No default provider</option>
+        {% for provider in providers %}
+        <option value="{{ provider.slug }}" {% if default_provider_slug == provider.slug %}selected{% endif %}>{{ provider.name }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label class="form-field">
+      <span>Default model</span>
+      <input name="default_model" value="{{ default_model }}" placeholder="qwen/qwen3.6-35b">
+    </label>
+    <label class="check switch-line">
+      <input type="hidden" name="fallback_enabled" value="no">
+      <input type="checkbox" name="fallback_enabled" value="yes" {% if fallback_enabled %}checked{% endif %}>
+      <span>Enable fallback routing</span>
+    </label>
+  </div>
+  {% if helper_text %}
+  <p class="muted fallback-helper">{{ icons.icon("info", class_name="ui-icon inline-info-icon") }}<span>{{ helper_text }}</span></p>
+  {% endif %}
+  <div class="button-row">
+    <button class="button primary button-primary" type="submit">{{ icons.icon("settings", class_name="button-icon") }}<span>{{ submit_text }}</span></button>
+  </div>
+</form>
+{% endmacro %}

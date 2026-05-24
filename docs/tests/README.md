@@ -1,7 +1,8 @@
 # Test Suite
 
 The test suite verifies the proxy, SQLite capture layer, admin UI, renderers, and CLI.
-Tests run with pytest and use a fake OpenAI-compatible upstream on `localhost:8080/v1`.
+Tests run with pytest and use a fake OpenAI-compatible upstream on a free temporary
+loopback port.
 
 ## Run Tests
 
@@ -19,14 +20,17 @@ Optional checks:
 Live provider compatibility probes are opt-in. Set `RUN_LIVE_API_TESTS=1` plus the
 relevant API keys to run `tests/test_live_api_compat.py`; normal CI stays fixture-only.
 
-The fake upstream requires port `8080` to be free. If another service is using that port,
-the test session fails early with a clear message.
+The fake upstream no longer requires port `8080` to be free. A local proxy can remain
+running on `8080` while the test session uses a temporary upstream port and temporary
+SQLite databases.
 
 ## Test Harness
 
-- `tests/conftest.py` starts a session-scoped FastAPI upstream on `127.0.0.1:8080`.
+- `tests/conftest.py` starts a session-scoped FastAPI upstream on a free
+  `127.0.0.1:{port}` listener.
 - Each test gets a fresh SQLite database in pytest's temporary directory.
-- Proxy tests point the app at `http://localhost:8080/v1`, matching the product plan.
+- Proxy tests point the app at the temporary upstream URL, while product defaults still
+  use incoming port `8080` and upstream `http://localhost:8000/v1`.
 - The upstream records received requests so tests can verify forwarded headers, paths, query
   strings, and bodies.
 
@@ -64,12 +68,13 @@ the test session fails early with a clear message.
 | Multiple images | One request with two images is captured: a data URL image and a remote image URL. Both are stored as image assets and shown in the UI. | `test_images_are_extracted_from_data_urls_and_remote_urls` |
 | Non-streaming tool call | Chat Completions response with `tool_calls` sets `has_tool_calls` and renders as `chat.tool_call`. | `test_tool_calls_render_for_non_streaming_chat_response` |
 | Generic passthrough | Generic `/v1/*` routes forward and log query strings. | `test_generic_v1_passthrough_records_query_string` |
-| Admin browser | Request browser lists captured requests, token counts, and request TPS, and supports a model filter. | `test_request_browser_filters_and_markdown_renderer` |
-| Markdown rendering | Markdown responses render as HTML in detail view. | `test_request_browser_filters_and_markdown_renderer` |
+| Live request/run UI | Request and run list/detail pages render lightweight live shells, load REST data, poll every second, and expose REST run controls. | `test_live_request_run_shells_and_polling_script`, `tests/test_admin_api.py` |
+| Admin browser API | Request browser JSON lists captured requests, token counts, request TPS, filters, pagination, and active run state. | `test_request_browser_filters_and_markdown_renderer`, `test_request_browser_paginates_records`, `test_request_browser_pagination_preserves_filters` |
+| Markdown rendering | Markdown responses render as HTML through the request detail JSON API. | `test_request_browser_filters_and_markdown_renderer` |
 | Run lifecycle | Runs require names, show active state, end active runs, and auto-end the previous run when starting another. | `test_runs_require_name_and_manage_active_state` |
 | Run request grouping | Requests made during an active run receive `task_run_id`; requests outside a run do not. | `test_requests_are_associated_with_active_task_run` |
 | Run streaming grouping | A streaming request keeps the run assigned at request start even if the run ends before the stream finishes. | `test_streaming_request_keeps_task_run_after_run_ends` |
-| Run filtering and detail | Request browser filters by run, run detail shows associated requests and aggregate token/cost stats, and request detail links back to the run. | `test_run_filter_detail_and_badges_show_associated_requests` |
+| Run filtering and detail | Request browser JSON filters by run, run detail JSON shows associated requests and aggregate token/cost stats, and request detail JSON links back to the run. | `test_run_filter_detail_and_badges_show_associated_requests` |
 | Run what-if pricing UI/API | Run detail renders the client-side what-if shell, the internal API returns default GPT-5.5/GPT-5.4 Mini comparisons, accepts repeated `key` params, marks mixed tier scenarios, ignores unknown/inactive prices, and preserves captured snapshots. | `test_run_detail_shows_default_what_if_costs_without_mutating_snapshots`, `test_run_detail_marks_mixed_tier_what_if_rates`, `test_run_detail_accepts_repeated_what_if_params`, `test_run_detail_ignores_unknown_and_inactive_what_if_prices`, `test_run_what_if_api_returns_json_404_for_missing_run` |
 | SQLite run upgrade | Existing SQLite databases get the nullable `task_run_id` column and index without data loss. | `test_init_db_upgrades_existing_sqlite_request_records_with_route_metadata` |
 | SQLite route upgrade | Existing SQLite databases get nullable route metadata columns and indexes without data loss. | `test_init_db_upgrades_existing_sqlite_request_records_with_route_metadata` |
@@ -82,7 +87,7 @@ the test session fails early with a clear message.
 | Model route settings | Settings renders startup routes read-only, manages UI routes, persists UI routes, validates route input, displays providers, route fixes, and masks direct secret values. | `test_settings_renders_model_routes_without_secret_values`, `test_settings_manages_ui_model_routes`, `test_settings_validates_ui_model_routes_against_startup_config`, `test_ui_model_routes_persist_across_app_restart` |
 | Provider and pricing settings | Provider and Pricing tabs render seeded providers/prices and can add, validate, update, and delete provider, model price, and model price tier rows. | `test_settings_manages_model_providers_and_prices` |
 | Route-aware upstream test | Admin upstream test uses startup/UI routes for matching models and global fallback for unknown models. | `test_settings_test_upstream_uses_configured_model_route`, `test_settings_test_upstream_uses_ui_model_route`, `test_settings_test_upstream_falls_back_for_unknown_model` |
-| Route metadata UI | Request browser/detail pages show route and upstream-model metadata for routed requests. | `test_request_browser_and_detail_show_route_metadata` |
+| Route metadata UI | Request browser/detail JSON APIs show route and upstream-model metadata for routed requests. | `test_request_browser_and_detail_show_route_metadata` |
 | Incoming settings | Admin UI shows `localhost:8080` by default and stores custom incoming port plus the `0.0.0.0` expose option. | `test_settings_updates_incoming_server` |
 | Incoming validation | Admin UI rejects incoming ports outside `1..65535`. | `test_settings_rejects_invalid_incoming_port` |
 | Upstream validation | Admin UI rejects invalid upstream URLs that do not point to `/v1`. | `test_settings_rejects_invalid_upstream_url` |
@@ -102,7 +107,7 @@ These behaviors are not explicitly covered yet:
 - Upstream connection failure and timeout logging.
 - Multi-upstream `/v1/models` synthesis or merging.
 - Responses API `input_image` shapes beyond Chat Completions `image_url`.
-- Pagination/date filtering in the admin request browser.
+- Date filtering in the admin request browser.
 - Non-token cost components such as batch/flex/priority discounts, separate cache-write
   billing, image/audio prices, tool fees, and regional premiums.
 - Concurrent proxy requests.

@@ -1,6 +1,8 @@
 {% extends "settings_base.html" %}
 {% import "_connection_summary.html" as summaries %}
 {% import "_status_badge.html" as badges %}
+{% import "_fallback_defaults_form.html" as fallback_forms %}
+{% import "_icons.html" as icons %}
 {% block summary_cards %}
 {{ summaries.summary_card("RT", "Active routes", summary.active_routes | compact_number, "Across startup and settings") }}
 {{ summaries.summary_card("FB", "Default provider", fallback.provider_name | default("No provider", true), "Used for fallback", true) }}
@@ -15,12 +17,12 @@
         <h2>Route Registry</h2>
         <p>Exact routes win first; prefix routes must end with <code>*</code>.</p>
       </div>
-      <a class="button primary button-primary" href="#route-editor">Add route</a>
+      <a class="button primary button-primary" href="#route-editor">{{ icons.icon("plus", class_name="button-icon") }}<span>Add route</span></a>
     </div>
     <div class="filter-row">
       <label class="search-bar">
         <span>Search routes</span>
-        <input data-table-filter="routes-table" placeholder="Search routes..." aria-label="Search routes">
+        <span class="field-with-icon">{{ icons.icon("search", class_name="field-icon") }}<input data-table-filter="routes-table" placeholder="Search routes..." aria-label="Search routes"></span>
       </label>
       <label>
         <span>Status</span>
@@ -71,7 +73,7 @@
               <form method="post" action="/admin/settings/model-routes/delete" data-confirm-message="Delete route {{ route.model }}?">
                 <input type="hidden" name="route_id" value="{{ route.id }}">
                 <input type="hidden" name="model" value="{{ route.model }}">
-                <button class="button danger compact-button button-danger" type="submit">Delete</button>
+                <button class="button danger compact-button button-danger" type="submit">{{ icons.icon("trash", class_name="button-icon") }}<span>Delete</span></button>
               </form>
               {% else %}
               <span class="muted">Locked</span>
@@ -149,44 +151,22 @@
     </div>
     <p class="muted">Requests matching this pattern will be sent to the selected upstream; prefix patterns should be entered like <code>local-*</code>.</p>
     <div class="button-row">
-      <button class="button primary button-primary" type="submit">Save route</button>
-      <button class="button ghost button-ghost" type="button" data-clear-route-editor>Clear</button>
+      <button class="button primary button-primary" type="submit">{{ icons.icon("settings", class_name="button-icon") }}<span>Save route</span></button>
+      <button class="button ghost button-ghost" type="button" data-clear-route-editor>{{ icons.icon("runs", class_name="button-icon") }}<span>Clear</span></button>
     </div>
   </form>
 
-  <form class="card form-card" method="post" action="/admin/settings/upstream-defaults">
-    <div class="card-header">
-      <div>
-        <h2>Fallback Routing Behavior</h2>
-        <p>Resolution runs startup routes, editable routes, then fallback.</p>
-      </div>
-      {{ badges.status_badge("Enabled" if fallback_enabled else "Inactive") }}
-    </div>
-    <input type="hidden" name="upstream_url" value="{{ upstream_url }}">
-    <div class="form-grid two-col">
-      <label class="form-field">
-        <span>Default provider</span>
-        <select name="default_provider_slug">
-          <option value="">No default provider</option>
-          {% for provider in providers %}
-          <option value="{{ provider.slug }}" {% if default_provider_slug == provider.slug %}selected{% endif %}>{{ provider.name }}</option>
-          {% endfor %}
-        </select>
-      </label>
-      <label class="form-field">
-        <span>Default model</span>
-        <input name="default_model" value="{{ default_model }}" placeholder="qwen/qwen3.6-35b">
-      </label>
-      <label class="check switch-line">
-        <input type="hidden" name="fallback_enabled" value="no">
-        <input type="checkbox" name="fallback_enabled" value="yes" {% if fallback_enabled %}checked{% endif %}>
-        <span>Enable fallback routing</span>
-      </label>
-    </div>
-    <div class="button-row">
-      <button class="button primary button-primary" type="submit">Save fallback behavior</button>
-    </div>
-  </form>
+  {{ fallback_forms.fallback_defaults_form(
+    "Fallback Routing Behavior",
+    "Resolution runs startup routes, editable routes, then fallback.",
+    providers,
+    default_provider_slug,
+    default_model,
+    fallback_enabled,
+    upstream_url,
+    "/admin/settings/routing",
+    "Save fallback behavior"
+  ) }}
 
   <article class="card diagnostics-card">
     <div class="card-header">
@@ -200,7 +180,7 @@
         <span>Incoming model to test</span>
         <input name="model" value="gpt-test" required>
       </label>
-      <button class="button primary button-primary" type="submit">Run simulation</button>
+      <button class="button primary button-primary" type="submit">{{ icons.icon("play", class_name="button-icon") }}<span>Run simulation</span></button>
     </form>
     <div class="result-panel" data-route-simulator-result>
       <p class="muted">Simulation results will appear here.</p>
@@ -213,7 +193,7 @@
         <h2>Recent Route Usage</h2>
         <p>Requests matched since local midnight.</p>
       </div>
-      <a class="button ghost button-ghost" href="/admin">View requests</a>
+      <a class="button ghost button-ghost" href="/admin">{{ icons.icon("requests", class_name="button-icon") }}<span>View requests</span></a>
     </div>
     <div class="table-shell">
       <table class="data-table">

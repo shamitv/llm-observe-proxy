@@ -10,8 +10,9 @@ or external database.
 
 Project repository: https://github.com/shamitv/llm-observe-proxy
 
-Current release includes editable scalar and tiered model pricing, cached-token
-cost snapshots, router fallback seed data, and run what-if comparisons.
+Current release includes editable scalar and tiered model pricing, catalog sync for
+router providers, cached-token cost snapshots, router fallback seed data, and run
+what-if comparisons.
 
 ## Features
 
@@ -19,13 +20,15 @@ cost snapshots, router fallback seed data, and run what-if comparisons.
 - SQLite capture for request/response headers, bodies, status, timing, model, endpoint,
   streaming state, tool-call signals, image assets, provider token usage, cost snapshots,
   and errors.
-- Admin UI for searching and browsing captured traffic, including per-request output TPS
-  and estimated cost.
+- Live-updating admin UI for searching and browsing captured traffic, including
+  per-request output TPS and estimated cost.
 - Runs for grouping all requests made during a task, benchmark, or repro workflow.
-- Run detail pages with request counts, LLM wall time, token totals, cost totals,
+- Live run detail pages with request counts, LLM wall time, token totals, cost totals,
   tokens/sec, model and endpoint breakdowns, and signal/error counts.
 - Run what-if pricing for comparing captured usage against other configured scalar or
   tiered model prices.
+- Pricing catalog preview/apply for Hugging Face Router and OpenRouter model/provider
+  combinations.
 - Detail pages with response render modes for JSON, plain text, Markdown, tool calls,
   and raw SSE streams.
 - Request image gallery for data URL and remote image references.
@@ -127,6 +130,11 @@ You can also change the upstream URL, fallback provider/model, model upstream ro
 response compatibility fixes, model provider pricing, and next-start incoming host/port
 settings from `/admin/settings/server` and the other Settings tabs.
 
+The Providers tab includes a seeded `Local LLM` provider pointing at
+`http://localhost:8000/v1` with no API key requirement. Select it as the fallback
+provider and set the fallback model name to route unmatched traffic to a local
+OpenAI-compatible server.
+
 ## Model Routes
 
 Model routes let one proxy endpoint send different client-facing models to different
@@ -216,10 +224,12 @@ $env:LLM_OBSERVE_DEFAULT_FIXES_JSON = '["qwen-tagged-tool-call-rewrite"]'
 
 Cost estimates are snapshotted when a response is captured. The proxy stores the billing
 provider, billing model, token counts, input/output rate snapshot, and estimated USD cost
-on the request row. Historical rows are not generally recalculated when pricing changes,
-but you can run `llm-observe-proxy --backfill-cached-costs` to reprice older rows that
-already report cached input tokens and lack cached-pricing snapshot metadata. Those rows
-are repriced with the current configured cached-input rates and marked with
+on the request row. Existing estimated costs are not overwritten when pricing changes.
+The Pricing tab can preview and apply current Hugging Face Router and OpenRouter catalog
+rows, then fill only captured requests that are still missing estimated cost. You can
+also run `llm-observe-proxy --backfill-cached-costs` to reprice older rows that already
+report cached input tokens and lack cached-pricing snapshot metadata. Those rows are
+repriced with the current configured cached-input rates and marked with
 `historical_cost_backfill` in the pricing snapshot.
 
 Token counts are extracted from OpenAI-compatible `usage` objects, including the shapes
@@ -242,10 +252,12 @@ separate cache-write dimension.
 
 Billing identity is resolved from the routed upstream model when a model route rewrites
 the request, otherwise from the upstream response model when present, otherwise from the
-client request model. Provider identity comes from a route's optional `provider_slug`,
-then falls back to a provider whose configured upstream URL exactly matches the active
-upstream base. Historical cached-cost backfills can also infer the provider when a
-stored upstream request URL starts with a configured provider URL.
+client request model. Provider-specific router rows are matched when HF Router model
+suffixes are preserved or when OpenRouter requests pin exactly one endpoint with
+fallbacks disabled. Provider identity comes from a route's optional `provider_slug`, then
+falls back to a provider whose configured upstream URL exactly matches the active
+upstream base. Historical cached-cost backfills can also infer the provider when a stored
+upstream request URL starts with a configured provider URL.
 
 SQLite is seeded with editable standard paid text rates for legacy OpenAI, Anthropic, and
 Google Gemini rows plus a broader current catalog checked on May 23, 2026. The v0.4 seed
@@ -254,6 +266,14 @@ Mistral where suitable API pricing is published. OpenRouter and Hugging Face Rou
 are seeded only as router-provider fallbacks. Seeded rows include source metadata, aliases,
 cached-input rates where available, and Qwen-style request-size tiers. Seeds are inserted
 only when missing, so UI edits are preserved.
+The provider catalog also seeds `Local LLM` as an editable no-key local endpoint for
+fallback routing.
+
+Catalog sync uses the configured provider API key environment variables when present:
+`HF_TOKEN` for Hugging Face Router and `OPENROUTER_API_KEY` for OpenRouter. OpenRouter
+per-token catalog prices are converted to this app's USD-per-1M-token rows. Cache-write,
+image, fixed request, discount, and other non-text-token prices are stored in notes but
+are not included in cost math.
 
 Tier ranges use `[min_input_tokens, max_input_tokens)`, and tier selection happens per
 captured request. Run what-if comparisons estimate each request independently and then sum
@@ -289,6 +309,10 @@ completion, plus token totals, cost totals, and tokens/sec metrics. The request 
 are available. Run-level **Output tok/s** uses output tokens divided by summed request
 duration, matching the total request duration shown on the page.
 
+Request and run list/detail pages load their data from local REST endpoints and poll once
+per second while visible, so new requests, pending request completion, active-run counts,
+and run metrics update without manually refreshing the browser.
+
 Screenshots and the full developer README are available in the project repository:
 https://github.com/shamitv/llm-observe-proxy
 
@@ -301,6 +325,12 @@ https://github.com/shamitv/llm-observe-proxy
 - `GET /admin/runs/{id}`: run metrics, what-if cost comparison, and associated request list.
 - `POST /admin/runs/start`: start a named run, ending any active run first.
 - `POST /admin/runs/end`: end the active run.
+- `GET /admin/api/requests`: request browser JSON data with filters and pagination.
+- `GET /admin/api/requests/{id}`: request detail JSON data and rendered payload modes.
+- `GET /admin/api/runs`: run browser JSON data and active-run summary.
+- `GET /admin/api/runs/{id}`: run detail JSON metrics and associated request rows.
+- `POST /admin/api/runs/start`: start a run through JSON.
+- `POST /admin/api/runs/end`: end the active run through JSON.
 - `GET /admin/settings`: redirects to the Server settings tab.
 - `GET /admin/settings/server`: listener, upstream fallback, default fixes, route summary, test, and retention controls.
 - `GET /admin/settings/routing`: editable exact/prefix routes, fallback behavior, simulator, and usage summary.
@@ -315,6 +345,8 @@ https://github.com/shamitv/llm-observe-proxy
 - `GET/POST /admin/api/routes`: route registry JSON list/create endpoints.
 - `GET/PUT/DELETE /admin/api/routes/{route_id}`: route JSON read/update/delete endpoints.
 - `POST /admin/api/routes/simulate`: simulate route resolution for a model name.
+- `POST /admin/api/pricing/catalog/preview`: preview current HF Router or OpenRouter pricing rows.
+- `POST /admin/api/pricing/catalog/apply`: apply selected catalog pricing rows and optionally fill missing cost estimates.
 - `POST /admin/settings/incoming`: update incoming host/port settings for next startup.
 - `POST /admin/settings/upstream`: update upstream URL.
 - `POST /admin/settings/upstream-defaults`: update upstream fallback provider/model behavior.
@@ -357,8 +389,8 @@ not rebind a currently running process.
 .\.venv\Scripts\pytest.exe -q
 ```
 
-The test suite starts a fake upstream on `localhost:8080/v1`, so stop any local process
-using port `8080` before running tests.
+The test suite starts its fake upstream on a free temporary loopback port, so a local
+proxy can keep running on `8080` while tests execute.
 
 ## Publishing
 
