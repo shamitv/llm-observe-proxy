@@ -1054,10 +1054,80 @@ _LEGACY_SCALAR_SEED_MODEL_PRICES = (
     },
 )
 
-DEFAULT_MODEL_PRICE_REVISIONS = {
-    (str(price["provider_slug"]), str(price["model"])): price
-    for price in _LEGACY_SCALAR_SEED_MODEL_PRICES
-}
+_OPENAI_PRE_METADATA_SEED_NOTE = (
+    "Seeded from official standard paid text pricing checked on 2026-05-03."
+)
+
+_OPENAI_PRE_METADATA_SEED_MODEL_PRICES = (
+    {
+        "provider_slug": "openai",
+        "model": "gpt-5.5",
+        "display_name": "GPT-5.5",
+        "input_usd_per_million": "5.00",
+        "output_usd_per_million": "30.00",
+        "notes": _OPENAI_PRE_METADATA_SEED_NOTE,
+    },
+    {
+        "provider_slug": "openai",
+        "model": "gpt-5.5-pro",
+        "display_name": "GPT-5.5 Pro",
+        "input_usd_per_million": "30.00",
+        "output_usd_per_million": "180.00",
+        "notes": _OPENAI_PRE_METADATA_SEED_NOTE,
+    },
+    {
+        "provider_slug": "openai",
+        "model": "gpt-5.4",
+        "display_name": "GPT-5.4",
+        "input_usd_per_million": "2.50",
+        "output_usd_per_million": "15.00",
+        "notes": _OPENAI_PRE_METADATA_SEED_NOTE,
+    },
+    {
+        "provider_slug": "openai",
+        "model": "gpt-5.4-mini",
+        "display_name": "GPT-5.4 Mini",
+        "input_usd_per_million": "0.75",
+        "output_usd_per_million": "4.50",
+        "notes": _OPENAI_PRE_METADATA_SEED_NOTE,
+    },
+    {
+        "provider_slug": "openai",
+        "model": "gpt-5.4-nano",
+        "display_name": "GPT-5.4 Nano",
+        "input_usd_per_million": "0.20",
+        "output_usd_per_million": "1.25",
+        "notes": _OPENAI_PRE_METADATA_SEED_NOTE,
+    },
+    {
+        "provider_slug": "openai",
+        "model": "gpt-5.4-nano",
+        "display_name": "GPT-5.4 Nano",
+        "input_usd_per_million": "0.20",
+        "cached_input_usd_per_million": "0.02",
+        "output_usd_per_million": "1.25",
+        "notes": _OPENAI_PRE_METADATA_SEED_NOTE,
+    },
+    {
+        "provider_slug": "openai",
+        "model": "gpt-5.4-pro",
+        "display_name": "GPT-5.4 Pro",
+        "input_usd_per_million": "30.00",
+        "output_usd_per_million": "180.00",
+        "notes": _OPENAI_PRE_METADATA_SEED_NOTE,
+    },
+)
+
+DEFAULT_MODEL_PRICE_REVISIONS: dict[tuple[str, str], tuple[dict[str, object], ...]] = {}
+for _revision_seed in (
+    *_LEGACY_SCALAR_SEED_MODEL_PRICES,
+    *_OPENAI_PRE_METADATA_SEED_MODEL_PRICES,
+):
+    _key = (str(_revision_seed["provider_slug"]), str(_revision_seed["model"]))
+    DEFAULT_MODEL_PRICE_REVISIONS[_key] = (
+        *DEFAULT_MODEL_PRICE_REVISIONS.get(_key, ()),
+        _revision_seed,
+    )
 
 
 def _now() -> datetime:
@@ -1937,10 +2007,10 @@ def seed_default_model_pricing(engine: Engine) -> None:
                 )
             )
             if existing is not None:
-                previous_seed = DEFAULT_MODEL_PRICE_REVISIONS.get((provider_slug, model))
-                if previous_seed is not None and _model_price_matches_seed(
-                    existing,
-                    previous_seed,
+                previous_seeds = DEFAULT_MODEL_PRICE_REVISIONS.get((provider_slug, model), ())
+                if any(
+                    _model_price_matches_seed_for_revision(existing, previous_seed)
+                    for previous_seed in previous_seeds
                 ):
                     _apply_model_price_seed(existing, price_data)
                 continue
@@ -2585,6 +2655,29 @@ def _model_price_matches_seed(price: ModelPrice, price_data: dict[str, object]) 
     if price.release_date != _seed_metadata(price_data.get("release_date")):
         return False
     if price.notes != str(price_data.get("notes") or DEFAULT_PRICING_SOURCE):
+        return False
+    return tuple(_seed_price_tier_snapshot(tier) for tier in price.tiers) == (
+        _seed_data_tier_snapshot(price_data)
+    )
+
+
+def _model_price_matches_seed_for_revision(
+    price: ModelPrice,
+    price_data: dict[str, object],
+) -> bool:
+    if price.display_name != _seed_metadata(price_data.get("display_name")):
+        return False
+    if price.aliases_json != _aliases_json(price_data.get("aliases", "")):
+        return False
+    if price.input_usd_per_million != _seed_decimal(price_data["input_usd_per_million"]):
+        return False
+    if "cached_input_usd_per_million" in price_data and price.cached_input_usd_per_million != (
+        _seed_optional_decimal(price_data.get("cached_input_usd_per_million"))
+    ):
+        return False
+    if price.output_usd_per_million != _seed_decimal(price_data["output_usd_per_million"]):
+        return False
+    if bool(price.active) != bool(price_data.get("active", True)):
         return False
     return tuple(_seed_price_tier_snapshot(tier) for tier in price.tiers) == (
         _seed_data_tier_snapshot(price_data)

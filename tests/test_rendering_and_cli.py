@@ -34,6 +34,7 @@ from llm_observe_proxy.database import (
     create_session_factory,
     delete_model_price_tier,
     init_db,
+    seed_default_model_pricing,
     session_scope,
     set_incoming_server,
     upsert_model_price,
@@ -1063,6 +1064,48 @@ def test_init_db_upgrades_existing_sqlite_model_prices_with_source_and_tiers(
     }.issubset(tier_columns)
     assert "ix_model_price_tiers_model_price_id" in tier_indexes
     assert legacy_model == "legacy-model"
+
+
+def test_seed_default_model_pricing_backfills_openai_legacy_scalar_rows(tmp_path) -> None:
+    db_path = tmp_path / "legacy-openai-seed.sqlite3"
+    settings = Settings(database_url=f"sqlite:///{db_path.as_posix()}")
+    engine = create_db_engine(settings.database_url)
+    init_db(engine)
+    session_factory = create_session_factory(engine)
+
+    with session_scope(session_factory) as session:
+        session.execute(
+            text(
+                "UPDATE model_prices "
+                "SET cached_input_usd_per_million = NULL, "
+                "source_url = NULL, "
+                "checked_at = NULL, "
+                "release_date = NULL, "
+                "notes = 'Seeded from official standard paid text pricing checked on 2026-05-03.' "
+                "WHERE provider_slug = 'openai' AND model = 'gpt-5.4-mini'"
+            )
+        )
+
+    seed_default_model_pricing(engine)
+
+    with session_scope(session_factory) as session:
+        mini = session.scalar(
+            select(ModelPrice).where(
+                ModelPrice.provider_slug == "openai",
+                ModelPrice.model == "gpt-5.4-mini",
+            )
+        )
+        assert mini is not None
+        assert mini.cached_input_usd_per_million == Decimal("0.075")
+        assert (
+            mini.source_url
+            == "https://developers.openai.com/api/docs/models/gpt-5.4-mini"
+        )
+        assert mini.checked_at == "2026-05-23"
+        assert mini.release_date == "2026-03-17"
+        assert mini.notes == "Official OpenAI text-token rates."
+
+    engine.dispose()
 
 
 def test_cost_estimator_handles_rates_aliases_unknowns_and_missing_usage(tmp_path) -> None:
