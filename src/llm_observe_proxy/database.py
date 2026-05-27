@@ -2615,6 +2615,10 @@ def _ensure_sqlite_request_record_schema(engine: Engine) -> None:
         return
     columns = {column["name"] for column in inspector.get_columns("request_records")}
     with engine.begin() as connection:
+        if "created_at" not in columns:
+            connection.execute(text("ALTER TABLE request_records ADD COLUMN created_at DATETIME"))
+        if "model" not in columns:
+            connection.execute(text("ALTER TABLE request_records ADD COLUMN model VARCHAR(256)"))
         if "task_run_id" not in columns:
             connection.execute(text("ALTER TABLE request_records ADD COLUMN task_run_id INTEGER"))
         if "upstream_model" not in columns:

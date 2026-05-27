@@ -1426,6 +1426,8 @@ def test_init_db_upgrades_existing_sqlite_request_records_with_route_metadata(tm
     engine.dispose()
 
     assert {
+        "created_at",
+        "model",
         "task_run_id",
         "upstream_model",
         "model_route",
@@ -1459,6 +1461,9 @@ def test_init_db_upgrades_existing_sqlite_request_records_with_route_metadata(tm
         "release_date",
     }.issubset(tier_columns)
     assert {
+        "ix_request_records_created_at",
+        "ix_request_records_model_created_at",
+        "ix_request_records_model_route_created_at",
         "ix_request_records_task_run_id",
         "ix_request_records_upstream_model",
         "ix_request_records_model_route",

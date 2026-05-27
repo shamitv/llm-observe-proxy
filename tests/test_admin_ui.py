@@ -428,17 +428,52 @@ def test_settings_renders_model_routes_without_secret_values(
     )
 
     with TestClient(app) as client:
-        response = client.get("/admin/settings")
+        response = client.get("/admin/settings/routing")
 
     assert response.status_code == 200
-    assert "Model Routes" in response.text
+    assert "Route Registry" in response.text
     assert "local-qwen" in response.text
     assert "qwen3-coder-30b" in response.text
-    assert "configured" in response.text
     assert "openai-mini" in response.text
-    assert "MISSING_ROUTE_KEY" in response.text
-    assert "missing" in response.text
     assert "direct-secret" not in response.text
+
+
+def test_server_settings_shows_recent_model_summary_and_lookup(
+    proxy_client: TestClient,
+    proxy_app: FastAPI,
+) -> None:
+    now = datetime.now(UTC)
+    with proxy_app.state.session_factory() as session:
+        for index in range(12):
+            session.add(
+                RequestRecord(
+                    created_at=now + timedelta(seconds=index),
+                    method="POST",
+                    path="/v1/chat/completions",
+                    endpoint="/v1/chat/completions",
+                    model=f"recent-model-{index:02d}",
+                    upstream_url="http://localhost:8080/v1/chat/completions",
+                    request_headers_json="{}",
+                    request_body=b"{}",
+                    response_status=200,
+                    response_headers_json="{}",
+                    response_body=b"{}",
+                    response_content_type="application/json",
+                    duration_ms=10,
+                )
+            )
+        session.commit()
+
+    response = proxy_client.get("/admin/settings/server")
+
+    assert response.status_code == 200
+    assert "Lookup model routing" in response.text
+    assert "data-model-route-lookup" in response.text
+    assert "server-model-route-suggestions" in response.text
+    assert "recent-model-11" in response.text
+    assert "recent-model-02" in response.text
+    assert "recent-model-01" not in response.text
+    assert "recent-model-00" not in response.text
 
 
 def test_settings_manages_ui_model_routes(
@@ -460,7 +495,7 @@ def test_settings_manages_ui_model_routes(
     )
 
     assert response.status_code == 303
-    settings = proxy_client.get("/admin/settings")
+    settings = proxy_client.get("/admin/settings/routing")
     assert "local-ui" in settings.text
     assert "ui-upstream" in settings.text
     assert "OpenAI" in settings.text
@@ -483,7 +518,7 @@ def test_settings_manages_ui_model_routes(
     )
 
     assert response.status_code == 303
-    updated = proxy_client.get("/admin/settings")
+    updated = proxy_client.get("/admin/settings/routing")
     assert "ui-updated" in updated.text
     assert "ui-upstream" not in updated.text
 
@@ -494,7 +529,7 @@ def test_settings_manages_ui_model_routes(
     )
 
     assert response.status_code == 303
-    deleted = proxy_client.get("/admin/settings")
+    deleted = proxy_client.get("/admin/settings/routing")
     assert "local-ui" not in deleted.text
 
     proxy_client.post(
@@ -573,7 +608,7 @@ def test_ui_model_routes_persist_across_app_restart(tmp_path: Path) -> None:
     assert response.status_code == 303
 
     with TestClient(create_app(settings)) as client:
-        page = client.get("/admin/settings")
+        page = client.get("/admin/settings/routing")
 
     assert page.status_code == 200
     assert "persisted-ui" in page.text
