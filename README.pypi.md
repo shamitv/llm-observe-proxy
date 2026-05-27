@@ -39,6 +39,8 @@ what-if comparisons.
 - Config-driven model routes for sending selected proxy-facing model names to different
   upstream `/v1` endpoints with optional upstream model rewrites, provider selection,
   and API key injection.
+- Public `/api/*` endpoints for model lookup, sanitized sample requests, run lifecycle
+  control, run stats, and captured request browsing.
 - Opt-in response compatibility fixes for known upstream quirks, with raw upstream
   response audit storage when a rewrite or warning occurs.
 - No authentication by default, intended for local or trusted development networks.
@@ -331,6 +333,14 @@ https://github.com/shamitv/llm-observe-proxy
 ## Routes
 
 - `ANY /v1/{path:path}`: OpenAI-compatible pass-through proxy.
+- `GET /api/docs`: Swagger UI for the public integration API.
+- `GET /api/openapi.json`: OpenAPI JSON for the public integration API.
+- `GET /api/models`: routeable model discovery. See `docs/api/README.md`.
+- `GET /api/models/suggest`: bounded model-name typeahead suggestions.
+- `GET /api/models/lookup`: route lookup, API-key state, and sanitized sample request.
+- `GET /api/runs`, `POST /api/runs/start`, `POST /api/runs/end`: public run lifecycle API.
+- `GET /api/runs/{id}/stats`, `GET /api/runs/{id}/requests`: public run stats and traffic API.
+- `GET /api/requests`, `GET /api/requests/{id}`: public captured request browsing API.
 - `GET /admin`: request browser.
 - `GET /admin/requests/{id}`: request/response detail view.
 - `GET /admin/runs`: run browser and active run controls.
