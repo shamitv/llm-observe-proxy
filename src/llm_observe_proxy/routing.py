@@ -31,6 +31,7 @@ class ResolvedRoute:
     sort_index: int = 0
     db_id: int | None = None
     override_fallback: bool = False
+    managed_by: str | None = None
 
 
 @dataclass(frozen=True)
@@ -221,12 +222,48 @@ def build_forward_body(
     if not isinstance(request_payload, dict) or not decision.upstream_model:
         return request_body
     requested_model = extract_model(request_payload)
+    openrouter_model, openrouter_provider = _openrouter_forward_target(decision)
+    if openrouter_model and openrouter_provider:
+        forward_payload = dict(request_payload)
+        forward_payload["model"] = openrouter_model
+        provider_options = forward_payload.get("provider")
+        if not isinstance(provider_options, dict):
+            provider_options = {}
+        else:
+            provider_options = dict(provider_options)
+        provider_options["order"] = [openrouter_provider]
+        provider_options["allow_fallbacks"] = False
+        forward_payload["provider"] = provider_options
+        return json.dumps(
+            forward_payload,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ).encode("utf-8")
+
     if requested_model == decision.upstream_model:
         return request_body
 
     forward_payload = dict(request_payload)
     forward_payload["model"] = decision.upstream_model
     return json.dumps(forward_payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+
+
+def _openrouter_forward_target(decision: RoutingDecision) -> tuple[str | None, str | None]:
+    if decision.provider_slug != "openrouter":
+        return None, None
+    for value in (decision.upstream_model, decision.model_route, decision.requested_model):
+        if not value:
+            continue
+        base_model, separator, provider_tag = value.partition("@")
+        if separator and base_model and provider_tag:
+            return base_model, provider_tag
+    upstream_model = decision.upstream_model
+    model_route = decision.model_route
+    if upstream_model and model_route and model_route.startswith(f"{upstream_model}:"):
+        provider_tag = model_route[len(upstream_model) + 1 :]
+        if provider_tag:
+            return upstream_model, provider_tag
+    return None, None
 
 
 def build_forward_headers(
@@ -298,6 +335,7 @@ def model_route_display(route: ModelRoute | ModelRouteDB) -> dict[str, object]:
         "priority": getattr(route, "priority", 50),
         "active": getattr(route, "active", True),
         "override_fallback": getattr(route, "override_fallback", False),
+        "managed_by": getattr(route, "managed_by", None),
     }
 
 
@@ -345,6 +383,7 @@ def _db_route_to_resolved(route: ModelRouteDB, index: int) -> ResolvedRoute:
         sort_index=index,
         db_id=route.id,
         override_fallback=route.override_fallback,
+        managed_by=route.managed_by,
     )
 
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from llm_observe_proxy.config import ModelRoute, Settings
@@ -122,6 +123,76 @@ def test_fallback_disabled_returns_no_match(tmp_path: Path) -> None:
 
     assert decision.model_route is None
     assert decision.fallback_used is False
+
+
+def test_seeded_openai_model_route_matches_before_fallback(tmp_path: Path) -> None:
+    session_factory, settings = _session_factory(tmp_path)
+    with session_scope(session_factory) as session:
+        set_default_provider_slug(session, "openai")
+        set_default_model(session, "gpt-5.4-nano")
+
+        decision = select_model_route(
+            {"model": "gpt-5.4-mini", "messages": []},
+            settings,
+            session=session,
+        )
+
+    assert decision.model_route == "gpt-5.4-mini"
+    assert decision.fallback_used is False
+    assert decision.provider_slug == "openai"
+    assert decision.upstream_model == "gpt-5.4-mini"
+
+
+def test_openrouter_endpoint_route_injects_provider_order(tmp_path: Path) -> None:
+    session_factory, settings = _session_factory(tmp_path)
+    with session_scope(session_factory) as session:
+        upsert_model_route_db(
+            session,
+            incoming_model="qwen/qwen3.6-27b@deepinfra/fp8",
+            match_type="exact",
+            upstream_url="https://openrouter.ai/api/v1",
+            upstream_model="qwen/qwen3.6-27b@deepinfra/fp8",
+            provider_slug="openrouter",
+            priority=25,
+        )
+        payload = {
+            "model": "qwen/qwen3.6-27b@deepinfra/fp8",
+            "messages": [],
+            "provider": {"order": ["other"], "allow_fallbacks": True},
+        }
+        decision = select_model_route(payload, settings, session=session)
+
+    body = build_forward_body(
+        json.dumps(payload).encode(),
+        payload,
+        decision,
+    )
+    forwarded = json.loads(body)
+
+    assert forwarded["model"] == "qwen/qwen3.6-27b"
+    assert forwarded["provider"]["order"] == ["deepinfra/fp8"]
+    assert forwarded["provider"]["allow_fallbacks"] is False
+
+
+def test_hf_router_provider_suffix_route_is_sent_as_model(tmp_path: Path) -> None:
+    session_factory, settings = _session_factory(tmp_path)
+    with session_scope(session_factory) as session:
+        upsert_model_route_db(
+            session,
+            incoming_model="Qwen/Qwen3.6-35B-A3B:deepinfra",
+            match_type="exact",
+            upstream_url="https://router.huggingface.co/v1",
+            upstream_model="Qwen/Qwen3.6-35B-A3B:deepinfra",
+            provider_slug="huggingface-router",
+            priority=25,
+        )
+        payload = {"model": "Qwen/Qwen3.6-35B-A3B:deepinfra", "messages": []}
+        decision = select_model_route(payload, settings, session=session)
+
+    body = build_forward_body(json.dumps(payload).encode(), payload, decision)
+    forwarded = json.loads(body)
+
+    assert forwarded["model"] == "Qwen/Qwen3.6-35B-A3B:deepinfra"
 
 
 def test_route_simulator_reports_match_and_missing_key(tmp_path: Path, monkeypatch) -> None:
