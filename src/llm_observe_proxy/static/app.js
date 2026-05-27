@@ -997,9 +997,13 @@ document.querySelectorAll("[data-route-simulator]").forEach((form) => {
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
     const result = form.parentElement.querySelector("[data-route-simulator-result]");
+    const sampleResult = form.parentElement.querySelector("[data-route-sample-result]");
     const model = form.querySelector("input[name='model']")?.value || "";
     if (result) {
       result.textContent = "Running simulation...";
+    }
+    if (sampleResult) {
+      sampleResult.textContent = "Building sample request...";
     }
     try {
       const response = await fetch("/admin/api/routes/simulate", {
@@ -1023,9 +1027,68 @@ document.querySelectorAll("[data-route-simulator]").forEach((form) => {
         provider.textContent = `Provider: ${data.provider_name || data.provider_slug || "-"}`;
         result.append(status, route, upstream, provider);
       }
+      if (sampleResult) {
+        sampleResult.replaceChildren();
+        const title = document.createElement("strong");
+        title.textContent = "Sample request";
+        const curl = document.createElement("pre");
+        curl.textContent = data.sample_request?.curl || "No sample available.";
+        const preview = document.createElement("pre");
+        preview.textContent = JSON.stringify(data.sample_request?.upstream_preview || {}, null, 2);
+        sampleResult.append(title, curl, preview);
+      }
     } catch (error) {
       if (result) {
         result.textContent = error.message || "Simulation failed.";
+      }
+      if (sampleResult) {
+        sampleResult.textContent = "";
+      }
+    }
+  });
+});
+
+document.querySelectorAll("[data-default-routes]").forEach((form) => {
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const submitter = event.submitter;
+    const action = submitter?.dataset.defaultRouteAction || "preview";
+    const result = form.parentElement.querySelector("[data-default-routes-result]");
+    const provider = form.querySelector("select[name='provider_slug']")?.value || "";
+    const mode = form.querySelector("select[name='mode']")?.value || "missing_only";
+    if (result) {
+      result.textContent = action === "apply" ? "Applying default routes..." : "Previewing default routes...";
+    }
+    try {
+      const response = await fetch(`/admin/api/routes/defaults/${action}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        body: JSON.stringify({ provider_slug: provider, mode }),
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.detail || `Default route ${action} returned ${response.status}`);
+      }
+      if (result) {
+        result.replaceChildren();
+        const status = document.createElement("strong");
+        status.textContent = action === "apply" ? "Default routes applied" : "Default route preview";
+        const counts = document.createElement("span");
+        counts.textContent = [
+          `${data.total_candidates || 0} candidates`,
+          `${data.inserted || 0} insert`,
+          `${data.updated || 0} update`,
+          `${data.skipped_existing || 0} existing`,
+          `${data.skipped_user || 0} user-owned`,
+        ].join(" · ");
+        const note = document.createElement("span");
+        note.className = "muted";
+        note.textContent = data.truncated ? "Showing first 200 route decisions." : "Route decisions are complete.";
+        result.append(status, counts, note);
+      }
+    } catch (error) {
+      if (result) {
+        result.textContent = error.message || "Default route action failed.";
       }
     }
   });

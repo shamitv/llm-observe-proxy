@@ -35,12 +35,15 @@ from llm_observe_proxy.costing import (
     estimate_run_cost,
 )
 from llm_observe_proxy.database import (
+    DEFAULT_ROUTE_SEED_OWNER,
     ModelPrice,
     ModelProvider,
     ModelRouteDB,
     RequestRecord,
     SessionFactory,
     TaskRun,
+    apply_default_model_routes,
+    build_default_model_route_candidates,
     delete_model_price,
     delete_model_price_tier,
     delete_model_provider,
@@ -64,6 +67,7 @@ from llm_observe_proxy.database import (
     list_model_routes_db,
     list_task_runs_with_stats,
     pause_active_task_run,
+    preview_default_model_routes,
     resume_task_run,
     session_scope,
     set_default_compat_fixes,
@@ -85,6 +89,8 @@ from llm_observe_proxy.pricing_catalog import (
 )
 from llm_observe_proxy.rendering import escape_preview, render_payload
 from llm_observe_proxy.routing import (
+    ResolvedRoute,
+    RoutingDecision,
     build_forward_body,
     build_forward_headers,
     model_route_display,
@@ -1494,6 +1500,60 @@ async def api_create_route(request: Request):
     return _save_route_from_payload(request, payload)
 
 
+@router.post("/api/routes/defaults/preview", response_model=None)
+async def api_preview_default_routes(request: Request):
+    payload = await _json_payload(request)
+    provider_slug = str(payload.get("provider_slug") or payload.get("provider") or "").strip()
+    mode = str(payload.get("mode") or "missing_only")
+    session_factory: SessionFactory = request.app.state.session_factory
+    with session_scope(session_factory) as session:
+        try:
+            return preview_default_model_routes(
+                session,
+                provider_slug=provider_slug or None,
+                mode=mode,
+            )
+        except ValueError as exc:
+            return JSONResponse({"detail": str(exc)}, status_code=400)
+
+
+@router.post("/api/routes/defaults/apply", response_model=None)
+async def api_apply_default_routes(request: Request):
+    payload = await _json_payload(request)
+    provider_slug = str(payload.get("provider_slug") or payload.get("provider") or "").strip()
+    mode = str(payload.get("mode") or "missing_only")
+    session_factory: SessionFactory = request.app.state.session_factory
+    with session_scope(session_factory) as session:
+        try:
+            return apply_default_model_routes(
+                session,
+                provider_slug=provider_slug or None,
+                mode=mode,
+            )
+        except ValueError as exc:
+            return JSONResponse({"detail": str(exc)}, status_code=400)
+
+
+@router.post("/api/routes/sample-request", response_model=None)
+async def api_route_sample_request(request: Request):
+    payload = await _json_payload(request)
+    model = str(payload.get("model") or payload.get("incoming_model") or "").strip()
+    provider_slug = str(payload.get("provider_slug") or payload.get("provider") or "").strip()
+    if not model:
+        return JSONResponse({"detail": "Model is required."}, status_code=400)
+    session_factory: SessionFactory = request.app.state.session_factory
+    with session_scope(session_factory) as session:
+        try:
+            return _route_sample_request(
+                request,
+                session,
+                model,
+                provider_slug=provider_slug or None,
+            )
+        except ValueError as exc:
+            return JSONResponse({"detail": str(exc)}, status_code=400)
+
+
 @router.post("/api/routes/simulate", response_model=None)
 async def api_simulate_route(request: Request):
     payload = await _json_payload(request)
@@ -1503,6 +1563,7 @@ async def api_simulate_route(request: Request):
     session_factory: SessionFactory = request.app.state.session_factory
     with session_scope(session_factory) as session:
         result = simulate_route_resolution(incoming_model, session, request.app.state.settings)
+        sample = _route_sample_request(request, session, incoming_model)
     return {
         "status": result.status,
         "matched_route": result.matched_route,
@@ -1513,6 +1574,7 @@ async def api_simulate_route(request: Request):
         "provider_name": result.provider_name,
         "api_key_state": result.api_key_state,
         "compatibility_fixes": list(result.compatibility_fixes),
+        "sample_request": sample,
     }
 
 
@@ -1626,6 +1688,114 @@ def build_upstream_test_payload(test_kind: str, model: str, prompt: str) -> dict
             ],
         }
     raise ValueError("Choose a valid upstream test: simple, image, or function call.")
+
+
+def _route_sample_request(
+    request: Request,
+    session,
+    model: str,
+    *,
+    provider_slug: str | None = None,
+) -> dict[str, object]:
+    payload = {
+        "model": model,
+        "messages": [{"role": "user", "content": "Hello through the proxy"}],
+    }
+    decision = _sample_routing_decision(request, session, payload, provider_slug=provider_slug)
+    body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode()
+    forward_body = build_forward_body(body, payload, decision)
+    try:
+        forward_payload: object = json.loads(forward_body.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        forward_payload = forward_body.decode("utf-8", errors="replace")
+
+    port = get_incoming_port(session, request.app.state.settings)
+    client_base_url = f"http://localhost:{port}/v1"
+    endpoint_url = f"{client_base_url}/chat/completions"
+    request_json = json.dumps(payload, ensure_ascii=False, indent=2)
+    curl = (
+        "curl "
+        f"{endpoint_url} "
+        "-H 'Content-Type: application/json' "
+        "-H 'Authorization: Bearer local-dev-key' "
+        f"-d '{request_json}'"
+    )
+    python = (
+        "from openai import OpenAI\n\n"
+        "client = OpenAI(api_key=\"local-dev-key\", "
+        f"base_url=\"{client_base_url}\")\n"
+        "response = client.chat.completions.create(\n"
+        f"    model={model!r},\n"
+        "    messages=[{\"role\": \"user\", \"content\": \"Hello through the proxy\"}],\n"
+        ")\n"
+        "print(response.choices[0].message.content)"
+    )
+    upstream_url = decision.upstream_base_url
+    auth_hint = (
+        f"Bearer ${decision.api_key_env}"
+        if decision.api_key_env
+        else "Preserves client Authorization header when present"
+    )
+    return {
+        "model": model,
+        "provider_slug": decision.provider_slug,
+        "route": decision.model_route,
+        "client_base_url": client_base_url,
+        "curl": curl,
+        "python": python,
+        "upstream_preview": {
+            "url": f"{upstream_url.rstrip('/')}/chat/completions" if upstream_url else None,
+            "headers": {"authorization": auth_hint, "content-type": "application/json"},
+            "body": forward_payload,
+        },
+    }
+
+
+def _sample_routing_decision(
+    request: Request,
+    session,
+    payload: dict[str, object],
+    *,
+    provider_slug: str | None = None,
+) -> RoutingDecision:
+    if not provider_slug:
+        return select_model_route(payload, request.app.state.settings, session=session)
+
+    provider = session.get(ModelProvider, provider_slug)
+    if provider is None:
+        raise ValueError("Provider was not found.")
+    model = str(payload.get("model") or "")
+    candidate = next(
+        (
+            candidate
+            for candidate in build_default_model_route_candidates(
+                session,
+                provider_slug=provider_slug,
+            )
+            if candidate.incoming_model == model
+        ),
+        None,
+    )
+    upstream_model = candidate.upstream_model if candidate else model
+    upstream_url = candidate.upstream_url if candidate else provider.upstream_url
+    if not upstream_url:
+        raise ValueError("Provider has no upstream URL.")
+    route = ResolvedRoute(
+        incoming_model=model,
+        match_type="exact",
+        upstream_url=upstream_url,
+        upstream_model=upstream_model,
+        provider_slug=provider.slug,
+        api_key_env=provider.api_key_env,
+        priority=90,
+        source="sample",
+    )
+    return RoutingDecision(
+        requested_model=model,
+        resolved_route=route,
+        match_type="exact",
+        match_source="sample",
+    )
 
 
 async def _send_upstream_test(
@@ -1940,6 +2110,8 @@ def _route_api_row(session, route: ModelRouteDB) -> dict[str, object]:
         "priority": route.priority,
         "active": bool(route.active),
         "status": "active" if route.active else "inactive",
+        "managed_by": route.managed_by,
+        "managed": route.managed_by == DEFAULT_ROUTE_SEED_OWNER,
     }
 
 
@@ -2153,7 +2325,7 @@ def _settings_model_route_rows(session, settings, providers) -> list[dict[str, o
         rows.append(row)
     for route in list_model_routes_db(session):
         row = model_route_display(route)
-        row["source"] = "ui"
+        row["source"] = "seeded" if route.managed_by == DEFAULT_ROUTE_SEED_OWNER else "ui"
         row["editable"] = True
         row["provider_name"] = provider_names.get(route.provider_slug or "")
         row["fixes_text"] = fix_ids_text(route.fixes)

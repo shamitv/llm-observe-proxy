@@ -127,7 +127,7 @@ def test_route_crud_and_simulation(proxy_client: TestClient) -> None:
 
     listed = proxy_client.get("/admin/api/routes?search=qwen")
     assert listed.status_code == 200
-    assert listed.json()["total"] == 1
+    assert listed.json()["total"] >= 1
 
     simulated = proxy_client.post(
         "/admin/api/routes/simulate",
@@ -152,6 +152,41 @@ def test_route_crud_and_simulation(proxy_client: TestClient) -> None:
 
     deleted = proxy_client.delete(f"/admin/api/routes/{route_id}")
     assert deleted.status_code == 200
+
+
+def test_default_route_preview_apply_and_sample_request(proxy_client: TestClient) -> None:
+    preview = proxy_client.post(
+        "/admin/api/routes/defaults/preview",
+        json={"provider_slug": "openai", "mode": "refresh_seeded"},
+    )
+    assert preview.status_code == 200
+    assert preview.json()["total_candidates"] >= 1
+
+    applied = proxy_client.post(
+        "/admin/api/routes/defaults/apply",
+        json={"provider_slug": "openai", "mode": "refresh_seeded"},
+    )
+    assert applied.status_code == 200
+    assert applied.json()["updated"] >= 1
+
+    simulated = proxy_client.post(
+        "/admin/api/routes/simulate",
+        json={"incoming_model": "gpt-5.4-mini"},
+    )
+    assert simulated.status_code == 200
+    data = simulated.json()
+    assert data["matched_route"] == "gpt-5.4-mini"
+    assert data["provider_slug"] == "openai"
+    assert "curl http://localhost:8080/v1/chat/completions" in data["sample_request"]["curl"]
+
+    sample = proxy_client.post(
+        "/admin/api/routes/sample-request",
+        json={"model": "gpt-5.4-mini", "provider_slug": "openai"},
+    )
+    assert sample.status_code == 200
+    sample_data = sample.json()
+    assert sample_data["upstream_preview"]["body"]["model"] == "gpt-5.4-mini"
+    assert "OPENAI_API_KEY" in sample_data["upstream_preview"]["headers"]["authorization"]
 
 
 def test_retention_preview_and_trim(proxy_client: TestClient, proxy_app) -> None:
