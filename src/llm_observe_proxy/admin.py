@@ -832,6 +832,7 @@ def _settings_tab_response(
         context = _settings_context(
             request,
             session,
+            settings_tab=settings_tab,
             total=total,
             trim_count=trim_count,
             days=days,
@@ -2276,6 +2277,7 @@ def _settings_context(
     request: Request,
     session,
     *,
+    settings_tab: str = "legacy",
     total: int,
     trim_count: int,
     days: int,
@@ -2288,9 +2290,20 @@ def _settings_context(
     providers = list_model_providers(session)
     default_fixes = get_default_compat_fixes(session, settings)
     fallback = get_fallback_summary(session)
+    model_routes = (
+        _settings_model_route_rows(session, settings, providers)
+        if settings_tab in {"legacy", "routing"}
+        else []
+    )
+    recent_model_routes = (
+        _settings_recent_model_route_rows(session, settings, days=days)
+        if settings_tab == "server"
+        else []
+    )
     return {
         "upstream_url": get_upstream_url(session, settings),
-        "model_routes": _settings_model_route_rows(session, settings, providers),
+        "model_routes": model_routes,
+        "recent_model_routes": recent_model_routes,
         "default_compat_fixes": default_fixes,
         "default_compat_fixes_text": fix_ids_text(default_fixes),
         "available_compat_fixes": compatibility_fix_rows(),
@@ -2330,6 +2343,48 @@ def _settings_model_route_rows(session, settings, providers) -> list[dict[str, o
         row["provider_name"] = provider_names.get(route.provider_slug or "")
         row["fixes_text"] = fix_ids_text(route.fixes)
         rows.append(row)
+    return rows
+
+
+def _settings_recent_model_route_rows(
+    session,
+    settings,
+    *,
+    days: int,
+    limit: int = 10,
+) -> list[dict[str, object]]:
+    cutoff = datetime.now(UTC) - timedelta(days=days)
+    usage_rows = session.execute(
+        select(
+            RequestRecord.model,
+            func.count(RequestRecord.id),
+            func.max(RequestRecord.created_at),
+        )
+        .where(RequestRecord.created_at >= cutoff)
+        .where(RequestRecord.model.is_not(None))
+        .group_by(RequestRecord.model)
+        .order_by(desc(func.max(RequestRecord.created_at)))
+        .limit(limit)
+    ).all()
+    rows: list[dict[str, object]] = []
+    for model, request_count, last_used_at in usage_rows:
+        if not model:
+            continue
+        result = simulate_route_resolution(model, session, settings)
+        rows.append(
+            {
+                "model": model,
+                "requests": int(request_count or 0),
+                "last_used_at": format_utc_iso(last_used_at),
+                "status": result.status,
+                "matched_route": result.matched_route,
+                "match_type": result.match_type,
+                "upstream_model": result.upstream_model,
+                "provider_slug": result.provider_slug,
+                "provider_name": result.provider_name,
+                "api_key_state": result.api_key_state,
+            }
+        )
     return rows
 
 

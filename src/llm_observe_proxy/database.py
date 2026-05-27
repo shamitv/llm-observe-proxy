@@ -13,6 +13,7 @@ from sqlalchemy import (
     Boolean,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     LargeBinary,
     Numeric,
@@ -1255,6 +1256,10 @@ class TaskRun(Base):
 
 class RequestRecord(Base):
     __tablename__ = "request_records"
+    __table_args__ = (
+        Index("ix_request_records_model_created_at", "model", "created_at"),
+        Index("ix_request_records_model_route_created_at", "model_route", "created_at"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     task_run_id: Mapped[int | None] = mapped_column(
@@ -1262,7 +1267,7 @@ class RequestRecord(Base):
         nullable=True,
         index=True,
     )
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, index=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     method: Mapped[str] = mapped_column(String(16))
     path: Mapped[str] = mapped_column(String(1024))
@@ -2698,6 +2703,24 @@ def _ensure_sqlite_request_record_schema(engine: Engine) -> None:
             connection.execute(
                 text("ALTER TABLE request_records ADD COLUMN estimated_input_model VARCHAR(256)")
             )
+        connection.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_request_records_created_at "
+                "ON request_records (created_at)"
+            )
+        )
+        connection.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_request_records_model_created_at "
+                "ON request_records (model, created_at)"
+            )
+        )
+        connection.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_request_records_model_route_created_at "
+                "ON request_records (model_route, created_at)"
+            )
+        )
         connection.execute(
             text(
                 "CREATE INDEX IF NOT EXISTS "

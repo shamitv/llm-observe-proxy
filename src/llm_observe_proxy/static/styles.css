@@ -2242,6 +2242,19 @@ fieldset legend,
   align-items: end;
 }
 
+.model-lookup-form {
+  margin-bottom: 12px;
+}
+
+.model-lookup-result {
+  margin-bottom: 12px;
+}
+
+.model-lookup-result pre {
+  max-height: 220px;
+  overflow: auto;
+}
+
 .result-panel {
   display: grid;
   gap: 8px;

@@ -94,55 +94,51 @@
     <div class="card-header">
       <div>
         <h2>Model Routes Summary</h2>
-        <p>Showing {{ model_routes | length }} of {{ model_routes | length }} configured routes.</p>
+        <p>Showing up to 10 recently used models from the last {{ days }} days. Use lookup for any configured model.</p>
       </div>
-      <a class="button ghost button-ghost" href="/admin/settings/routing">{{ icons.icon("plus", class_name="button-icon") }}<span>Add route</span></a>
+      <a class="button ghost button-ghost" href="/admin/settings/routing">{{ icons.icon("plus", class_name="button-icon") }}<span>Manage routes</span></a>
+    </div>
+    <form class="inline-tool-form model-lookup-form" data-model-route-lookup>
+      <label class="search-bar model-lookup-field">
+        <span>Lookup model routing</span>
+        <span class="field-with-icon">{{ icons.icon("search", class_name="field-icon") }}<input name="model" list="server-model-route-suggestions" placeholder="gpt-5.4-mini" autocomplete="off" required data-model-lookup-input></span>
+        <datalist id="server-model-route-suggestions" data-model-lookup-options></datalist>
+      </label>
+      <button class="button primary button-primary" type="submit">{{ icons.icon("diagnostics", class_name="button-icon") }}<span>Lookup</span></button>
+    </form>
+    <div class="result-panel model-lookup-result" data-model-lookup-result>
+      <span class="muted">Enter a model to preview the proxy route and sample request.</span>
     </div>
     <div class="table-shell">
       <table class="data-table model-routes-table">
         <thead>
           <tr>
-            <th scope="col">Source</th>
-            <th scope="col">Incoming model</th>
-            <th scope="col">Match</th>
-            <th scope="col">Route upstream URL</th>
+            <th scope="col">Requested model</th>
+            <th scope="col">Requests</th>
+            <th scope="col">Last used</th>
+            <th scope="col">Route</th>
             <th scope="col">Send as model</th>
             <th scope="col">Provider</th>
-            <th scope="col">Compatibility fixes</th>
             <th scope="col">API key</th>
             <th scope="col">Status</th>
-            <th scope="col">Actions</th>
           </tr>
         </thead>
         <tbody>
-          {% for route in model_routes %}
+          {% for route in recent_model_routes %}
           <tr>
-            <td><span class="source-pill source-{{ route.source }}">{{ "Settings" if route.editable else "Startup" }}</span></td>
             <td><code>{{ route.model }}</code></td>
-            <td>{{ route.match_type }}</td>
-            <td><code>{{ route.upstream_url }}</code></td>
+            <td>{{ route.requests | compact_number }}</td>
+            <td>{% if route.last_used_at %}<time datetime="{{ route.last_used_at }}" data-local-time="table">{{ route.last_used_at }}</time>{% else %}<span class="muted">Never</span>{% endif %}</td>
+            <td><code>{{ route.matched_route | default("global fallback", true) }}</code>{% if route.match_type %}<small>{{ route.match_type }}</small>{% endif %}</td>
             <td><code>{{ route.upstream_model }}</code></td>
             <td>{{ route.provider_name | default(route.provider_slug | default("Auto", true), true) }}</td>
-            <td>{% if route.fixes %}<code>{{ route.fixes | join(", ") }}</code>{% else %}<span class="muted">Default</span>{% endif %}</td>
             <td>
               <span class="key-state key-state-{{ route.api_key_state | replace(' ', '-') }}">{{ route.api_key_state }}</span>
-              {% if route.api_key_env %}<small>{{ route.api_key_env }}</small>{% endif %}
             </td>
-            <td>{{ badges.status_badge("Active" if route.active else "Inactive") }}</td>
-            <td>
-              {% if route.editable %}
-              <form method="post" action="/admin/settings/model-routes/delete" data-confirm-message="Delete route {{ route.model }}?">
-                <input type="hidden" name="route_id" value="{{ route.id }}">
-                <input type="hidden" name="model" value="{{ route.model }}">
-                <button class="button danger compact-button button-danger" type="submit">{{ icons.icon("trash", class_name="button-icon") }}<span>Delete</span></button>
-              </form>
-              {% else %}
-              <span class="muted">Locked</span>
-              {% endif %}
-            </td>
+            <td>{{ badges.status_badge(route.status | title) }}</td>
           </tr>
           {% else %}
-          <tr><td colspan="10" class="empty">No model routes are configured.</td></tr>
+          <tr><td colspan="8" class="empty">No recent model traffic in this window. Use lookup to inspect any configured route.</td></tr>
           {% endfor %}
         </tbody>
       </table>

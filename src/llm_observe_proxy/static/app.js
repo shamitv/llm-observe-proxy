@@ -1048,6 +1048,92 @@ document.querySelectorAll("[data-route-simulator]").forEach((form) => {
   });
 });
 
+document.querySelectorAll("[data-model-route-lookup]").forEach((form) => {
+  const input = form.querySelector("[data-model-lookup-input]");
+  const options = form.querySelector("[data-model-lookup-options]");
+  const result = form.parentElement.querySelector("[data-model-lookup-result]");
+  let suggestionTimer = null;
+
+  const renderLookup = (data) => {
+    if (!result) {
+      return;
+    }
+    result.replaceChildren();
+    const status = document.createElement("strong");
+    status.textContent = data.status || "unknown";
+    const route = document.createElement("span");
+    route.textContent = `Route: ${data.route || "global fallback or no match"}`;
+    const upstream = document.createElement("code");
+    upstream.textContent = `${data.upstream_url || "-"} -> ${data.upstream_model || "-"}`;
+    const provider = document.createElement("span");
+    provider.textContent = `Provider: ${data.provider_name || data.provider_slug || "-"}`;
+    const keyState = document.createElement("span");
+    keyState.textContent = `API key: ${data.api_key_state || "-"}`;
+    const sample = document.createElement("pre");
+    sample.textContent = data.sample_request?.curl || "No sample request available.";
+    result.append(status, route, upstream, provider, keyState, sample);
+  };
+
+  const refreshSuggestions = async () => {
+    if (!input || !options) {
+      return;
+    }
+    const query = input.value.trim();
+    if (!query) {
+      options.replaceChildren();
+      return;
+    }
+    try {
+      const response = await fetch(`/api/models/suggest?q=${encodeURIComponent(query)}&limit=10`, {
+        headers: { Accept: "application/json" },
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.detail || `Suggestions returned ${response.status}`);
+      }
+      options.replaceChildren();
+      (data.items || []).forEach((item) => {
+        const option = document.createElement("option");
+        option.value = item.client_model || item.model || "";
+        option.label = [item.provider_name || item.provider_slug, item.source].filter(Boolean).join(" / ");
+        options.append(option);
+      });
+    } catch {
+      options.replaceChildren();
+    }
+  };
+
+  input?.addEventListener("input", () => {
+    window.clearTimeout(suggestionTimer);
+    suggestionTimer = window.setTimeout(refreshSuggestions, 160);
+  });
+
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const model = input?.value.trim() || "";
+    if (!model) {
+      return;
+    }
+    if (result) {
+      result.textContent = "Looking up route...";
+    }
+    try {
+      const response = await fetch(`/api/models/lookup?model=${encodeURIComponent(model)}`, {
+        headers: { Accept: "application/json" },
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.detail || `Lookup returned ${response.status}`);
+      }
+      renderLookup(data);
+    } catch (error) {
+      if (result) {
+        result.textContent = error.message || "Lookup failed.";
+      }
+    }
+  });
+});
+
 document.querySelectorAll("[data-default-routes]").forEach((form) => {
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
