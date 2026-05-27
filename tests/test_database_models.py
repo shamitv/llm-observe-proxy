@@ -7,8 +7,10 @@ from sqlalchemy import text
 
 from llm_observe_proxy.config import ModelRoute, Settings
 from llm_observe_proxy.database import (
+    DEFAULT_ROUTE_SEED_OWNER,
     MODEL_ROUTES_SETTING_KEY,
     ModelProvider,
+    apply_default_model_routes,
     create_db_engine,
     create_session_factory,
     get_default_fallback_provider,
@@ -20,11 +22,13 @@ from llm_observe_proxy.database import (
     is_fallback_enabled,
     list_active_model_providers,
     list_model_routes_db,
+    preview_default_model_routes,
     session_scope,
     set_default_fallback_provider,
     set_default_model,
     set_default_provider_slug,
     set_setting,
+    upsert_model_price,
     upsert_model_provider,
     upsert_model_route_db,
 )
@@ -96,6 +100,106 @@ def test_create_route_prefix_match_and_validation(tmp_path: Path) -> None:
         assert route.fixes == ("qwen-tagged-tool-call-rewrite",)
 
 
+def test_init_db_seeds_default_routes_from_active_prices(tmp_path: Path) -> None:
+    session_factory = _session_factory(tmp_path)
+    with session_scope(session_factory) as session:
+        routes = {route.incoming_model: route for route in list_model_routes_db(session)}
+        route = routes["gpt-5.4-mini"]
+
+        assert route.managed_by == DEFAULT_ROUTE_SEED_OWNER
+        assert route.provider_slug == "openai"
+        assert route.upstream_url == "https://api.openai.com/v1"
+        assert route.effective_upstream_model == "gpt-5.4-mini"
+        assert routes["qwen/qwen3.6-27b"].effective_upstream_model == (
+            "qwen/qwen3.6-27b@chutes/fp8"
+        )
+        assert routes["Qwen/Qwen3.6-27B"].effective_upstream_model == (
+            "qwen/qwen3.6-27b@chutes/fp8"
+        )
+        assert routes["gemma-4-26b"].effective_upstream_model == (
+            "google/gemma-4-26b-a4b-it@deepinfra/fp8"
+        )
+
+
+def test_default_route_refresh_preserves_user_owned_route(tmp_path: Path) -> None:
+    session_factory = _session_factory(tmp_path)
+    with session_scope(session_factory) as session:
+        route = next(
+            route
+            for route in list_model_routes_db(session)
+            if route.incoming_model == "gpt-5.4-mini"
+        )
+        upsert_model_route_db(
+            session,
+            route_id=route.id,
+            incoming_model="gpt-5.4-mini",
+            match_type="exact",
+            upstream_url="http://localhost:8000/v1",
+            upstream_model="local-mini",
+            provider_slug="local-llm",
+            priority=25,
+        )
+
+        summary = apply_default_model_routes(
+            session,
+            provider_slug="openai",
+            mode="refresh_seeded",
+        )
+        refreshed = next(
+            route
+            for route in list_model_routes_db(session)
+            if route.incoming_model == "gpt-5.4-mini"
+        )
+
+        assert summary["skipped_user"] >= 1
+        assert refreshed.managed_by is None
+        assert refreshed.upstream_url == "http://localhost:8000/v1"
+        assert refreshed.effective_upstream_model == "local-mini"
+
+
+def test_default_route_builder_pins_lowest_cost_router_endpoint(tmp_path: Path) -> None:
+    session_factory = _session_factory(tmp_path)
+    with session_scope(session_factory) as session:
+        upsert_model_price(
+            session,
+            provider_slug="openrouter",
+            model="test/base",
+            input_usd_per_million="1",
+            output_usd_per_million="1",
+        )
+        upsert_model_price(
+            session,
+            provider_slug="openrouter",
+            model="test/base@expensive",
+            input_usd_per_million="2",
+            output_usd_per_million="2",
+        )
+        upsert_model_price(
+            session,
+            provider_slug="openrouter",
+            model="test/base@cheap",
+            aliases="test-base-cheap",
+            input_usd_per_million="0.1",
+            cached_input_usd_per_million="0.01",
+            output_usd_per_million="0.2",
+        )
+
+        preview = preview_default_model_routes(session, provider_slug="openrouter")
+        summary = apply_default_model_routes(
+            session,
+            provider_slug="openrouter",
+            mode="refresh_seeded",
+        )
+        routes = {route.incoming_model: route for route in list_model_routes_db(session)}
+
+        assert preview["total_candidates"] >= 3
+        assert summary["inserted"] >= 3
+        assert routes["test/base"].effective_upstream_model == "test/base@cheap"
+        assert routes["test/base@cheap"].effective_upstream_model == "test/base@cheap"
+        assert routes["test/base:cheap"].effective_upstream_model == "test/base@cheap"
+        assert routes["test-base-cheap"].effective_upstream_model == "test/base@cheap"
+
+
 def test_duplicate_route_pattern_raises(tmp_path: Path) -> None:
     session_factory = _session_factory(tmp_path)
     with session_scope(session_factory) as session:
@@ -163,14 +267,16 @@ def test_migrate_json_blob_routes_to_table(tmp_path: Path) -> None:
     session_factory = create_session_factory(engine)
     with session_scope(session_factory) as session:
         routes = list_model_routes_db(session)
-        assert len(routes) == 1
-        assert routes[0].incoming_model == "legacy"
-        assert get_ui_model_routes(session) == (
+        legacy_routes = [route for route in routes if route.incoming_model == "legacy"]
+        assert len(legacy_routes) == 1
+        assert legacy_routes[0].managed_by is None
+        assert (
             ModelRoute(
                 model="legacy",
                 upstream_url="http://localhost:8000/v1",
                 upstream_model="legacy-upstream",
-            ),
+            )
+            in get_ui_model_routes(session)
         )
 
 

@@ -88,6 +88,12 @@ def test_live_request_run_shells_and_polling_script(proxy_client: TestClient) ->
     assert 'root.querySelector("[data-live-mode-tabs]")' in app_js
     assert 'data-live-run-start' in app_js
     assert 'data-live-run-end' in app_js
+    assert 'data-live-run-pause' in app_js
+    assert 'data-live-run-resume' in app_js
+    assert "renderRunCardsMobile" in app_js
+    assert "request-mobile-card" in app_js
+    assert "data-inspector-copy" in app_js
+    assert "Copy as curl" in app_js
 
     request_page = proxy_client.get("/admin")
     assert 'select name="provider"' in request_page.text
@@ -96,6 +102,7 @@ def test_live_request_run_shells_and_polling_script(proxy_client: TestClient) ->
     assert 'name="slow" value="1"' in request_page.text
     assert 'name="large" value="1"' in request_page.text
     assert 'data-live-request-inspector' in request_page.text
+    assert 'data-mobile-filter-toggle' in request_page.text
 
     run_page = proxy_client.get("/admin/runs/1")
     assert 'data-run-tabs' in run_page.text
@@ -421,17 +428,52 @@ def test_settings_renders_model_routes_without_secret_values(
     )
 
     with TestClient(app) as client:
-        response = client.get("/admin/settings")
+        response = client.get("/admin/settings/routing")
 
     assert response.status_code == 200
-    assert "Model Routes" in response.text
+    assert "Route Registry" in response.text
     assert "local-qwen" in response.text
     assert "qwen3-coder-30b" in response.text
-    assert "configured" in response.text
     assert "openai-mini" in response.text
-    assert "MISSING_ROUTE_KEY" in response.text
-    assert "missing" in response.text
     assert "direct-secret" not in response.text
+
+
+def test_server_settings_shows_recent_model_summary_and_lookup(
+    proxy_client: TestClient,
+    proxy_app: FastAPI,
+) -> None:
+    now = datetime.now(UTC)
+    with proxy_app.state.session_factory() as session:
+        for index in range(12):
+            session.add(
+                RequestRecord(
+                    created_at=now + timedelta(seconds=index),
+                    method="POST",
+                    path="/v1/chat/completions",
+                    endpoint="/v1/chat/completions",
+                    model=f"recent-model-{index:02d}",
+                    upstream_url="http://localhost:8080/v1/chat/completions",
+                    request_headers_json="{}",
+                    request_body=b"{}",
+                    response_status=200,
+                    response_headers_json="{}",
+                    response_body=b"{}",
+                    response_content_type="application/json",
+                    duration_ms=10,
+                )
+            )
+        session.commit()
+
+    response = proxy_client.get("/admin/settings/server")
+
+    assert response.status_code == 200
+    assert "Lookup model routing" in response.text
+    assert "data-model-route-lookup" in response.text
+    assert "server-model-route-suggestions" in response.text
+    assert "recent-model-11" in response.text
+    assert "recent-model-02" in response.text
+    assert "recent-model-01" not in response.text
+    assert "recent-model-00" not in response.text
 
 
 def test_settings_manages_ui_model_routes(
@@ -453,7 +495,7 @@ def test_settings_manages_ui_model_routes(
     )
 
     assert response.status_code == 303
-    settings = proxy_client.get("/admin/settings")
+    settings = proxy_client.get("/admin/settings/routing")
     assert "local-ui" in settings.text
     assert "ui-upstream" in settings.text
     assert "OpenAI" in settings.text
@@ -476,7 +518,7 @@ def test_settings_manages_ui_model_routes(
     )
 
     assert response.status_code == 303
-    updated = proxy_client.get("/admin/settings")
+    updated = proxy_client.get("/admin/settings/routing")
     assert "ui-updated" in updated.text
     assert "ui-upstream" not in updated.text
 
@@ -487,7 +529,7 @@ def test_settings_manages_ui_model_routes(
     )
 
     assert response.status_code == 303
-    deleted = proxy_client.get("/admin/settings")
+    deleted = proxy_client.get("/admin/settings/routing")
     assert "local-ui" not in deleted.text
 
     proxy_client.post(
@@ -566,7 +608,7 @@ def test_ui_model_routes_persist_across_app_restart(tmp_path: Path) -> None:
     assert response.status_code == 303
 
     with TestClient(create_app(settings)) as client:
-        page = client.get("/admin/settings")
+        page = client.get("/admin/settings/routing")
 
     assert page.status_code == 200
     assert "persisted-ui" in page.text
@@ -1046,6 +1088,56 @@ def test_runs_require_name_and_manage_active_state(
         assert active == []
 
 
+def test_runs_can_pause_resume_and_keep_one_active_run(
+    proxy_client: TestClient,
+    proxy_app: FastAPI,
+) -> None:
+    first = proxy_client.post(
+        "/admin/api/runs/start",
+        json={"name": "Paused task"},
+    )
+    assert first.status_code == 200
+    run_id = first.json()["run"]["id"]
+
+    pause = proxy_client.post("/admin/api/runs/pause")
+    assert pause.status_code == 200
+    pause_data = pause.json()["run"]
+    assert pause_data["id"] == run_id
+    assert pause_data["is_paused"] is True
+    assert pause_data["status"] == "paused"
+
+    runs_api = proxy_client.get("/admin/api/runs")
+    assert runs_api.json()["active_run"] is None
+    assert runs_api.json()["stats"]["paused"] == 1
+
+    second = proxy_client.post(
+        "/admin/api/runs/start",
+        json={"name": "Active task"},
+    )
+    assert second.status_code == 200
+    second_id = second.json()["run"]["id"]
+
+    resumed = proxy_client.post(f"/admin/api/runs/{run_id}/resume")
+    assert resumed.status_code == 200
+    assert resumed.json()["run"]["is_active"] is True
+
+    with proxy_app.state.session_factory() as session:
+        runs = session.scalars(select(TaskRun).order_by(TaskRun.id)).all()
+        assert runs[0].paused_at is None
+        assert runs[0].ended_at is None
+        assert runs[1].id == second_id
+        assert runs[1].paused_at is not None
+        assert runs[1].ended_at is None
+
+    missing = proxy_client.post("/admin/api/runs/999/resume")
+    assert missing.status_code == 404
+
+    completed = proxy_client.post("/admin/runs/end", follow_redirects=False)
+    assert completed.status_code == 303
+    complete_resume = proxy_client.post(f"/admin/api/runs/{run_id}/resume")
+    assert complete_resume.status_code == 400
+
+
 def test_run_detail_uses_compact_header_for_active_run(proxy_client: TestClient) -> None:
     response = proxy_client.post(
         "/admin/runs/start",
@@ -1257,6 +1349,10 @@ def test_run_detail_shows_default_what_if_costs_without_mutating_snapshots(
 
     with proxy_app.state.session_factory() as session:
         record = session.scalars(select(RequestRecord)).one()
+        record.billing_provider_name = "Captured Provider"
+        record.billing_model = "captured-model"
+        record.billing_total_cost_usd = Decimal("0.000042")
+        session.commit()
         original_cost = record.billing_total_cost_usd
 
     detail = proxy_client.get("/admin/runs/1")
@@ -1279,6 +1375,8 @@ def test_run_detail_shows_default_what_if_costs_without_mutating_snapshots(
     assert api.status_code == 200
     assert data["selected_keys"] == ["openai:gpt-5.5", "openai:gpt-5.4-mini"]
     assert data["compared_count"] == 2
+    assert data["baseline"]["label"] == "Current run"
+    assert data["baseline"]["display"]["total_cost_usd"] == "$0.000042"
     labels = [scenario["label"] for scenario in data["scenarios"]]
     assert labels == ["GPT-5.5", "GPT-5.4 Mini"]
     totals = [scenario["display"]["total_cost_usd"] for scenario in data["scenarios"]]

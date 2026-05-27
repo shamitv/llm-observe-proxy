@@ -11,6 +11,7 @@ from llm_observe_proxy.admin import router as admin_router
 from llm_observe_proxy.config import Settings, get_settings
 from llm_observe_proxy.database import create_db_engine, create_session_factory, init_db
 from llm_observe_proxy.proxy import router as proxy_router
+from llm_observe_proxy.public_api import router as public_api_router
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -33,6 +34,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         title="LLM Observe Proxy",
         summary="OpenAI-compatible LLM proxy with SQLite observability.",
         version="0.4.0",
+        docs_url="/api/docs",
+        openapi_url="/api/openapi.json",
+        redoc_url=None,
         lifespan=lifespan,
     )
     app.state.settings = resolved_settings
@@ -42,6 +46,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return {"status": "ok"}
 
     app.include_router(proxy_router)
+    app.include_router(public_api_router)
     app.include_router(admin_router)
     app.mount(
         "/admin/static",

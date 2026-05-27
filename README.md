@@ -39,6 +39,8 @@ what-if comparisons.
 - Config-driven model routes for sending selected proxy-facing model names to different
   upstream `/v1` endpoints with optional upstream model rewrites, provider selection,
   and API key injection.
+- Public `/api/*` endpoints for model lookup, sanitized sample requests, run lifecycle
+  control, run stats, and captured request browsing.
 - Opt-in response compatibility fixes for known upstream quirks, with raw upstream
   response audit storage when a rewrite or warning occurs.
 - No authentication by default, intended for local or trusted development networks.
@@ -204,6 +206,14 @@ immediately. Routes loaded from `--models-file`, `LLM_OBSERVE_MODELS_FILE`, or
 `LLM_OBSERVE_MODELS_JSON` remain read-only in the UI, and duplicate startup model names
 are rejected.
 
+SQLite also seeds default exact routes from active model pricing rows, including aliases,
+so common provider model IDs can route without a separate `models.json` file. The Routing
+tab can preview or apply missing default routes for all providers or one provider. Seeded
+routes are marked as generated, use priority `90`, and stop being overwritten once you edit
+them. Hugging Face Router provider suffixes are forwarded as model IDs, while OpenRouter
+endpoint rows such as `model@provider-tag` are forwarded as `model` with provider pinning
+and fallbacks disabled.
+
 When a route has an API key, the proxy injects `Authorization: Bearer <key>` for the
 upstream request. Captured request headers remain the original client headers; injected
 keys are not stored or shown in the admin UI. UI-managed routes store only `api_key_env`;
@@ -269,11 +279,12 @@ upstream request URL starts with a configured provider URL.
 
 SQLite is seeded with editable standard paid text rates for legacy OpenAI, Anthropic, and
 Google Gemini rows plus a broader current catalog checked on May 23, 2026. The v0.4 seed
-catalog includes first-party rows for Alibaba/Qwen, DeepSeek, Z.ai, Moonshot/Kimi, and
-Mistral where suitable API pricing is published. OpenRouter and Hugging Face Router rows
-are seeded only as router-provider fallbacks. Seeded rows include source metadata, aliases,
-cached-input rates where available, and Qwen-style request-size tiers. Seeds are inserted
-only when missing, so UI edits are preserved.
+catalog includes first-party rows for Alibaba/Qwen, DeepSeek, xAI, Z.ai, Moonshot/Kimi,
+and Mistral where suitable API pricing is published. OpenRouter and Hugging Face Router
+rows are seeded as router-provider fallbacks and endpoint-specific options when available.
+Seeded rows include source metadata, aliases, cached-input rates only where cache-hit or
+cache-read pricing is published, and Qwen-style request-size tiers. Seeds are inserted only
+when missing, and older seed-owned rows can be refreshed without overwriting UI edits.
 The provider catalog also seeds `Local LLM` as an editable no-key local endpoint for
 fallback routing.
 
@@ -305,10 +316,13 @@ processing a video, comparing local and cloud models, or reproducing an agent is
 1. Open `/admin/runs` or use the run control on `/admin`.
 2. Enter a required run name and choose **Start run**.
 3. Run your application or benchmark through the proxy.
-4. Choose **End run** when the task is complete.
+4. Choose **Pause** to keep recording traffic outside the run, **Resume** to attach
+   new traffic to that run again, or **End run** when the task is complete.
 
-Starting a new run automatically ends any existing active run. Requests made while a run
-is active are linked to that run; requests outside a run are still captured normally.
+Starting a new run automatically ends any existing active run. Paused runs remain open
+and resumable, but only one run can be active at a time. Requests made while a run is
+active are linked to that run; requests outside a run, including while all runs are
+paused, are still captured normally.
 
 The request browser can filter by run, and request rows link back to their run. The run
 detail page reports LLM wall time from the first request start to the last response
@@ -351,17 +365,29 @@ Regenerate screenshots:
 ## Routes
 
 - `ANY /v1/{path:path}`: OpenAI-compatible pass-through proxy.
+- `GET /api/docs`: Swagger UI for the public integration API.
+- `GET /api/openapi.json`: OpenAPI JSON for the public integration API.
+- `GET /api/models`: routeable model discovery. See [docs/api/README.md](docs/api/README.md).
+- `GET /api/models/suggest`: bounded model-name typeahead suggestions.
+- `GET /api/models/lookup`: route lookup, API-key state, and sanitized sample request.
+- `GET /api/runs`, `POST /api/runs/start`, `POST /api/runs/end`: public run lifecycle API.
+- `GET /api/runs/{id}/stats`, `GET /api/runs/{id}/requests`: public run stats and traffic API.
+- `GET /api/requests`, `GET /api/requests/{id}`: public captured request browsing API.
 - `GET /admin`: request browser.
 - `GET /admin/requests/{id}`: request/response detail view.
 - `GET /admin/runs`: run browser and active run controls.
 - `GET /admin/runs/{id}`: run metrics, what-if cost comparison, and associated request list.
 - `POST /admin/runs/start`: start a named run, ending any active run first.
+- `POST /admin/runs/pause`: pause the active run.
+- `POST /admin/runs/{id}/resume`: resume an open paused run.
 - `POST /admin/runs/end`: end the active run.
 - `GET /admin/api/requests`: request browser JSON data with filters and pagination.
 - `GET /admin/api/requests/{id}`: request detail JSON data and rendered payload modes.
 - `GET /admin/api/runs`: run browser JSON data and active-run summary.
 - `GET /admin/api/runs/{id}`: run detail JSON metrics and associated request rows.
 - `POST /admin/api/runs/start`: start a run through JSON.
+- `POST /admin/api/runs/pause`: pause the active run through JSON.
+- `POST /admin/api/runs/{id}/resume`: resume an open paused run through JSON.
 - `POST /admin/api/runs/end`: end the active run through JSON.
 - `GET /admin/settings`: redirects to the Server settings tab.
 - `GET /admin/settings/server`: listener, upstream fallback, default fixes, route summary, test, and retention controls.
@@ -376,6 +402,9 @@ Regenerate screenshots:
 - `POST /admin/api/providers/health-checks`: run lightweight provider health checks.
 - `GET/POST /admin/api/routes`: route registry JSON list/create endpoints.
 - `GET/PUT/DELETE /admin/api/routes/{route_id}`: route JSON read/update/delete endpoints.
+- `POST /admin/api/routes/defaults/preview`: preview generated default routes from active prices.
+- `POST /admin/api/routes/defaults/apply`: insert missing or refresh generated default routes.
+- `POST /admin/api/routes/sample-request`: return proxy request snippets and sanitized upstream preview.
 - `POST /admin/api/routes/simulate`: simulate route resolution for a model name.
 - `POST /admin/api/pricing/catalog/preview`: preview current HF Router or OpenRouter pricing rows.
 - `POST /admin/api/pricing/catalog/apply`: apply selected catalog pricing rows and optionally fill missing cost estimates.

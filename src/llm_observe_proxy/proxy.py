@@ -65,6 +65,7 @@ router = APIRouter()
 @router.api_route(
     "/v1/{path:path}",
     methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"],
+    include_in_schema=False,
 )
 async def proxy_openai(path: str, request: Request) -> Response:
     settings = request.app.state.settings

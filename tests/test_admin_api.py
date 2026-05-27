@@ -127,7 +127,7 @@ def test_route_crud_and_simulation(proxy_client: TestClient) -> None:
 
     listed = proxy_client.get("/admin/api/routes?search=qwen")
     assert listed.status_code == 200
-    assert listed.json()["total"] == 1
+    assert listed.json()["total"] >= 1
 
     simulated = proxy_client.post(
         "/admin/api/routes/simulate",
@@ -152,6 +152,107 @@ def test_route_crud_and_simulation(proxy_client: TestClient) -> None:
 
     deleted = proxy_client.delete(f"/admin/api/routes/{route_id}")
     assert deleted.status_code == 200
+
+
+def test_default_route_preview_apply_and_sample_request(proxy_client: TestClient) -> None:
+    preview = proxy_client.post(
+        "/admin/api/routes/defaults/preview",
+        json={"provider_slug": "openai", "mode": "refresh_seeded"},
+    )
+    assert preview.status_code == 200
+    assert preview.json()["total_candidates"] >= 1
+
+    applied = proxy_client.post(
+        "/admin/api/routes/defaults/apply",
+        json={"provider_slug": "openai", "mode": "refresh_seeded"},
+    )
+    assert applied.status_code == 200
+    assert applied.json()["updated"] >= 1
+
+    simulated = proxy_client.post(
+        "/admin/api/routes/simulate",
+        json={"incoming_model": "gpt-5.4-mini"},
+    )
+    assert simulated.status_code == 200
+    data = simulated.json()
+    assert data["matched_route"] == "gpt-5.4-mini"
+    assert data["provider_slug"] == "openai"
+    assert "curl http://localhost:8080/v1/chat/completions" in data["sample_request"]["curl"]
+
+    sample = proxy_client.post(
+        "/admin/api/routes/sample-request",
+        json={"model": "gpt-5.4-mini", "provider_slug": "openai"},
+    )
+    assert sample.status_code == 200
+    sample_data = sample.json()
+    assert sample_data["upstream_preview"]["body"]["model"] == "gpt-5.4-mini"
+    assert "OPENAI_API_KEY" in sample_data["upstream_preview"]["headers"]["authorization"]
+
+
+def test_public_model_api_and_openapi_schema(proxy_client: TestClient) -> None:
+    openapi = proxy_client.get("/api/openapi.json")
+    assert openapi.status_code == 200
+    paths = openapi.json()["paths"]
+    assert "/api/models" in paths
+    assert "/api/models/lookup" in paths
+    assert "/admin/api/routes" not in paths
+    assert "/v1/{path}" not in paths
+
+    listed = proxy_client.get("/api/models?search=gpt-5.4-mini")
+    assert listed.status_code == 200
+    listed_data = listed.json()
+    assert listed_data["total"] >= 1
+    assert listed_data["items"][0]["client_model"] == "gpt-5.4-mini"
+
+    suggested = proxy_client.get("/api/models/suggest?q=gpt&limit=5")
+    assert suggested.status_code == 200
+    assert any(item["client_model"] == "gpt-5.4-mini" for item in suggested.json()["items"])
+
+    lookup = proxy_client.get("/api/models/lookup?model=gpt-5.4-mini")
+    assert lookup.status_code == 200
+    data = lookup.json()
+    assert data["status"] == "matched"
+    assert data["route"] == "gpt-5.4-mini"
+    assert data["provider_slug"] == "openai"
+    assert data["upstream_model"] == "gpt-5.4-mini"
+    assert data["api_key_state"] in {"configured", "missing"}
+    assert "curl http://localhost:8080/v1/chat/completions" in data["sample_request"]["curl"]
+
+
+def test_public_run_and_request_api(proxy_client: TestClient) -> None:
+    started = proxy_client.post(
+        "/api/runs/start",
+        json={"name": "Public API benchmark", "notes": "external app"},
+    )
+    assert started.status_code == 200
+    run_id = started.json()["run"]["id"]
+    assert started.json()["run"]["is_active"] is True
+
+    captured = proxy_client.post(
+        "/v1/chat/completions",
+        json={"model": "gpt-test", "messages": [{"role": "user", "content": "hello"}]},
+    )
+    assert captured.status_code == 200
+
+    runs = proxy_client.get("/api/runs")
+    assert runs.status_code == 200
+    assert runs.json()["active_run"]["id"] == run_id
+
+    stats = proxy_client.get(f"/api/runs/{run_id}/stats")
+    assert stats.status_code == 200
+    assert stats.json()["stats"]["request_count"] == 1
+
+    run_requests = proxy_client.get(f"/api/runs/{run_id}/requests")
+    assert run_requests.status_code == 200
+    assert run_requests.json()["items"][0]["model"] == "gpt-test"
+
+    requests = proxy_client.get("/api/requests?model=gpt-test")
+    assert requests.status_code == 200
+    assert requests.json()["items"][0]["task_run"]["id"] == run_id
+
+    ended = proxy_client.post("/api/runs/end")
+    assert ended.status_code == 200
+    assert ended.json()["run"]["is_active"] is False
 
 
 def test_retention_preview_and_trim(proxy_client: TestClient, proxy_app) -> None:

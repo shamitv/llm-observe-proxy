@@ -60,7 +60,7 @@
         <tbody>
           {% for route in model_routes %}
           <tr data-search-text="{{ route.model }} {{ route.upstream_url }} {{ route.upstream_model }} {{ route.provider_name | default(route.provider_slug, true) }}" data-status="{{ 'active' if route.active else 'inactive' }}" data-provider="{{ route.provider_slug | default('', true) }}" data-route-row data-route-id="{{ route.id | default('', true) }}" data-route-model="{{ route.model }}" data-route-match-type="{{ route.match_type }}" data-route-upstream-url="{{ route.upstream_url }}" data-route-upstream-model="{{ route.upstream_model }}" data-route-provider="{{ route.provider_slug | default('', true) }}" data-route-api-key-env="{{ route.api_key_env | default('', true) }}" data-route-fixes="{{ route.fixes_text | default('', true) }}" data-route-priority="{{ route.priority | default(50, true) }}" data-route-active="{{ 'yes' if route.active else 'no' }}" data-route-override-fallback="{{ 'yes' if route.override_fallback else 'no' }}">
-            <td><code>{{ route.model }}</code><small>{{ "Settings" if route.editable else "Startup" }}</small></td>
+            <td><code>{{ route.model }}</code><small>{{ route.source | default("settings", true) | title }}</small></td>
             <td>{{ route.match_type }}</td>
             <td><code>{{ route.upstream_url }}</code></td>
             <td><code>{{ route.upstream_model }}</code></td>
@@ -85,6 +85,39 @@
           {% endfor %}
         </tbody>
       </table>
+    </div>
+  </article>
+
+  <article class="card diagnostics-card">
+    <div class="card-header">
+      <div>
+        <h2>Default Route Discovery</h2>
+        <p>Create routes from active provider pricing rows and aliases.</p>
+      </div>
+      {{ badges.status_badge("Seeded") }}
+    </div>
+    <form class="inline-tool-form" data-default-routes>
+      <label class="form-field">
+        <span>Provider</span>
+        <select name="provider_slug">
+          <option value="">All providers</option>
+          {% for provider in providers %}
+          <option value="{{ provider.slug }}">{{ provider.name }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label class="form-field">
+        <span>Mode</span>
+        <select name="mode">
+          <option value="missing_only">Missing routes only</option>
+          <option value="refresh_seeded">Refresh seeded routes</option>
+        </select>
+      </label>
+      <button class="button ghost button-ghost" type="submit" data-default-route-action="preview">{{ icons.icon("search", class_name="button-icon") }}<span>Preview</span></button>
+      <button class="button primary button-primary" type="submit" data-default-route-action="apply">{{ icons.icon("settings", class_name="button-icon") }}<span>Apply</span></button>
+    </form>
+    <div class="result-panel" data-default-routes-result>
+      <p class="muted">Preview or apply generated routes for known models.</p>
     </div>
   </article>
 
@@ -184,6 +217,9 @@
     </form>
     <div class="result-panel" data-route-simulator-result>
       <p class="muted">Simulation results will appear here.</p>
+    </div>
+    <div class="result-panel" data-route-sample-result>
+      <p class="muted">A sample request appears after simulation.</p>
     </div>
   </article>
 

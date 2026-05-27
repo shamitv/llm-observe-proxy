@@ -16,6 +16,8 @@ from llm_observe_proxy.database import (
     ImageAsset,
     RequestRecord,
     end_active_task_run,
+    pause_active_task_run,
+    resume_task_run,
     session_scope,
     start_task_run,
     upsert_model_price,
@@ -587,6 +589,36 @@ def test_requests_are_associated_with_active_task_run(
         records = session.scalars(select(RequestRecord).order_by(RequestRecord.id)).all()
         assert records[0].task_run_id == task_run_id
         assert records[1].task_run_id is None
+
+
+def test_paused_run_records_new_requests_as_non_run_traffic(
+    proxy_client: TestClient,
+    proxy_app: FastAPI,
+) -> None:
+    with session_scope(proxy_app.state.session_factory) as session:
+        task_run = start_task_run(session, "Pause benchmark")
+        task_run_id = task_run.id
+        paused_run = pause_active_task_run(session)
+        assert paused_run is not None
+        assert paused_run.id == task_run_id
+
+    proxy_client.post(
+        "/v1/chat/completions",
+        json={"model": "gpt-test", "messages": [{"role": "user", "content": "paused"}]},
+    )
+
+    with session_scope(proxy_app.state.session_factory) as session:
+        resume_task_run(session, task_run_id)
+
+    proxy_client.post(
+        "/v1/chat/completions",
+        json={"model": "gpt-test", "messages": [{"role": "user", "content": "resumed"}]},
+    )
+
+    with proxy_app.state.session_factory() as session:
+        records = session.scalars(select(RequestRecord).order_by(RequestRecord.id)).all()
+        assert records[0].task_run_id is None
+        assert records[1].task_run_id == task_run_id
 
 
 def test_streaming_request_keeps_task_run_after_run_ends(

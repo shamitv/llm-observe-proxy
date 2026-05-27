@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import json
 import subprocess
 import sys
@@ -34,6 +35,7 @@ from llm_observe_proxy.database import (
     create_session_factory,
     delete_model_price_tier,
     init_db,
+    seed_default_model_pricing,
     session_scope,
     set_incoming_server,
     upsert_model_price,
@@ -605,6 +607,15 @@ def test_init_db_seeds_model_pricing_without_overwriting_edits(tmp_path) -> None
         ).one()
         assert mistral_successor_price.cached_input_usd_per_million == Decimal("0.150000")
 
+        xai_price = session.scalars(
+            select(ModelPrice).where(
+                ModelPrice.provider_slug == "xai",
+                ModelPrice.model == "grok-4.3",
+            )
+        ).one()
+        assert xai_price.cached_input_usd_per_million == Decimal("0.200000")
+        assert xai_price.source_url == "https://docs.x.ai/developers/pricing"
+
     init_db(engine)
 
     with session_scope(session_factory) as session:
@@ -630,10 +641,27 @@ def test_init_db_seeds_model_pricing_without_overwriting_edits(tmp_path) -> None
         "local-llm",
         "moonshot",
         "openrouter",
+        "xai",
     } <= set(providers)
     assert edited_price.input_usd_per_million == Decimal("123.000000")
     assert edited_openrouter_price.input_usd_per_million == Decimal("999.000000")
     assert price_count >= 51
+
+
+def test_default_model_price_seed_dicts_have_unique_keys() -> None:
+    source = Path("src/llm_observe_proxy/database.py").read_text(encoding="utf-8")
+    module = ast.parse(source)
+    duplicate_keys: list[str] = []
+    for node in ast.walk(module):
+        if not isinstance(node, ast.Dict):
+            continue
+        keys: list[str] = []
+        for key in node.keys:
+            if isinstance(key, ast.Constant) and isinstance(key.value, str):
+                keys.append(key.value)
+        duplicate_keys.extend(sorted({key for key in keys if keys.count(key) > 1}))
+
+    assert duplicate_keys == []
 
 
 def test_init_db_refreshes_only_seed_owned_model_pricing_rows(tmp_path) -> None:
@@ -1065,6 +1093,48 @@ def test_init_db_upgrades_existing_sqlite_model_prices_with_source_and_tiers(
     assert legacy_model == "legacy-model"
 
 
+def test_seed_default_model_pricing_backfills_openai_legacy_scalar_rows(tmp_path) -> None:
+    db_path = tmp_path / "legacy-openai-seed.sqlite3"
+    settings = Settings(database_url=f"sqlite:///{db_path.as_posix()}")
+    engine = create_db_engine(settings.database_url)
+    init_db(engine)
+    session_factory = create_session_factory(engine)
+
+    with session_scope(session_factory) as session:
+        session.execute(
+            text(
+                "UPDATE model_prices "
+                "SET cached_input_usd_per_million = NULL, "
+                "source_url = NULL, "
+                "checked_at = NULL, "
+                "release_date = NULL, "
+                "notes = 'Seeded from official standard paid text pricing checked on 2026-05-03.' "
+                "WHERE provider_slug = 'openai' AND model = 'gpt-5.4-mini'"
+            )
+        )
+
+    seed_default_model_pricing(engine)
+
+    with session_scope(session_factory) as session:
+        mini = session.scalar(
+            select(ModelPrice).where(
+                ModelPrice.provider_slug == "openai",
+                ModelPrice.model == "gpt-5.4-mini",
+            )
+        )
+        assert mini is not None
+        assert mini.cached_input_usd_per_million == Decimal("0.075")
+        assert (
+            mini.source_url
+            == "https://developers.openai.com/api/docs/models/gpt-5.4-mini"
+        )
+        assert mini.checked_at == "2026-05-23"
+        assert mini.release_date == "2026-03-17"
+        assert mini.notes == "Official OpenAI text-token rates."
+
+    engine.dispose()
+
+
 def test_cost_estimator_handles_rates_aliases_unknowns_and_missing_usage(tmp_path) -> None:
     db_path = tmp_path / "estimator.sqlite3"
     settings = Settings(database_url=f"sqlite:///{db_path.as_posix()}")
@@ -1356,6 +1426,8 @@ def test_init_db_upgrades_existing_sqlite_request_records_with_route_metadata(tm
     engine.dispose()
 
     assert {
+        "created_at",
+        "model",
         "task_run_id",
         "upstream_model",
         "model_route",
@@ -1389,6 +1461,9 @@ def test_init_db_upgrades_existing_sqlite_request_records_with_route_metadata(tm
         "release_date",
     }.issubset(tier_columns)
     assert {
+        "ix_request_records_created_at",
+        "ix_request_records_model_created_at",
+        "ix_request_records_model_route_created_at",
         "ix_request_records_task_run_id",
         "ix_request_records_upstream_model",
         "ix_request_records_model_route",
@@ -1398,3 +1473,40 @@ def test_init_db_upgrades_existing_sqlite_request_records_with_route_metadata(tm
         "ix_request_records_response_was_rewritten",
     }.issubset(indexes)
     assert ids == [42]
+
+
+def test_init_db_upgrades_existing_sqlite_task_runs_with_paused_at(tmp_path) -> None:
+    db_path = tmp_path / "legacy-runs.sqlite3"
+    settings = Settings(database_url=f"sqlite:///{db_path.as_posix()}")
+    engine = create_db_engine(settings.database_url)
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "CREATE TABLE task_runs ("
+                "id INTEGER PRIMARY KEY, "
+                "name VARCHAR(256) NOT NULL, "
+                "notes TEXT, "
+                "started_at DATETIME NOT NULL, "
+                "ended_at DATETIME, "
+                "summary TEXT, "
+                "metadata_json TEXT)"
+            )
+        )
+        connection.execute(
+            text(
+                "INSERT INTO task_runs "
+                "(id, name, started_at) "
+                "VALUES (7, 'legacy', '2026-05-01 00:00:00')"
+            )
+        )
+
+    init_db(engine)
+
+    inspector = inspect(engine)
+    columns = {column["name"] for column in inspector.get_columns("task_runs")}
+    with engine.connect() as connection:
+        rows = connection.execute(text("SELECT id, paused_at FROM task_runs")).all()
+    engine.dispose()
+
+    assert "paused_at" in columns
+    assert rows == [(7, None)]

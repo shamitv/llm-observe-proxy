@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from collections.abc import Iterator
 from contextlib import contextmanager
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
@@ -12,6 +13,7 @@ from sqlalchemy import (
     Boolean,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     LargeBinary,
     Numeric,
@@ -52,6 +54,9 @@ from llm_observe_proxy.config import (
 
 MODEL_ROUTES_SETTING_KEY = "model_routes_json"
 DEFAULT_COMPAT_FIXES_SETTING_KEY = "default_compat_fixes_json"
+DEFAULT_ROUTES_SEEDED_AT_SETTING_KEY = "default_routes_seeded_at"
+DEFAULT_ROUTE_SEED_OWNER = "default-route-seed"
+DEFAULT_ROUTE_SEED_PRIORITY = 90
 DEFAULT_PRICING_CHECKED_AT = "2026-05-23"
 DEFAULT_PRICING_SOURCE = (
     "Seeded static catalog checked on 2026-05-23. Verify provider pricing before "
@@ -69,6 +74,7 @@ GOOGLE_GEMINI_PRICING_URL = "https://ai.google.dev/gemini-api/docs/pricing"
 ALIBABA_PRICING_URL = "https://www.alibabacloud.com/help/en/model-studio/model-pricing"
 ALIBABA_CACHE_URL = "https://www.alibabacloud.com/help/en/model-studio/context-cache"
 DEEPSEEK_PRICING_URL = "https://api-docs.deepseek.com/quick_start/pricing"
+XAI_PRICING_URL = "https://docs.x.ai/developers/pricing"
 ZAI_PRICING_URL = "https://docs.z.ai/guides/overview/pricing"
 KIMI_K26_PRICING_URL = "https://platform.kimi.ai/docs/pricing/chat-k26"
 KIMI_K25_PRICING_URL = "https://platform.kimi.ai/docs/pricing/chat-k25"
@@ -136,6 +142,14 @@ DEFAULT_MODEL_PROVIDERS = (
         "currency": "USD",
         "api_key_env": "DEEPSEEK_API_KEY",
         "capabilities_json": '{"text":true,"tool_calling":true}',
+    },
+    {
+        "slug": "xai",
+        "name": "xAI",
+        "upstream_url": "https://api.x.ai/v1",
+        "currency": "USD",
+        "api_key_env": "XAI_API_KEY",
+        "capabilities_json": '{"text":true,"tool_calling":true,"vision":true}',
     },
     {
         "slug": "zai",
@@ -535,6 +549,31 @@ DEFAULT_MODEL_PRICES = (
         ),
     },
     {
+        "provider_slug": "xai",
+        "model": "grok-4.3",
+        "display_name": "Grok 4.3",
+        "input_usd_per_million": "1.25",
+        "cached_input_usd_per_million": "0.20",
+        "output_usd_per_million": "2.50",
+        "aliases": ("grok-4.3-latest", "grok-latest"),
+        "source_url": XAI_PRICING_URL,
+        "checked_at": DEFAULT_PRICING_CHECKED_AT,
+        "release_date": "2026-05-15",
+        "notes": "Official xAI pricing lists input, cached input, and output token rates.",
+    },
+    {
+        "provider_slug": "xai",
+        "model": "grok-build-0.1",
+        "display_name": "Grok Build 0.1",
+        "input_usd_per_million": "1.00",
+        "cached_input_usd_per_million": "0.20",
+        "output_usd_per_million": "2.00",
+        "source_url": XAI_PRICING_URL,
+        "checked_at": DEFAULT_PRICING_CHECKED_AT,
+        "release_date": "2026-05-15",
+        "notes": "Official xAI pricing lists input, cached input, and output token rates.",
+    },
+    {
         "provider_slug": "zai",
         "model": "glm-5.1",
         "display_name": "GLM-5.1",
@@ -848,6 +887,60 @@ DEFAULT_MODEL_PRICES = (
     },
     {
         "provider_slug": "openrouter",
+        "model": "qwen/qwen3.6-27b",
+        "display_name": "Qwen3.6 27B (OpenRouter)",
+        "input_usd_per_million": "0.30",
+        "cached_input_usd_per_million": "0.15",
+        "output_usd_per_million": "2.00",
+        "aliases": ("Qwen/Qwen3.6-27B", "qwen3.6-27b", "qwen-3.6-27b"),
+        "source_url": OPENROUTER_MODELS_URL,
+        "checked_at": DEFAULT_PRICING_CHECKED_AT,
+        "release_date": "2026-04-22",
+        "notes": "OpenRouter fallback row for Qwen3.6 27B.",
+    },
+    {
+        "provider_slug": "openrouter",
+        "model": "qwen/qwen3.6-27b@chutes/fp8",
+        "display_name": "Qwen3.6 27B (Chutes, OpenRouter)",
+        "input_usd_per_million": "0.30",
+        "cached_input_usd_per_million": "0.15",
+        "output_usd_per_million": "2.00",
+        "aliases": ("qwen/qwen3.6-27b:chutes/fp8",),
+        "source_url": OPENROUTER_MODELS_URL,
+        "checked_at": DEFAULT_PRICING_CHECKED_AT,
+        "release_date": "2026-04-22",
+        "notes": "OpenRouter endpoint row; route generation pins provider order.",
+    },
+    {
+        "provider_slug": "openrouter",
+        "model": "google/gemma-4-26b-a4b-it",
+        "display_name": "Gemma 4 26B A4B IT (OpenRouter)",
+        "input_usd_per_million": "0.07",
+        "output_usd_per_million": "0.34",
+        "aliases": (
+            "google/gemma-4-26B-A4B-it",
+            "gemma-4-26b",
+            "gemma-4-26b-a4b-it",
+        ),
+        "source_url": OPENROUTER_MODELS_URL,
+        "checked_at": DEFAULT_PRICING_CHECKED_AT,
+        "release_date": "2026-04-03",
+        "notes": "OpenRouter fallback row for Gemma 4 26B A4B IT.",
+    },
+    {
+        "provider_slug": "openrouter",
+        "model": "google/gemma-4-26b-a4b-it@deepinfra/fp8",
+        "display_name": "Gemma 4 26B A4B IT (DeepInfra, OpenRouter)",
+        "input_usd_per_million": "0.07",
+        "output_usd_per_million": "0.34",
+        "aliases": ("google/gemma-4-26b-a4b-it:deepinfra/fp8",),
+        "source_url": OPENROUTER_MODELS_URL,
+        "checked_at": DEFAULT_PRICING_CHECKED_AT,
+        "release_date": "2026-04-03",
+        "notes": "OpenRouter endpoint row; route generation pins provider order.",
+    },
+    {
+        "provider_slug": "openrouter",
         "model": "deepseek/deepseek-v3.2-speciale",
         "display_name": "DeepSeek V3.2 Speciale (OpenRouter)",
         "input_usd_per_million": "0.287",
@@ -1054,10 +1147,80 @@ _LEGACY_SCALAR_SEED_MODEL_PRICES = (
     },
 )
 
-DEFAULT_MODEL_PRICE_REVISIONS = {
-    (str(price["provider_slug"]), str(price["model"])): price
-    for price in _LEGACY_SCALAR_SEED_MODEL_PRICES
-}
+_OPENAI_PRE_METADATA_SEED_NOTE = (
+    "Seeded from official standard paid text pricing checked on 2026-05-03."
+)
+
+_OPENAI_PRE_METADATA_SEED_MODEL_PRICES = (
+    {
+        "provider_slug": "openai",
+        "model": "gpt-5.5",
+        "display_name": "GPT-5.5",
+        "input_usd_per_million": "5.00",
+        "output_usd_per_million": "30.00",
+        "notes": _OPENAI_PRE_METADATA_SEED_NOTE,
+    },
+    {
+        "provider_slug": "openai",
+        "model": "gpt-5.5-pro",
+        "display_name": "GPT-5.5 Pro",
+        "input_usd_per_million": "30.00",
+        "output_usd_per_million": "180.00",
+        "notes": _OPENAI_PRE_METADATA_SEED_NOTE,
+    },
+    {
+        "provider_slug": "openai",
+        "model": "gpt-5.4",
+        "display_name": "GPT-5.4",
+        "input_usd_per_million": "2.50",
+        "output_usd_per_million": "15.00",
+        "notes": _OPENAI_PRE_METADATA_SEED_NOTE,
+    },
+    {
+        "provider_slug": "openai",
+        "model": "gpt-5.4-mini",
+        "display_name": "GPT-5.4 Mini",
+        "input_usd_per_million": "0.75",
+        "output_usd_per_million": "4.50",
+        "notes": _OPENAI_PRE_METADATA_SEED_NOTE,
+    },
+    {
+        "provider_slug": "openai",
+        "model": "gpt-5.4-nano",
+        "display_name": "GPT-5.4 Nano",
+        "input_usd_per_million": "0.20",
+        "output_usd_per_million": "1.25",
+        "notes": _OPENAI_PRE_METADATA_SEED_NOTE,
+    },
+    {
+        "provider_slug": "openai",
+        "model": "gpt-5.4-nano",
+        "display_name": "GPT-5.4 Nano",
+        "input_usd_per_million": "0.20",
+        "cached_input_usd_per_million": "0.02",
+        "output_usd_per_million": "1.25",
+        "notes": _OPENAI_PRE_METADATA_SEED_NOTE,
+    },
+    {
+        "provider_slug": "openai",
+        "model": "gpt-5.4-pro",
+        "display_name": "GPT-5.4 Pro",
+        "input_usd_per_million": "30.00",
+        "output_usd_per_million": "180.00",
+        "notes": _OPENAI_PRE_METADATA_SEED_NOTE,
+    },
+)
+
+DEFAULT_MODEL_PRICE_REVISIONS: dict[tuple[str, str], tuple[dict[str, object], ...]] = {}
+for _revision_seed in (
+    *_LEGACY_SCALAR_SEED_MODEL_PRICES,
+    *_OPENAI_PRE_METADATA_SEED_MODEL_PRICES,
+):
+    _key = (str(_revision_seed["provider_slug"]), str(_revision_seed["model"]))
+    DEFAULT_MODEL_PRICE_REVISIONS[_key] = (
+        *DEFAULT_MODEL_PRICE_REVISIONS.get(_key, ()),
+        _revision_seed,
+    )
 
 
 def _now() -> datetime:
@@ -1080,6 +1243,11 @@ class TaskRun(Base):
         nullable=True,
         index=True,
     )
+    paused_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        index=True,
+    )
     summary: Mapped[str | None] = mapped_column(Text, nullable=True)
     metadata_json: Mapped[str | None] = mapped_column(Text, nullable=True)
 
@@ -1088,6 +1256,10 @@ class TaskRun(Base):
 
 class RequestRecord(Base):
     __tablename__ = "request_records"
+    __table_args__ = (
+        Index("ix_request_records_model_created_at", "model", "created_at"),
+        Index("ix_request_records_model_route_created_at", "model_route", "created_at"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     task_run_id: Mapped[int | None] = mapped_column(
@@ -1095,7 +1267,7 @@ class RequestRecord(Base):
         nullable=True,
         index=True,
     )
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, index=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     method: Mapped[str] = mapped_column(String(16))
     path: Mapped[str] = mapped_column(String(1024))
@@ -1221,6 +1393,7 @@ class ModelRouteDB(Base):
     )
     api_key_env: Mapped[str | None] = mapped_column(String(128), nullable=True)
     compatibility_fixes_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    managed_by: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     override_fallback: Mapped[bool] = mapped_column(Boolean, default=False)
     priority: Mapped[int] = mapped_column(Integer, default=50)
     active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
@@ -1358,11 +1531,14 @@ def create_session_factory(engine: Engine) -> SessionFactory:
 
 def init_db(engine: Engine) -> None:
     Base.metadata.create_all(engine)
+    _ensure_sqlite_task_run_schema(engine)
     _ensure_sqlite_request_record_schema(engine)
     _ensure_sqlite_model_provider_schema(engine)
+    _ensure_sqlite_model_route_schema(engine)
     _ensure_sqlite_model_price_schema(engine)
     seed_default_model_pricing(engine)
     _migrate_json_blob_routes(engine)
+    seed_default_model_routes_once(engine)
 
 
 @contextmanager
@@ -1703,6 +1879,7 @@ def upsert_model_route_db(
     override_fallback: bool = False,
     priority: int | str = 50,
     active: bool = True,
+    managed_by: str | None = None,
     route_id: int | None = None,
 ) -> ModelRouteDB:
     pattern = incoming_model.strip()
@@ -1749,6 +1926,7 @@ def upsert_model_route_db(
     route.compatibility_fixes_json = (
         json.dumps(list(fixes), ensure_ascii=False, separators=(",", ":")) if fixes else None
     )
+    route.managed_by = _optional_metadata(managed_by, "Managed by", max_length=64)
     route.override_fallback = bool(override_fallback)
     route.priority = resolved_priority
     route.active = bool(active)
@@ -1906,6 +2084,300 @@ def delete_model_price(session: Session, provider_slug: str, model: str) -> bool
     return True
 
 
+@dataclass(frozen=True)
+class DefaultRouteCandidate:
+    incoming_model: str
+    upstream_url: str
+    upstream_model: str
+    provider_slug: str
+    api_key_env: str | None
+    priority: int
+    source_model: str
+    source_alias: str | None = None
+
+    @property
+    def key(self) -> tuple[str, str]:
+        return (self.incoming_model, "exact")
+
+    @property
+    def cost_sort_value(self) -> Decimal:
+        return Decimal("0")
+
+
+ROUTER_PROVIDER_SLUGS = frozenset({"huggingface-router", "openrouter"})
+
+
+def build_default_model_route_candidates(
+    session: Session,
+    *,
+    provider_slug: str | None = None,
+) -> list[DefaultRouteCandidate]:
+    resolved_provider_slug = normalize_provider_slug(provider_slug)
+    stmt = (
+        select(ModelPrice)
+        .join(ModelProvider)
+        .options(contains_eager(ModelPrice.provider))
+        .where(ModelPrice.active.is_(True))
+        .where(ModelProvider.active.is_(True))
+        .where(ModelProvider.upstream_url.is_not(None))
+        .order_by(ModelProvider.name, ModelPrice.model)
+    )
+    if resolved_provider_slug:
+        stmt = stmt.where(ModelPrice.provider_slug == resolved_provider_slug)
+    prices = list(session.scalars(stmt).all())
+    cheapest_router_models = _cheapest_router_endpoint_models(prices)
+    candidates: list[tuple[tuple[object, ...], DefaultRouteCandidate]] = []
+
+    for price in prices:
+        provider = price.provider
+        if provider is None or not provider.upstream_url:
+            continue
+        try:
+            upstream_url = normalize_upstream_url(provider.upstream_url)
+        except ValueError:
+            continue
+        upstream_model = _default_route_upstream_model(price, cheapest_router_models)
+        for incoming_model, alias in _default_route_incoming_models(price):
+            candidate = DefaultRouteCandidate(
+                incoming_model=incoming_model,
+                upstream_url=upstream_url,
+                upstream_model=upstream_model,
+                provider_slug=provider.slug,
+                api_key_env=provider.api_key_env,
+                priority=DEFAULT_ROUTE_SEED_PRIORITY,
+                source_model=price.model,
+                source_alias=alias,
+            )
+            candidates.append((_default_route_candidate_sort_key(candidate, price), candidate))
+
+    deduped: dict[tuple[str, str], DefaultRouteCandidate] = {}
+    for _sort_key, candidate in sorted(candidates, key=lambda item: item[0]):
+        deduped.setdefault(candidate.key, candidate)
+    return sorted(
+        deduped.values(),
+        key=lambda candidate: (candidate.provider_slug, candidate.incoming_model),
+    )
+
+
+def preview_default_model_routes(
+    session: Session,
+    *,
+    provider_slug: str | None = None,
+    mode: str = "missing_only",
+) -> dict[str, object]:
+    candidates = build_default_model_route_candidates(session, provider_slug=provider_slug)
+    return _default_route_seed_summary(session, candidates, mode=mode, apply=False)
+
+
+def apply_default_model_routes(
+    session: Session,
+    *,
+    provider_slug: str | None = None,
+    mode: str = "missing_only",
+) -> dict[str, object]:
+    candidates = build_default_model_route_candidates(session, provider_slug=provider_slug)
+    summary = _default_route_seed_summary(session, candidates, mode=mode, apply=True)
+    set_setting(session, DEFAULT_ROUTES_SEEDED_AT_SETTING_KEY, _now().isoformat())
+    return summary
+
+
+def seed_default_model_routes_once(engine: Engine) -> None:
+    with Session(engine) as session:
+        if get_setting(session, DEFAULT_ROUTES_SEEDED_AT_SETTING_KEY):
+            return
+        apply_default_model_routes(session, mode="missing_only")
+        session.commit()
+
+
+def _default_route_seed_summary(
+    session: Session,
+    candidates: list[DefaultRouteCandidate],
+    *,
+    mode: str,
+    apply: bool,
+) -> dict[str, object]:
+    resolved_mode = mode.strip().lower() if mode else "missing_only"
+    if resolved_mode not in {"missing_only", "refresh_seeded"}:
+        raise ValueError("Default route mode must be missing_only or refresh_seeded.")
+
+    inserted = 0
+    updated = 0
+    skipped_existing = 0
+    skipped_user = 0
+    items: list[dict[str, object]] = []
+    for candidate in candidates:
+        existing = session.scalar(
+            select(ModelRouteDB).where(
+                ModelRouteDB.incoming_model == candidate.incoming_model,
+                ModelRouteDB.match_type == "exact",
+            )
+        )
+        status = "insert"
+        route_id = None
+        if existing is not None:
+            route_id = existing.id
+            if existing.managed_by != DEFAULT_ROUTE_SEED_OWNER:
+                skipped_user += 1
+                status = "skip_user_route"
+            elif resolved_mode == "refresh_seeded":
+                updated += 1
+                status = "update_seeded_route"
+            else:
+                skipped_existing += 1
+                status = "skip_existing_seeded_route"
+        else:
+            inserted += 1
+
+        if apply and status in {"insert", "update_seeded_route"}:
+            upsert_model_route_db(
+                session,
+                route_id=route_id,
+                incoming_model=candidate.incoming_model,
+                match_type="exact",
+                upstream_url=candidate.upstream_url,
+                upstream_model=candidate.upstream_model,
+                provider_slug=candidate.provider_slug,
+                api_key_env=candidate.api_key_env or "",
+                compatibility_fixes=(),
+                priority=candidate.priority,
+                active=True,
+                managed_by=DEFAULT_ROUTE_SEED_OWNER,
+            )
+        items.append(_default_route_candidate_row(candidate, status))
+
+    return {
+        "mode": resolved_mode,
+        "managed_by": DEFAULT_ROUTE_SEED_OWNER,
+        "total_candidates": len(candidates),
+        "inserted": inserted,
+        "updated": updated,
+        "skipped_existing": skipped_existing,
+        "skipped_user": skipped_user,
+        "items": items[:200],
+        "truncated": len(items) > 200,
+    }
+
+
+def _default_route_candidate_row(
+    candidate: DefaultRouteCandidate,
+    status: str,
+) -> dict[str, object]:
+    return {
+        "incoming_model": candidate.incoming_model,
+        "match_type": "exact",
+        "upstream_url": candidate.upstream_url,
+        "upstream_model": candidate.upstream_model,
+        "provider_slug": candidate.provider_slug,
+        "api_key_env": candidate.api_key_env,
+        "priority": candidate.priority,
+        "source_model": candidate.source_model,
+        "source_alias": candidate.source_alias,
+        "status": status,
+    }
+
+
+def _default_route_incoming_models(price: ModelPrice) -> list[tuple[str, str | None]]:
+    incoming = [(price.model, None)]
+    if price.provider_slug == "openrouter" and "@" in price.model:
+        base_model, provider_tag = _split_openrouter_endpoint_model(price.model)
+        if base_model and provider_tag:
+            incoming.append((f"{base_model}:{provider_tag}", price.model))
+    for alias in _model_price_aliases(price):
+        incoming.append((alias, alias))
+
+    deduped: list[tuple[str, str | None]] = []
+    seen: set[str] = set()
+    for model, alias in incoming:
+        normalized = model.strip()
+        if normalized and normalized not in seen:
+            deduped.append((normalized, alias))
+            seen.add(normalized)
+    return deduped
+
+
+def _default_route_upstream_model(
+    price: ModelPrice,
+    cheapest_router_models: dict[tuple[str, str], str],
+) -> str:
+    base_model = _router_base_model(price.provider_slug, price.model)
+    if base_model is None or base_model != price.model:
+        return price.model
+    return cheapest_router_models.get((price.provider_slug, base_model), price.model)
+
+
+def _cheapest_router_endpoint_models(prices: list[ModelPrice]) -> dict[tuple[str, str], str]:
+    endpoint_rows: dict[tuple[str, str], list[ModelPrice]] = {}
+    for price in prices:
+        base_model = _router_base_model(price.provider_slug, price.model)
+        if base_model is None or base_model == price.model:
+            continue
+        endpoint_rows.setdefault((price.provider_slug, base_model), []).append(price)
+
+    cheapest: dict[tuple[str, str], str] = {}
+    for key, rows in endpoint_rows.items():
+        selected = min(rows, key=_router_endpoint_price_sort_key)
+        cheapest[key] = selected.model
+    return cheapest
+
+
+def _router_endpoint_price_sort_key(price: ModelPrice) -> tuple[Decimal, int, str]:
+    total = (price.input_usd_per_million or Decimal("0")) + (
+        price.output_usd_per_million or Decimal("0")
+    )
+    cached_rank = 0 if price.cached_input_usd_per_million is not None else 1
+    return (total, cached_rank, price.model)
+
+
+def _router_base_model(provider_slug: str | None, model: str) -> str | None:
+    if provider_slug == "openrouter":
+        base_model, provider_tag = _split_openrouter_endpoint_model(model)
+        return base_model if provider_tag else model
+    if provider_slug == "huggingface-router":
+        base_model, separator, provider_name = model.rpartition(":")
+        if base_model and separator and provider_name:
+            return base_model
+        return model
+    return None
+
+
+def _split_openrouter_endpoint_model(model: str) -> tuple[str | None, str | None]:
+    base_model, separator, provider_tag = model.partition("@")
+    if not separator or not base_model or not provider_tag:
+        return None, None
+    return base_model, provider_tag
+
+
+def _default_route_candidate_sort_key(
+    candidate: DefaultRouteCandidate,
+    price: ModelPrice,
+) -> tuple[object, ...]:
+    alias_rank = 0 if candidate.source_alias is None else 1
+    provider_rank = 1 if candidate.provider_slug in ROUTER_PROVIDER_SLUGS else 0
+    total = (price.input_usd_per_million or Decimal("0")) + (
+        price.output_usd_per_million or Decimal("0")
+    )
+    return (
+        candidate.incoming_model,
+        alias_rank,
+        provider_rank,
+        total,
+        candidate.provider_slug,
+        candidate.source_model,
+    )
+
+
+def _model_price_aliases(price: ModelPrice) -> list[str]:
+    if not price.aliases_json:
+        return []
+    try:
+        aliases = json.loads(price.aliases_json)
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(aliases, list):
+        return []
+    return [alias.strip() for alias in aliases if isinstance(alias, str) and alias.strip()]
+
+
 def seed_default_model_pricing(engine: Engine) -> None:
     with Session(engine) as session:
         for provider_data in DEFAULT_MODEL_PROVIDERS:
@@ -1931,10 +2403,10 @@ def seed_default_model_pricing(engine: Engine) -> None:
                 )
             )
             if existing is not None:
-                previous_seed = DEFAULT_MODEL_PRICE_REVISIONS.get((provider_slug, model))
-                if previous_seed is not None and _model_price_matches_seed(
-                    existing,
-                    previous_seed,
+                previous_seeds = DEFAULT_MODEL_PRICE_REVISIONS.get((provider_slug, model), ())
+                if any(
+                    _model_price_matches_seed_for_revision(existing, previous_seed)
+                    for previous_seed in previous_seeds
                 ):
                     _apply_model_price_seed(existing, price_data)
                 continue
@@ -2006,7 +2478,9 @@ def delete_ui_model_route(session: Session, model: str) -> bool:
 
 def get_active_task_run(session: Session) -> TaskRun | None:
     return session.scalar(
-        select(TaskRun).where(TaskRun.ended_at.is_(None)).order_by(TaskRun.started_at.desc())
+        select(TaskRun)
+        .where(TaskRun.ended_at.is_(None), TaskRun.paused_at.is_(None))
+        .order_by(TaskRun.started_at.desc())
     )
 
 
@@ -2016,7 +2490,9 @@ def start_task_run(session: Session, name: str, notes: str | None = None) -> Tas
         raise ValueError("Run name is required.")
 
     now = _now()
-    active_runs = session.scalars(select(TaskRun).where(TaskRun.ended_at.is_(None))).all()
+    active_runs = session.scalars(
+        select(TaskRun).where(TaskRun.ended_at.is_(None), TaskRun.paused_at.is_(None))
+    ).all()
     for active_run in active_runs:
         active_run.ended_at = now
 
@@ -2033,6 +2509,37 @@ def end_active_task_run(session: Session) -> TaskRun | None:
     active_run.ended_at = _now()
     session.flush()
     return active_run
+
+
+def pause_active_task_run(session: Session) -> TaskRun | None:
+    active_run = get_active_task_run(session)
+    if active_run is None:
+        return None
+    active_run.paused_at = _now()
+    session.flush()
+    return active_run
+
+
+def resume_task_run(session: Session, task_run_id: int) -> TaskRun:
+    task_run = session.get(TaskRun, task_run_id)
+    if task_run is None:
+        raise LookupError("Run not found.")
+    if task_run.ended_at is not None:
+        raise ValueError("Completed runs cannot be resumed.")
+
+    now = _now()
+    active_runs = session.scalars(
+        select(TaskRun).where(
+            TaskRun.id != task_run_id,
+            TaskRun.ended_at.is_(None),
+            TaskRun.paused_at.is_(None),
+        )
+    ).all()
+    for active_run in active_runs:
+        active_run.paused_at = now
+    task_run.paused_at = None
+    session.flush()
+    return task_run
 
 
 def get_task_run_stats(session: Session, task_run_id: int) -> dict[str, object]:
@@ -2088,6 +2595,18 @@ def _ensure_sqlite_parent(engine: Engine) -> None:
     Path(database).expanduser().parent.mkdir(parents=True, exist_ok=True)
 
 
+def _ensure_sqlite_task_run_schema(engine: Engine) -> None:
+    if engine.dialect.name != "sqlite":
+        return
+    inspector = inspect(engine)
+    if "task_runs" not in inspector.get_table_names():
+        return
+    columns = {column["name"] for column in inspector.get_columns("task_runs")}
+    with engine.begin() as connection:
+        if "paused_at" not in columns:
+            connection.execute(text("ALTER TABLE task_runs ADD COLUMN paused_at DATETIME"))
+
+
 def _ensure_sqlite_request_record_schema(engine: Engine) -> None:
     if engine.dialect.name != "sqlite":
         return
@@ -2096,6 +2615,10 @@ def _ensure_sqlite_request_record_schema(engine: Engine) -> None:
         return
     columns = {column["name"] for column in inspector.get_columns("request_records")}
     with engine.begin() as connection:
+        if "created_at" not in columns:
+            connection.execute(text("ALTER TABLE request_records ADD COLUMN created_at DATETIME"))
+        if "model" not in columns:
+            connection.execute(text("ALTER TABLE request_records ADD COLUMN model VARCHAR(256)"))
         if "task_run_id" not in columns:
             connection.execute(text("ALTER TABLE request_records ADD COLUMN task_run_id INTEGER"))
         if "upstream_model" not in columns:
@@ -2186,6 +2709,24 @@ def _ensure_sqlite_request_record_schema(engine: Engine) -> None:
             )
         connection.execute(
             text(
+                "CREATE INDEX IF NOT EXISTS ix_request_records_created_at "
+                "ON request_records (created_at)"
+            )
+        )
+        connection.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_request_records_model_created_at "
+                "ON request_records (model, created_at)"
+            )
+        )
+        connection.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_request_records_model_route_created_at "
+                "ON request_records (model_route, created_at)"
+            )
+        )
+        connection.execute(
+            text(
                 "CREATE INDEX IF NOT EXISTS "
                 "ix_request_records_task_run_id ON request_records (task_run_id)"
             )
@@ -2266,6 +2807,24 @@ def _ensure_sqlite_model_provider_schema(engine: Engine) -> None:
         )
 
 
+def _ensure_sqlite_model_route_schema(engine: Engine) -> None:
+    if engine.dialect.name != "sqlite":
+        return
+    inspector = inspect(engine)
+    if "model_routes" not in inspector.get_table_names():
+        return
+    columns = {column["name"] for column in inspector.get_columns("model_routes")}
+    with engine.begin() as connection:
+        if "managed_by" not in columns:
+            connection.execute(text("ALTER TABLE model_routes ADD COLUMN managed_by VARCHAR(64)"))
+        connection.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS "
+                "ix_model_routes_managed_by ON model_routes (managed_by)"
+            )
+        )
+
+
 def _ensure_sqlite_model_price_schema(engine: Engine) -> None:
     if engine.dialect.name != "sqlite":
         return
@@ -2295,7 +2854,15 @@ def _ensure_sqlite_model_price_schema(engine: Engine) -> None:
 
 def _migrate_json_blob_routes(engine: Engine) -> None:
     with Session(engine) as session:
-        if session.scalar(select(func.count()).select_from(ModelRouteDB)):
+        unmanaged_routes = session.scalar(
+            select(func.count())
+            .select_from(ModelRouteDB)
+            .where(
+                (ModelRouteDB.managed_by.is_(None))
+                | (ModelRouteDB.managed_by != DEFAULT_ROUTE_SEED_OWNER)
+            )
+        )
+        if unmanaged_routes:
             return
         value = get_setting(session, MODEL_ROUTES_SETTING_KEY)
         if not value:
@@ -2532,6 +3099,29 @@ def _model_price_matches_seed(price: ModelPrice, price_data: dict[str, object]) 
     if price.release_date != _seed_metadata(price_data.get("release_date")):
         return False
     if price.notes != str(price_data.get("notes") or DEFAULT_PRICING_SOURCE):
+        return False
+    return tuple(_seed_price_tier_snapshot(tier) for tier in price.tiers) == (
+        _seed_data_tier_snapshot(price_data)
+    )
+
+
+def _model_price_matches_seed_for_revision(
+    price: ModelPrice,
+    price_data: dict[str, object],
+) -> bool:
+    if price.display_name != _seed_metadata(price_data.get("display_name")):
+        return False
+    if price.aliases_json != _aliases_json(price_data.get("aliases", "")):
+        return False
+    if price.input_usd_per_million != _seed_decimal(price_data["input_usd_per_million"]):
+        return False
+    if "cached_input_usd_per_million" in price_data and price.cached_input_usd_per_million != (
+        _seed_optional_decimal(price_data.get("cached_input_usd_per_million"))
+    ):
+        return False
+    if price.output_usd_per_million != _seed_decimal(price_data["output_usd_per_million"]):
+        return False
+    if bool(price.active) != bool(price_data.get("active", True)):
         return False
     return tuple(_seed_price_tier_snapshot(tier) for tier in price.tiers) == (
         _seed_data_tier_snapshot(price_data)

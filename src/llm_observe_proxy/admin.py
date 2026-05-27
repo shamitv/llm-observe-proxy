@@ -35,12 +35,15 @@ from llm_observe_proxy.costing import (
     estimate_run_cost,
 )
 from llm_observe_proxy.database import (
+    DEFAULT_ROUTE_SEED_OWNER,
     ModelPrice,
     ModelProvider,
     ModelRouteDB,
     RequestRecord,
     SessionFactory,
     TaskRun,
+    apply_default_model_routes,
+    build_default_model_route_candidates,
     delete_model_price,
     delete_model_price_tier,
     delete_model_provider,
@@ -63,6 +66,9 @@ from llm_observe_proxy.database import (
     list_model_providers,
     list_model_routes_db,
     list_task_runs_with_stats,
+    pause_active_task_run,
+    preview_default_model_routes,
+    resume_task_run,
     session_scope,
     set_default_compat_fixes,
     set_default_model,
@@ -83,6 +89,8 @@ from llm_observe_proxy.pricing_catalog import (
 )
 from llm_observe_proxy.rendering import escape_preview, render_payload
 from llm_observe_proxy.routing import (
+    ResolvedRoute,
+    RoutingDecision,
     build_forward_body,
     build_forward_headers,
     model_route_display,
@@ -539,6 +547,12 @@ async def runs_api(request: Request) -> dict[str, object]:
         ]
         active_run = _task_run_summary(get_active_task_run(session), session)
         upstream_url = get_upstream_url(session, request.app.state.settings)
+    total_requests = sum(int(run["request_count"] or 0) for run in runs_with_stats)
+    total_tokens = sum(int(run["total_tokens"] or 0) for run in runs_with_stats)
+    total_cost = sum(
+        (run["total_cost_usd"] for run in runs_with_stats if run["total_cost_usd"] is not None),
+        Decimal("0"),
+    )
 
     return {
         "items": [_task_run_list_item_json(run) for run in runs_with_stats],
@@ -547,6 +561,13 @@ async def runs_api(request: Request) -> dict[str, object]:
             "shown": len(runs_with_stats),
             "shown_display": format_compact_number(len(runs_with_stats)),
             "active": 1 if active_run else 0,
+            "paused": sum(1 for run in runs_with_stats if run["is_paused"]),
+            "total_requests": total_requests,
+            "total_requests_display": format_compact_number(total_requests),
+            "total_tokens": total_tokens,
+            "total_tokens_display": format_compact_number(total_tokens),
+            "total_cost_usd": _json_safe_number(total_cost),
+            "total_cost_display": format_usd(total_cost),
         },
         "upstream_url": upstream_url,
         "poll_interval_ms": 1000,
@@ -624,6 +645,7 @@ async def run_what_if_api(
             _run_billing_usages(session, run_id),
             session,
             requested_keys=key,
+            baseline=_run_current_cost_baseline(session, run_id),
         )
 
 
@@ -658,6 +680,34 @@ async def end_run_api(request: Request) -> dict[str, object]:
         }
 
 
+@router.post("/api/runs/pause", response_model=None)
+async def pause_run_api(request: Request) -> dict[str, object]:
+    session_factory: SessionFactory = request.app.state.session_factory
+    with session_scope(session_factory) as session:
+        task_run = pause_active_task_run(session)
+        return {
+            "run": _task_run_summary_json(_task_run_summary(task_run, session))
+            if task_run
+            else None
+        }
+
+
+@router.post("/api/runs/{run_id}/resume", response_model=None)
+async def resume_run_api(
+    request: Request,
+    run_id: int,
+) -> dict[str, object] | JSONResponse:
+    session_factory: SessionFactory = request.app.state.session_factory
+    try:
+        with session_scope(session_factory) as session:
+            task_run = resume_task_run(session, run_id)
+            return {"run": _task_run_summary_json(_task_run_summary(task_run, session))}
+    except LookupError:
+        return JSONResponse({"detail": "Run not found."}, status_code=404)
+    except ValueError as exc:
+        return JSONResponse({"detail": str(exc)}, status_code=400)
+
+
 @router.post("/runs/start", response_class=HTMLResponse)
 async def start_run(
     request: Request,
@@ -683,6 +733,29 @@ async def end_run(request: Request) -> HTMLResponse:
     if run_id is None:
         return RedirectResponse("/admin/runs", status_code=303)
     return RedirectResponse(f"/admin/runs/{run_id}", status_code=303)
+
+
+@router.post("/runs/pause", response_class=HTMLResponse)
+async def pause_run(request: Request) -> HTMLResponse:
+    session_factory: SessionFactory = request.app.state.session_factory
+    with session_scope(session_factory) as session:
+        task_run = pause_active_task_run(session)
+        run_id = task_run.id if task_run else None
+    if run_id is None:
+        return RedirectResponse("/admin/runs", status_code=303)
+    return RedirectResponse(f"/admin/runs/{run_id}", status_code=303)
+
+
+@router.post("/runs/{run_id}/resume", response_class=HTMLResponse)
+async def resume_run(request: Request, run_id: int) -> HTMLResponse:
+    session_factory: SessionFactory = request.app.state.session_factory
+    try:
+        with session_scope(session_factory) as session:
+            task_run = resume_task_run(session, run_id)
+            resumed_run_id = task_run.id
+    except (LookupError, ValueError):
+        return RedirectResponse("/admin/runs", status_code=303)
+    return RedirectResponse(f"/admin/runs/{resumed_run_id}", status_code=303)
 
 
 @router.get("/settings", response_class=HTMLResponse)
@@ -759,6 +832,7 @@ def _settings_tab_response(
         context = _settings_context(
             request,
             session,
+            settings_tab=settings_tab,
             total=total,
             trim_count=trim_count,
             days=days,
@@ -1427,6 +1501,60 @@ async def api_create_route(request: Request):
     return _save_route_from_payload(request, payload)
 
 
+@router.post("/api/routes/defaults/preview", response_model=None)
+async def api_preview_default_routes(request: Request):
+    payload = await _json_payload(request)
+    provider_slug = str(payload.get("provider_slug") or payload.get("provider") or "").strip()
+    mode = str(payload.get("mode") or "missing_only")
+    session_factory: SessionFactory = request.app.state.session_factory
+    with session_scope(session_factory) as session:
+        try:
+            return preview_default_model_routes(
+                session,
+                provider_slug=provider_slug or None,
+                mode=mode,
+            )
+        except ValueError as exc:
+            return JSONResponse({"detail": str(exc)}, status_code=400)
+
+
+@router.post("/api/routes/defaults/apply", response_model=None)
+async def api_apply_default_routes(request: Request):
+    payload = await _json_payload(request)
+    provider_slug = str(payload.get("provider_slug") or payload.get("provider") or "").strip()
+    mode = str(payload.get("mode") or "missing_only")
+    session_factory: SessionFactory = request.app.state.session_factory
+    with session_scope(session_factory) as session:
+        try:
+            return apply_default_model_routes(
+                session,
+                provider_slug=provider_slug or None,
+                mode=mode,
+            )
+        except ValueError as exc:
+            return JSONResponse({"detail": str(exc)}, status_code=400)
+
+
+@router.post("/api/routes/sample-request", response_model=None)
+async def api_route_sample_request(request: Request):
+    payload = await _json_payload(request)
+    model = str(payload.get("model") or payload.get("incoming_model") or "").strip()
+    provider_slug = str(payload.get("provider_slug") or payload.get("provider") or "").strip()
+    if not model:
+        return JSONResponse({"detail": "Model is required."}, status_code=400)
+    session_factory: SessionFactory = request.app.state.session_factory
+    with session_scope(session_factory) as session:
+        try:
+            return _route_sample_request(
+                request,
+                session,
+                model,
+                provider_slug=provider_slug or None,
+            )
+        except ValueError as exc:
+            return JSONResponse({"detail": str(exc)}, status_code=400)
+
+
 @router.post("/api/routes/simulate", response_model=None)
 async def api_simulate_route(request: Request):
     payload = await _json_payload(request)
@@ -1436,6 +1564,7 @@ async def api_simulate_route(request: Request):
     session_factory: SessionFactory = request.app.state.session_factory
     with session_scope(session_factory) as session:
         result = simulate_route_resolution(incoming_model, session, request.app.state.settings)
+        sample = _route_sample_request(request, session, incoming_model)
     return {
         "status": result.status,
         "matched_route": result.matched_route,
@@ -1446,6 +1575,7 @@ async def api_simulate_route(request: Request):
         "provider_name": result.provider_name,
         "api_key_state": result.api_key_state,
         "compatibility_fixes": list(result.compatibility_fixes),
+        "sample_request": sample,
     }
 
 
@@ -1559,6 +1689,114 @@ def build_upstream_test_payload(test_kind: str, model: str, prompt: str) -> dict
             ],
         }
     raise ValueError("Choose a valid upstream test: simple, image, or function call.")
+
+
+def _route_sample_request(
+    request: Request,
+    session,
+    model: str,
+    *,
+    provider_slug: str | None = None,
+) -> dict[str, object]:
+    payload = {
+        "model": model,
+        "messages": [{"role": "user", "content": "Hello through the proxy"}],
+    }
+    decision = _sample_routing_decision(request, session, payload, provider_slug=provider_slug)
+    body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode()
+    forward_body = build_forward_body(body, payload, decision)
+    try:
+        forward_payload: object = json.loads(forward_body.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        forward_payload = forward_body.decode("utf-8", errors="replace")
+
+    port = get_incoming_port(session, request.app.state.settings)
+    client_base_url = f"http://localhost:{port}/v1"
+    endpoint_url = f"{client_base_url}/chat/completions"
+    request_json = json.dumps(payload, ensure_ascii=False, indent=2)
+    curl = (
+        "curl "
+        f"{endpoint_url} "
+        "-H 'Content-Type: application/json' "
+        "-H 'Authorization: Bearer local-dev-key' "
+        f"-d '{request_json}'"
+    )
+    python = (
+        "from openai import OpenAI\n\n"
+        "client = OpenAI(api_key=\"local-dev-key\", "
+        f"base_url=\"{client_base_url}\")\n"
+        "response = client.chat.completions.create(\n"
+        f"    model={model!r},\n"
+        "    messages=[{\"role\": \"user\", \"content\": \"Hello through the proxy\"}],\n"
+        ")\n"
+        "print(response.choices[0].message.content)"
+    )
+    upstream_url = decision.upstream_base_url
+    auth_hint = (
+        f"Bearer ${decision.api_key_env}"
+        if decision.api_key_env
+        else "Preserves client Authorization header when present"
+    )
+    return {
+        "model": model,
+        "provider_slug": decision.provider_slug,
+        "route": decision.model_route,
+        "client_base_url": client_base_url,
+        "curl": curl,
+        "python": python,
+        "upstream_preview": {
+            "url": f"{upstream_url.rstrip('/')}/chat/completions" if upstream_url else None,
+            "headers": {"authorization": auth_hint, "content-type": "application/json"},
+            "body": forward_payload,
+        },
+    }
+
+
+def _sample_routing_decision(
+    request: Request,
+    session,
+    payload: dict[str, object],
+    *,
+    provider_slug: str | None = None,
+) -> RoutingDecision:
+    if not provider_slug:
+        return select_model_route(payload, request.app.state.settings, session=session)
+
+    provider = session.get(ModelProvider, provider_slug)
+    if provider is None:
+        raise ValueError("Provider was not found.")
+    model = str(payload.get("model") or "")
+    candidate = next(
+        (
+            candidate
+            for candidate in build_default_model_route_candidates(
+                session,
+                provider_slug=provider_slug,
+            )
+            if candidate.incoming_model == model
+        ),
+        None,
+    )
+    upstream_model = candidate.upstream_model if candidate else model
+    upstream_url = candidate.upstream_url if candidate else provider.upstream_url
+    if not upstream_url:
+        raise ValueError("Provider has no upstream URL.")
+    route = ResolvedRoute(
+        incoming_model=model,
+        match_type="exact",
+        upstream_url=upstream_url,
+        upstream_model=upstream_model,
+        provider_slug=provider.slug,
+        api_key_env=provider.api_key_env,
+        priority=90,
+        source="sample",
+    )
+    return RoutingDecision(
+        requested_model=model,
+        resolved_route=route,
+        match_type="exact",
+        match_source="sample",
+    )
 
 
 async def _send_upstream_test(
@@ -1873,6 +2111,8 @@ def _route_api_row(session, route: ModelRouteDB) -> dict[str, object]:
         "priority": route.priority,
         "active": bool(route.active),
         "status": "active" if route.active else "inactive",
+        "managed_by": route.managed_by,
+        "managed": route.managed_by == DEFAULT_ROUTE_SEED_OWNER,
     }
 
 
@@ -2037,6 +2277,7 @@ def _settings_context(
     request: Request,
     session,
     *,
+    settings_tab: str = "legacy",
     total: int,
     trim_count: int,
     days: int,
@@ -2049,9 +2290,20 @@ def _settings_context(
     providers = list_model_providers(session)
     default_fixes = get_default_compat_fixes(session, settings)
     fallback = get_fallback_summary(session)
+    model_routes = (
+        _settings_model_route_rows(session, settings, providers)
+        if settings_tab in {"legacy", "routing"}
+        else []
+    )
+    recent_model_routes = (
+        _settings_recent_model_route_rows(session, settings, days=days)
+        if settings_tab == "server"
+        else []
+    )
     return {
         "upstream_url": get_upstream_url(session, settings),
-        "model_routes": _settings_model_route_rows(session, settings, providers),
+        "model_routes": model_routes,
+        "recent_model_routes": recent_model_routes,
         "default_compat_fixes": default_fixes,
         "default_compat_fixes_text": fix_ids_text(default_fixes),
         "available_compat_fixes": compatibility_fix_rows(),
@@ -2086,11 +2338,53 @@ def _settings_model_route_rows(session, settings, providers) -> list[dict[str, o
         rows.append(row)
     for route in list_model_routes_db(session):
         row = model_route_display(route)
-        row["source"] = "ui"
+        row["source"] = "seeded" if route.managed_by == DEFAULT_ROUTE_SEED_OWNER else "ui"
         row["editable"] = True
         row["provider_name"] = provider_names.get(route.provider_slug or "")
         row["fixes_text"] = fix_ids_text(route.fixes)
         rows.append(row)
+    return rows
+
+
+def _settings_recent_model_route_rows(
+    session,
+    settings,
+    *,
+    days: int,
+    limit: int = 10,
+) -> list[dict[str, object]]:
+    cutoff = datetime.now(UTC) - timedelta(days=days)
+    usage_rows = session.execute(
+        select(
+            RequestRecord.model,
+            func.count(RequestRecord.id),
+            func.max(RequestRecord.created_at),
+        )
+        .where(RequestRecord.created_at >= cutoff)
+        .where(RequestRecord.model.is_not(None))
+        .group_by(RequestRecord.model)
+        .order_by(desc(func.max(RequestRecord.created_at)))
+        .limit(limit)
+    ).all()
+    rows: list[dict[str, object]] = []
+    for model, request_count, last_used_at in usage_rows:
+        if not model:
+            continue
+        result = simulate_route_resolution(model, session, settings)
+        rows.append(
+            {
+                "model": model,
+                "requests": int(request_count or 0),
+                "last_used_at": format_utc_iso(last_used_at),
+                "status": result.status,
+                "matched_route": result.matched_route,
+                "match_type": result.match_type,
+                "upstream_model": result.upstream_model,
+                "provider_slug": result.provider_slug,
+                "provider_name": result.provider_name,
+                "api_key_state": result.api_key_state,
+            }
+        )
     return rows
 
 
@@ -2196,6 +2490,7 @@ def _run_what_if_context(
     session,
     *,
     requested_keys: list[str] | None,
+    baseline: dict[str, object] | None = None,
 ) -> dict[str, object]:
     active_prices = [price for price in list_model_prices(session) if price.active]
     price_by_key = {_model_price_key(price): price for price in active_prices}
@@ -2220,10 +2515,76 @@ def _run_what_if_context(
             _run_what_if_option(price, checked=_model_price_key(price) in selected_key_set)
             for price in active_prices
         ],
+        "baseline": baseline,
         "scenarios": scenarios,
         "selected_keys": selected_keys,
         "compared_count": len(scenarios),
         "message": message,
+    }
+
+
+def _run_current_cost_baseline(session, run_id: int) -> dict[str, object] | None:
+    row = session.execute(
+        select(
+            func.sum(RequestRecord.billing_total_cost_usd),
+            func.count(RequestRecord.billing_total_cost_usd),
+        ).where(RequestRecord.task_run_id == run_id)
+    ).one()
+    if not row[1]:
+        return None
+    providers = [
+        value
+        for value in session.scalars(
+            select(
+                func.coalesce(
+                    RequestRecord.billing_provider_name,
+                    RequestRecord.billing_provider_slug,
+                )
+            )
+            .where(
+                RequestRecord.task_run_id == run_id,
+                or_(
+                    RequestRecord.billing_provider_name.is_not(None),
+                    RequestRecord.billing_provider_slug.is_not(None),
+                ),
+            )
+            .distinct()
+            .order_by(
+                func.coalesce(
+                    RequestRecord.billing_provider_name,
+                    RequestRecord.billing_provider_slug,
+                )
+            )
+        ).all()
+        if value
+    ]
+    models = [
+        value
+        for value in session.scalars(
+            select(func.coalesce(RequestRecord.billing_model, RequestRecord.model))
+            .where(
+                RequestRecord.task_run_id == run_id,
+                or_(
+                    RequestRecord.billing_model.is_not(None),
+                    RequestRecord.model.is_not(None),
+                ),
+            )
+            .distinct()
+            .order_by(func.coalesce(RequestRecord.billing_model, RequestRecord.model))
+        ).all()
+        if value
+    ]
+    provider_name = providers[0] if len(providers) == 1 else "Captured providers"
+    model = models[0] if len(models) == 1 else "Captured models"
+    total_cost = row[0]
+    return {
+        "label": "Current run",
+        "provider_name": provider_name,
+        "model": model,
+        "total_cost_usd": _json_safe_number(total_cost),
+        "display": {
+            "total_cost_usd": format_usd(total_cost),
+        },
     }
 
 
@@ -2467,6 +2828,7 @@ def _pagination_json(pagination: dict[str, object]) -> dict[str, object]:
 def _task_run_summary_json(task_run: dict[str, object] | None) -> dict[str, object] | None:
     if task_run is None:
         return None
+    run_status = str(task_run["status"])
     return {
         "id": task_run["id"],
         "name": task_run["name"],
@@ -2478,7 +2840,14 @@ def _task_run_summary_json(task_run: dict[str, object] | None) -> dict[str, obje
         "ended_at_fallback": _datetime_fallback(task_run["ended_at"])
         if task_run["ended_at"]
         else None,
+        "paused_at": _datetime_iso(task_run["paused_at"]),
+        "paused_at_fallback": _datetime_fallback(task_run["paused_at"])
+        if task_run["paused_at"]
+        else None,
         "is_active": task_run["is_active"],
+        "is_paused": task_run["is_paused"],
+        "status": run_status,
+        "status_label": run_status,
         "open_duration_ms": task_run["open_duration_ms"],
         "open_duration_display": _duration_display(task_run["open_duration_ms"]),
         "request_count": task_run["request_count"],
@@ -2583,6 +2952,7 @@ def _record_list_item_json(record: dict[str, object]) -> dict[str, object]:
         "model": record["model"],
         "upstream_model": record["upstream_model"],
         "model_route": record["model_route"],
+        "upstream_url": record.get("upstream_url"),
         "status": record["status"],
         "status_label": status_label,
         "duration_ms": record["duration_ms"],
@@ -2602,11 +2972,25 @@ def _record_list_item_json(record: dict[str, object]) -> dict[str, object]:
         "provider_name": record.get("provider_name") or record["billing_provider"],
         "billing_model": record["billing_model"],
         "route_name": record.get("route_name") or record["model_route"] or "global fallback",
+        "response_was_rewritten": record.get("response_was_rewritten", False),
+        "compat_fixes_json": record.get("compat_fixes_json"),
+        "compat_fix_errors_json": record.get("compat_fix_errors_json"),
+        "compatibility_label": _compatibility_label(record),
         "error": record["error"],
         "signals": signals,
         "preview": _plain_preview(record["preview"]),
         "semantic_summary": _plain_preview(semantic_summary),
     }
+
+
+def _compatibility_label(record: dict[str, object]) -> str:
+    if record.get("response_was_rewritten"):
+        return "rewritten"
+    if record.get("compat_fix_errors_json"):
+        return "warned"
+    if record.get("compat_fixes_json"):
+        return "applied"
+    return "none"
 
 
 def _token_triplet_json(tokens: dict[str, object]) -> dict[str, object]:
@@ -2883,6 +3267,7 @@ def _request_list_items_for_page(
             RequestRecord.model.label("model"),
             RequestRecord.upstream_model.label("upstream_model"),
             RequestRecord.model_route.label("model_route"),
+            RequestRecord.upstream_url.label("upstream_url"),
             RequestRecord.response_status.label("response_status"),
             RequestRecord.response_content_type.label("response_content_type"),
             RequestRecord.duration_ms.label("duration_ms"),
@@ -2898,6 +3283,9 @@ def _request_list_items_for_page(
             RequestRecord.billing_total_tokens.label("billing_total_tokens"),
             RequestRecord.billing_total_cost_usd.label("billing_total_cost_usd"),
             RequestRecord.estimated_input_tokens.label("estimated_input_tokens"),
+            RequestRecord.response_was_rewritten.label("response_was_rewritten"),
+            RequestRecord.compat_fixes_json.label("compat_fixes_json"),
+            RequestRecord.compat_fix_errors_json.label("compat_fix_errors_json"),
             RequestRecord.error.label("error"),
             preview.label("response_body_preview"),
             response_length.label("response_body_length"),
@@ -2906,6 +3294,7 @@ def _request_list_items_for_page(
             TaskRun.notes.label("run_notes"),
             TaskRun.started_at.label("run_started_at"),
             TaskRun.ended_at.label("run_ended_at"),
+            TaskRun.paused_at.label("run_paused_at"),
         )
         .outerjoin(TaskRun, RequestRecord.task_run_id == TaskRun.id)
         .order_by(desc(RequestRecord.created_at))
@@ -2962,6 +3351,7 @@ def _record_list_item_from_row(row, *, now: datetime | None = None) -> dict[str,
         "model": row["model"] or "unknown",
         "upstream_model": row["upstream_model"],
         "model_route": row["model_route"],
+        "upstream_url": row["upstream_url"],
         "status": row["response_status"],
         "duration_ms": row["duration_ms"],
         "duration_display_ms": duration["duration_display_ms"],
@@ -2985,6 +3375,9 @@ def _record_list_item_from_row(row, *, now: datetime | None = None) -> dict[str,
         "provider_name": row["billing_provider_name"] or row["billing_provider_slug"],
         "billing_model": row["billing_model"],
         "route_name": row["model_route"] or "global fallback",
+        "response_was_rewritten": row["response_was_rewritten"],
+        "compat_fixes_json": row["compat_fixes_json"],
+        "compat_fix_errors_json": row["compat_fix_errors_json"],
         "estimated_input_tokens": row["estimated_input_tokens"],
         "error": row["error"],
         "preview": preview,
@@ -2998,13 +3391,19 @@ def _task_run_summary_from_row(row, *, now: datetime | None = None) -> dict[str,
     if row["run_id"] is None:
         return None
     ended_at = row["run_ended_at"]
+    paused_at = row["run_paused_at"]
+    is_active = ended_at is None and paused_at is None
+    is_paused = ended_at is None and paused_at is not None
     return {
         "id": row["run_id"],
         "name": row["run_name"],
         "notes": row["run_notes"],
         "started_at": row["run_started_at"],
         "ended_at": ended_at,
-        "is_active": ended_at is None,
+        "paused_at": paused_at,
+        "is_active": is_active,
+        "is_paused": is_paused,
+        "status": _run_status(ended_at=ended_at, paused_at=paused_at),
         "open_duration_ms": _duration_ms(
             row["run_started_at"],
             ended_at or now or datetime.now(UTC),
@@ -3045,6 +3444,7 @@ def _record_list_item(record: RequestRecord, *, now: datetime | None = None) -> 
         "model": record.model or "unknown",
         "upstream_model": record.upstream_model,
         "model_route": record.model_route,
+        "upstream_url": record.upstream_url,
         "status": record.response_status,
         "duration_ms": record.duration_ms,
         "duration_display_ms": duration["duration_display_ms"],
@@ -3068,6 +3468,9 @@ def _record_list_item(record: RequestRecord, *, now: datetime | None = None) -> 
         "provider_name": record.billing_provider_name or record.billing_provider_slug,
         "billing_model": record.billing_model,
         "route_name": record.model_route or "global fallback",
+        "response_was_rewritten": record.response_was_rewritten,
+        "compat_fixes_json": record.compat_fixes_json,
+        "compat_fix_errors_json": record.compat_fix_errors_json,
         "estimated_input_tokens": record.estimated_input_tokens,
         "error": record.error,
         "preview": response_render.text,
@@ -3208,6 +3611,9 @@ def _task_run_summary(task_run: TaskRun | None, session=None) -> dict[str, objec
     if task_run is None:
         return None
     ended_at = task_run.ended_at
+    paused_at = task_run.paused_at
+    is_active = ended_at is None and paused_at is None
+    is_paused = ended_at is None and paused_at is not None
     now = datetime.now(UTC)
     request_count = None
     if session is not None:
@@ -3223,10 +3629,21 @@ def _task_run_summary(task_run: TaskRun | None, session=None) -> dict[str, objec
         "notes": task_run.notes,
         "started_at": task_run.started_at,
         "ended_at": ended_at,
-        "is_active": ended_at is None,
+        "paused_at": paused_at,
+        "is_active": is_active,
+        "is_paused": is_paused,
+        "status": _run_status(ended_at=ended_at, paused_at=paused_at),
         "open_duration_ms": _duration_ms(task_run.started_at, ended_at or now),
         "request_count": request_count,
     }
+
+
+def _run_status(*, ended_at: datetime | None, paused_at: datetime | None) -> str:
+    if ended_at is not None:
+        return "complete"
+    if paused_at is not None:
+        return "paused"
+    return "active"
 
 
 def _task_run_list_item(
