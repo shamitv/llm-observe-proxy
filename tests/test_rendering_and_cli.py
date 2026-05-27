@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import json
 import subprocess
 import sys
@@ -606,6 +607,15 @@ def test_init_db_seeds_model_pricing_without_overwriting_edits(tmp_path) -> None
         ).one()
         assert mistral_successor_price.cached_input_usd_per_million == Decimal("0.150000")
 
+        xai_price = session.scalars(
+            select(ModelPrice).where(
+                ModelPrice.provider_slug == "xai",
+                ModelPrice.model == "grok-4.3",
+            )
+        ).one()
+        assert xai_price.cached_input_usd_per_million == Decimal("0.200000")
+        assert xai_price.source_url == "https://docs.x.ai/developers/pricing"
+
     init_db(engine)
 
     with session_scope(session_factory) as session:
@@ -631,10 +641,27 @@ def test_init_db_seeds_model_pricing_without_overwriting_edits(tmp_path) -> None
         "local-llm",
         "moonshot",
         "openrouter",
+        "xai",
     } <= set(providers)
     assert edited_price.input_usd_per_million == Decimal("123.000000")
     assert edited_openrouter_price.input_usd_per_million == Decimal("999.000000")
     assert price_count >= 51
+
+
+def test_default_model_price_seed_dicts_have_unique_keys() -> None:
+    source = Path("src/llm_observe_proxy/database.py").read_text(encoding="utf-8")
+    module = ast.parse(source)
+    duplicate_keys: list[str] = []
+    for node in ast.walk(module):
+        if not isinstance(node, ast.Dict):
+            continue
+        keys: list[str] = []
+        for key in node.keys:
+            if isinstance(key, ast.Constant) and isinstance(key.value, str):
+                keys.append(key.value)
+        duplicate_keys.extend(sorted({key for key in keys if keys.count(key) > 1}))
+
+    assert duplicate_keys == []
 
 
 def test_init_db_refreshes_only_seed_owned_model_pricing_rows(tmp_path) -> None:

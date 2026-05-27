@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from collections.abc import Iterator
 from contextlib import contextmanager
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
@@ -52,6 +53,9 @@ from llm_observe_proxy.config import (
 
 MODEL_ROUTES_SETTING_KEY = "model_routes_json"
 DEFAULT_COMPAT_FIXES_SETTING_KEY = "default_compat_fixes_json"
+DEFAULT_ROUTES_SEEDED_AT_SETTING_KEY = "default_routes_seeded_at"
+DEFAULT_ROUTE_SEED_OWNER = "default-route-seed"
+DEFAULT_ROUTE_SEED_PRIORITY = 90
 DEFAULT_PRICING_CHECKED_AT = "2026-05-23"
 DEFAULT_PRICING_SOURCE = (
     "Seeded static catalog checked on 2026-05-23. Verify provider pricing before "
@@ -69,6 +73,7 @@ GOOGLE_GEMINI_PRICING_URL = "https://ai.google.dev/gemini-api/docs/pricing"
 ALIBABA_PRICING_URL = "https://www.alibabacloud.com/help/en/model-studio/model-pricing"
 ALIBABA_CACHE_URL = "https://www.alibabacloud.com/help/en/model-studio/context-cache"
 DEEPSEEK_PRICING_URL = "https://api-docs.deepseek.com/quick_start/pricing"
+XAI_PRICING_URL = "https://docs.x.ai/developers/pricing"
 ZAI_PRICING_URL = "https://docs.z.ai/guides/overview/pricing"
 KIMI_K26_PRICING_URL = "https://platform.kimi.ai/docs/pricing/chat-k26"
 KIMI_K25_PRICING_URL = "https://platform.kimi.ai/docs/pricing/chat-k25"
@@ -136,6 +141,14 @@ DEFAULT_MODEL_PROVIDERS = (
         "currency": "USD",
         "api_key_env": "DEEPSEEK_API_KEY",
         "capabilities_json": '{"text":true,"tool_calling":true}',
+    },
+    {
+        "slug": "xai",
+        "name": "xAI",
+        "upstream_url": "https://api.x.ai/v1",
+        "currency": "USD",
+        "api_key_env": "XAI_API_KEY",
+        "capabilities_json": '{"text":true,"tool_calling":true,"vision":true}',
     },
     {
         "slug": "zai",
@@ -533,6 +546,31 @@ DEFAULT_MODEL_PRICES = (
             "Official page lists 75% off pricing until 2026-05-31 and a "
             "post-promo adjustment."
         ),
+    },
+    {
+        "provider_slug": "xai",
+        "model": "grok-4.3",
+        "display_name": "Grok 4.3",
+        "input_usd_per_million": "1.25",
+        "cached_input_usd_per_million": "0.20",
+        "output_usd_per_million": "2.50",
+        "aliases": ("grok-4.3-latest", "grok-latest"),
+        "source_url": XAI_PRICING_URL,
+        "checked_at": DEFAULT_PRICING_CHECKED_AT,
+        "release_date": "2026-05-15",
+        "notes": "Official xAI pricing lists input, cached input, and output token rates.",
+    },
+    {
+        "provider_slug": "xai",
+        "model": "grok-build-0.1",
+        "display_name": "Grok Build 0.1",
+        "input_usd_per_million": "1.00",
+        "cached_input_usd_per_million": "0.20",
+        "output_usd_per_million": "2.00",
+        "source_url": XAI_PRICING_URL,
+        "checked_at": DEFAULT_PRICING_CHECKED_AT,
+        "release_date": "2026-05-15",
+        "notes": "Official xAI pricing lists input, cached input, and output token rates.",
     },
     {
         "provider_slug": "zai",
@@ -1296,6 +1334,7 @@ class ModelRouteDB(Base):
     )
     api_key_env: Mapped[str | None] = mapped_column(String(128), nullable=True)
     compatibility_fixes_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    managed_by: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     override_fallback: Mapped[bool] = mapped_column(Boolean, default=False)
     priority: Mapped[int] = mapped_column(Integer, default=50)
     active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
@@ -1436,9 +1475,11 @@ def init_db(engine: Engine) -> None:
     _ensure_sqlite_task_run_schema(engine)
     _ensure_sqlite_request_record_schema(engine)
     _ensure_sqlite_model_provider_schema(engine)
+    _ensure_sqlite_model_route_schema(engine)
     _ensure_sqlite_model_price_schema(engine)
     seed_default_model_pricing(engine)
     _migrate_json_blob_routes(engine)
+    seed_default_model_routes_once(engine)
 
 
 @contextmanager
@@ -1779,6 +1820,7 @@ def upsert_model_route_db(
     override_fallback: bool = False,
     priority: int | str = 50,
     active: bool = True,
+    managed_by: str | None = None,
     route_id: int | None = None,
 ) -> ModelRouteDB:
     pattern = incoming_model.strip()
@@ -1825,6 +1867,7 @@ def upsert_model_route_db(
     route.compatibility_fixes_json = (
         json.dumps(list(fixes), ensure_ascii=False, separators=(",", ":")) if fixes else None
     )
+    route.managed_by = _optional_metadata(managed_by, "Managed by", max_length=64)
     route.override_fallback = bool(override_fallback)
     route.priority = resolved_priority
     route.active = bool(active)
@@ -1980,6 +2023,300 @@ def delete_model_price(session: Session, provider_slug: str, model: str) -> bool
         return False
     session.delete(price)
     return True
+
+
+@dataclass(frozen=True)
+class DefaultRouteCandidate:
+    incoming_model: str
+    upstream_url: str
+    upstream_model: str
+    provider_slug: str
+    api_key_env: str | None
+    priority: int
+    source_model: str
+    source_alias: str | None = None
+
+    @property
+    def key(self) -> tuple[str, str]:
+        return (self.incoming_model, "exact")
+
+    @property
+    def cost_sort_value(self) -> Decimal:
+        return Decimal("0")
+
+
+ROUTER_PROVIDER_SLUGS = frozenset({"huggingface-router", "openrouter"})
+
+
+def build_default_model_route_candidates(
+    session: Session,
+    *,
+    provider_slug: str | None = None,
+) -> list[DefaultRouteCandidate]:
+    resolved_provider_slug = normalize_provider_slug(provider_slug)
+    stmt = (
+        select(ModelPrice)
+        .join(ModelProvider)
+        .options(contains_eager(ModelPrice.provider))
+        .where(ModelPrice.active.is_(True))
+        .where(ModelProvider.active.is_(True))
+        .where(ModelProvider.upstream_url.is_not(None))
+        .order_by(ModelProvider.name, ModelPrice.model)
+    )
+    if resolved_provider_slug:
+        stmt = stmt.where(ModelPrice.provider_slug == resolved_provider_slug)
+    prices = list(session.scalars(stmt).all())
+    cheapest_router_models = _cheapest_router_endpoint_models(prices)
+    candidates: list[tuple[tuple[object, ...], DefaultRouteCandidate]] = []
+
+    for price in prices:
+        provider = price.provider
+        if provider is None or not provider.upstream_url:
+            continue
+        try:
+            upstream_url = normalize_upstream_url(provider.upstream_url)
+        except ValueError:
+            continue
+        upstream_model = _default_route_upstream_model(price, cheapest_router_models)
+        for incoming_model, alias in _default_route_incoming_models(price):
+            candidate = DefaultRouteCandidate(
+                incoming_model=incoming_model,
+                upstream_url=upstream_url,
+                upstream_model=upstream_model,
+                provider_slug=provider.slug,
+                api_key_env=provider.api_key_env,
+                priority=DEFAULT_ROUTE_SEED_PRIORITY,
+                source_model=price.model,
+                source_alias=alias,
+            )
+            candidates.append((_default_route_candidate_sort_key(candidate, price), candidate))
+
+    deduped: dict[tuple[str, str], DefaultRouteCandidate] = {}
+    for _sort_key, candidate in sorted(candidates, key=lambda item: item[0]):
+        deduped.setdefault(candidate.key, candidate)
+    return sorted(
+        deduped.values(),
+        key=lambda candidate: (candidate.provider_slug, candidate.incoming_model),
+    )
+
+
+def preview_default_model_routes(
+    session: Session,
+    *,
+    provider_slug: str | None = None,
+    mode: str = "missing_only",
+) -> dict[str, object]:
+    candidates = build_default_model_route_candidates(session, provider_slug=provider_slug)
+    return _default_route_seed_summary(session, candidates, mode=mode, apply=False)
+
+
+def apply_default_model_routes(
+    session: Session,
+    *,
+    provider_slug: str | None = None,
+    mode: str = "missing_only",
+) -> dict[str, object]:
+    candidates = build_default_model_route_candidates(session, provider_slug=provider_slug)
+    summary = _default_route_seed_summary(session, candidates, mode=mode, apply=True)
+    set_setting(session, DEFAULT_ROUTES_SEEDED_AT_SETTING_KEY, _now().isoformat())
+    return summary
+
+
+def seed_default_model_routes_once(engine: Engine) -> None:
+    with Session(engine) as session:
+        if get_setting(session, DEFAULT_ROUTES_SEEDED_AT_SETTING_KEY):
+            return
+        apply_default_model_routes(session, mode="missing_only")
+        session.commit()
+
+
+def _default_route_seed_summary(
+    session: Session,
+    candidates: list[DefaultRouteCandidate],
+    *,
+    mode: str,
+    apply: bool,
+) -> dict[str, object]:
+    resolved_mode = mode.strip().lower() if mode else "missing_only"
+    if resolved_mode not in {"missing_only", "refresh_seeded"}:
+        raise ValueError("Default route mode must be missing_only or refresh_seeded.")
+
+    inserted = 0
+    updated = 0
+    skipped_existing = 0
+    skipped_user = 0
+    items: list[dict[str, object]] = []
+    for candidate in candidates:
+        existing = session.scalar(
+            select(ModelRouteDB).where(
+                ModelRouteDB.incoming_model == candidate.incoming_model,
+                ModelRouteDB.match_type == "exact",
+            )
+        )
+        status = "insert"
+        route_id = None
+        if existing is not None:
+            route_id = existing.id
+            if existing.managed_by != DEFAULT_ROUTE_SEED_OWNER:
+                skipped_user += 1
+                status = "skip_user_route"
+            elif resolved_mode == "refresh_seeded":
+                updated += 1
+                status = "update_seeded_route"
+            else:
+                skipped_existing += 1
+                status = "skip_existing_seeded_route"
+        else:
+            inserted += 1
+
+        if apply and status in {"insert", "update_seeded_route"}:
+            upsert_model_route_db(
+                session,
+                route_id=route_id,
+                incoming_model=candidate.incoming_model,
+                match_type="exact",
+                upstream_url=candidate.upstream_url,
+                upstream_model=candidate.upstream_model,
+                provider_slug=candidate.provider_slug,
+                api_key_env=candidate.api_key_env or "",
+                compatibility_fixes=(),
+                priority=candidate.priority,
+                active=True,
+                managed_by=DEFAULT_ROUTE_SEED_OWNER,
+            )
+        items.append(_default_route_candidate_row(candidate, status))
+
+    return {
+        "mode": resolved_mode,
+        "managed_by": DEFAULT_ROUTE_SEED_OWNER,
+        "total_candidates": len(candidates),
+        "inserted": inserted,
+        "updated": updated,
+        "skipped_existing": skipped_existing,
+        "skipped_user": skipped_user,
+        "items": items[:200],
+        "truncated": len(items) > 200,
+    }
+
+
+def _default_route_candidate_row(
+    candidate: DefaultRouteCandidate,
+    status: str,
+) -> dict[str, object]:
+    return {
+        "incoming_model": candidate.incoming_model,
+        "match_type": "exact",
+        "upstream_url": candidate.upstream_url,
+        "upstream_model": candidate.upstream_model,
+        "provider_slug": candidate.provider_slug,
+        "api_key_env": candidate.api_key_env,
+        "priority": candidate.priority,
+        "source_model": candidate.source_model,
+        "source_alias": candidate.source_alias,
+        "status": status,
+    }
+
+
+def _default_route_incoming_models(price: ModelPrice) -> list[tuple[str, str | None]]:
+    incoming = [(price.model, None)]
+    if price.provider_slug == "openrouter" and "@" in price.model:
+        base_model, provider_tag = _split_openrouter_endpoint_model(price.model)
+        if base_model and provider_tag:
+            incoming.append((f"{base_model}:{provider_tag}", price.model))
+    for alias in _model_price_aliases(price):
+        incoming.append((alias, alias))
+
+    deduped: list[tuple[str, str | None]] = []
+    seen: set[str] = set()
+    for model, alias in incoming:
+        normalized = model.strip()
+        if normalized and normalized not in seen:
+            deduped.append((normalized, alias))
+            seen.add(normalized)
+    return deduped
+
+
+def _default_route_upstream_model(
+    price: ModelPrice,
+    cheapest_router_models: dict[tuple[str, str], str],
+) -> str:
+    base_model = _router_base_model(price.provider_slug, price.model)
+    if base_model is None or base_model != price.model:
+        return price.model
+    return cheapest_router_models.get((price.provider_slug, base_model), price.model)
+
+
+def _cheapest_router_endpoint_models(prices: list[ModelPrice]) -> dict[tuple[str, str], str]:
+    endpoint_rows: dict[tuple[str, str], list[ModelPrice]] = {}
+    for price in prices:
+        base_model = _router_base_model(price.provider_slug, price.model)
+        if base_model is None or base_model == price.model:
+            continue
+        endpoint_rows.setdefault((price.provider_slug, base_model), []).append(price)
+
+    cheapest: dict[tuple[str, str], str] = {}
+    for key, rows in endpoint_rows.items():
+        selected = min(rows, key=_router_endpoint_price_sort_key)
+        cheapest[key] = selected.model
+    return cheapest
+
+
+def _router_endpoint_price_sort_key(price: ModelPrice) -> tuple[Decimal, int, str]:
+    total = (price.input_usd_per_million or Decimal("0")) + (
+        price.output_usd_per_million or Decimal("0")
+    )
+    cached_rank = 0 if price.cached_input_usd_per_million is not None else 1
+    return (total, cached_rank, price.model)
+
+
+def _router_base_model(provider_slug: str | None, model: str) -> str | None:
+    if provider_slug == "openrouter":
+        base_model, provider_tag = _split_openrouter_endpoint_model(model)
+        return base_model if provider_tag else model
+    if provider_slug == "huggingface-router":
+        base_model, separator, provider_name = model.rpartition(":")
+        if base_model and separator and provider_name:
+            return base_model
+        return model
+    return None
+
+
+def _split_openrouter_endpoint_model(model: str) -> tuple[str | None, str | None]:
+    base_model, separator, provider_tag = model.partition("@")
+    if not separator or not base_model or not provider_tag:
+        return None, None
+    return base_model, provider_tag
+
+
+def _default_route_candidate_sort_key(
+    candidate: DefaultRouteCandidate,
+    price: ModelPrice,
+) -> tuple[object, ...]:
+    alias_rank = 0 if candidate.source_alias is None else 1
+    provider_rank = 1 if candidate.provider_slug in ROUTER_PROVIDER_SLUGS else 0
+    total = (price.input_usd_per_million or Decimal("0")) + (
+        price.output_usd_per_million or Decimal("0")
+    )
+    return (
+        candidate.incoming_model,
+        alias_rank,
+        provider_rank,
+        total,
+        candidate.provider_slug,
+        candidate.source_model,
+    )
+
+
+def _model_price_aliases(price: ModelPrice) -> list[str]:
+    if not price.aliases_json:
+        return []
+    try:
+        aliases = json.loads(price.aliases_json)
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(aliases, list):
+        return []
+    return [alias.strip() for alias in aliases if isinstance(alias, str) and alias.strip()]
 
 
 def seed_default_model_pricing(engine: Engine) -> None:
@@ -2389,6 +2726,24 @@ def _ensure_sqlite_model_provider_schema(engine: Engine) -> None:
         )
 
 
+def _ensure_sqlite_model_route_schema(engine: Engine) -> None:
+    if engine.dialect.name != "sqlite":
+        return
+    inspector = inspect(engine)
+    if "model_routes" not in inspector.get_table_names():
+        return
+    columns = {column["name"] for column in inspector.get_columns("model_routes")}
+    with engine.begin() as connection:
+        if "managed_by" not in columns:
+            connection.execute(text("ALTER TABLE model_routes ADD COLUMN managed_by VARCHAR(64)"))
+        connection.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS "
+                "ix_model_routes_managed_by ON model_routes (managed_by)"
+            )
+        )
+
+
 def _ensure_sqlite_model_price_schema(engine: Engine) -> None:
     if engine.dialect.name != "sqlite":
         return
@@ -2418,7 +2773,15 @@ def _ensure_sqlite_model_price_schema(engine: Engine) -> None:
 
 def _migrate_json_blob_routes(engine: Engine) -> None:
     with Session(engine) as session:
-        if session.scalar(select(func.count()).select_from(ModelRouteDB)):
+        unmanaged_routes = session.scalar(
+            select(func.count())
+            .select_from(ModelRouteDB)
+            .where(
+                (ModelRouteDB.managed_by.is_(None))
+                | (ModelRouteDB.managed_by != DEFAULT_ROUTE_SEED_OWNER)
+            )
+        )
+        if unmanaged_routes:
             return
         value = get_setting(session, MODEL_ROUTES_SETTING_KEY)
         if not value:
