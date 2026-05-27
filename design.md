@@ -66,6 +66,9 @@ but they should not dominate the first screen.
   Diagnostics, Data.
 - Keep provider, route, pricing, fallback, diagnostics, and retention workflows
   operational and compact.
+- Routing should expose generated default-route discovery as an operational registry
+  action: preview before apply, summarize inserted/updated/skipped counts, and keep
+  generated routes visibly distinct from user-owned routes.
 - Never display raw API key values. Show environment variable names only.
 - Network exposure and destructive actions must use clear warnings and explicit
   confirmation.

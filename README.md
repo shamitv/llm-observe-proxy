@@ -204,6 +204,14 @@ immediately. Routes loaded from `--models-file`, `LLM_OBSERVE_MODELS_FILE`, or
 `LLM_OBSERVE_MODELS_JSON` remain read-only in the UI, and duplicate startup model names
 are rejected.
 
+SQLite also seeds default exact routes from active model pricing rows, including aliases,
+so common provider model IDs can route without a separate `models.json` file. The Routing
+tab can preview or apply missing default routes for all providers or one provider. Seeded
+routes are marked as generated, use priority `90`, and stop being overwritten once you edit
+them. Hugging Face Router provider suffixes are forwarded as model IDs, while OpenRouter
+endpoint rows such as `model@provider-tag` are forwarded as `model` with provider pinning
+and fallbacks disabled.
+
 When a route has an API key, the proxy injects `Authorization: Bearer <key>` for the
 upstream request. Captured request headers remain the original client headers; injected
 keys are not stored or shown in the admin UI. UI-managed routes store only `api_key_env`;
@@ -269,11 +277,12 @@ upstream request URL starts with a configured provider URL.
 
 SQLite is seeded with editable standard paid text rates for legacy OpenAI, Anthropic, and
 Google Gemini rows plus a broader current catalog checked on May 23, 2026. The v0.4 seed
-catalog includes first-party rows for Alibaba/Qwen, DeepSeek, Z.ai, Moonshot/Kimi, and
-Mistral where suitable API pricing is published. OpenRouter and Hugging Face Router rows
-are seeded only as router-provider fallbacks. Seeded rows include source metadata, aliases,
-cached-input rates where available, and Qwen-style request-size tiers. Seeds are inserted
-only when missing, so UI edits are preserved.
+catalog includes first-party rows for Alibaba/Qwen, DeepSeek, xAI, Z.ai, Moonshot/Kimi,
+and Mistral where suitable API pricing is published. OpenRouter and Hugging Face Router
+rows are seeded as router-provider fallbacks and endpoint-specific options when available.
+Seeded rows include source metadata, aliases, cached-input rates only where cache-hit or
+cache-read pricing is published, and Qwen-style request-size tiers. Seeds are inserted only
+when missing, and older seed-owned rows can be refreshed without overwriting UI edits.
 The provider catalog also seeds `Local LLM` as an editable no-key local endpoint for
 fallback routing.
 
@@ -383,6 +392,9 @@ Regenerate screenshots:
 - `POST /admin/api/providers/health-checks`: run lightweight provider health checks.
 - `GET/POST /admin/api/routes`: route registry JSON list/create endpoints.
 - `GET/PUT/DELETE /admin/api/routes/{route_id}`: route JSON read/update/delete endpoints.
+- `POST /admin/api/routes/defaults/preview`: preview generated default routes from active prices.
+- `POST /admin/api/routes/defaults/apply`: insert missing or refresh generated default routes.
+- `POST /admin/api/routes/sample-request`: return proxy request snippets and sanitized upstream preview.
 - `POST /admin/api/routes/simulate`: simulate route resolution for a model name.
 - `POST /admin/api/pricing/catalog/preview`: preview current HF Router or OpenRouter pricing rows.
 - `POST /admin/api/pricing/catalog/apply`: apply selected catalog pricing rows and optionally fill missing cost estimates.
