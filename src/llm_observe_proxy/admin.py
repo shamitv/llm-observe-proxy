@@ -845,7 +845,7 @@ def _settings_tab_response(
             {
                 "settings_tab": settings_tab,
                 "active_nav": "settings",
-                "app_version": "v0.5.0",
+                "app_version": "v0.6.0",
                 "summary": _api_settings_summary(request, session, days=days),
                 "fallback": get_fallback_summary(session),
                 "provider_usage": get_provider_usage_summary(session),

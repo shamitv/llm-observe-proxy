@@ -69,9 +69,9 @@ Useful options:
 ## Pre-Publish Checklist
 
 - `git status --short --branch` is clean on `main`.
-- `.\.venv\Scripts\ruff.exe check src tests` passes.
-- `.\.venv\Scripts\python.exe -m compileall -q src tests` passes.
+- `.\.venv\Scripts\ruff.exe check src tests scripts` passes.
+- `.\.venv\Scripts\python.exe -m compileall -q src tests scripts` passes.
 - `.\.venv\Scripts\pytest.exe -q` passes.
 - `.\.venv\Scripts\python.exe scripts\publish_pypi.py --dry-run` succeeds.
-- PyPI package name still returns 404 immediately before upload.
+- PyPI project metadata is reachable immediately before upload.
 - Version in `pyproject.toml` has not already been uploaded.
