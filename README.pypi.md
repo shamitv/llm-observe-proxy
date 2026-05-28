@@ -10,9 +10,10 @@ or external database.
 
 Project repository: https://github.com/shamitv/llm-observe-proxy
 
-Current release includes editable scalar and tiered model pricing, catalog sync for
-router providers, cached-token cost snapshots, router fallback seed data, and run
-what-if comparisons.
+Current release includes the public `/api/*` integration surface, model lookup and
+sample-request discovery, default route seeding for known provider/catalog rows, compact
+recent-model routing lookup in Settings, catalog-backed pricing, and OpenAI streaming
+usage/cost capture for GPT-5.4-style models.
 
 ## Features
 

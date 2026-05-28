@@ -7,6 +7,30 @@ and this project uses semantic versioning.
 
 ## Unreleased
 
+## [0.6.0] - 2026-05-28
+
+### Added
+
+- Public `/api/*` endpoints and generated docs for model lookup, sample requests, run
+  lifecycle control, run stats, and captured request browsing.
+- Default route seeding and refresh tools for known provider/catalog model prices,
+  including router provider-pinned routes.
+- Compact Settings -> Server recent-model route summary with typeahead model lookup.
+- Pricing catalog and provider management updates for scalar/tiered prices, cached-input
+  rates, router catalog sync, and run what-if comparisons.
+
+### Fixed
+
+- Captured OpenAI-compatible streaming usage when the client omits
+  `stream_options.include_usage`, while preserving a client-provided flag when present.
+- Restored cost capture for GPT-5.4-style streaming model requests that report usage in
+  the terminal stream chunk.
+
+### Documentation
+
+- Added public API documentation under `docs/api/` and refreshed README release notes for
+  model lookup, default routing, and streaming usage capture.
+
 ## [0.3.0] - 2026-05-19
 
 ### Added
