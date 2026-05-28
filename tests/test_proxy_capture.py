@@ -14,6 +14,7 @@ from llm_observe_proxy.compatibility import QWEN_TAGGED_TOOL_CALL_REWRITE
 from llm_observe_proxy.config import ModelRoute, Settings
 from llm_observe_proxy.database import (
     ImageAsset,
+    ModelRouteDB,
     RequestRecord,
     end_active_task_run,
     pause_active_task_run,
@@ -23,6 +24,7 @@ from llm_observe_proxy.database import (
     upsert_model_price,
     upsert_model_price_tier,
     upsert_model_provider,
+    upsert_model_route_db,
 )
 
 GLOBAL_UPSTREAM_URL = "http://localhost:8080/v1"
@@ -485,6 +487,77 @@ def test_streaming_request_snapshots_cost_when_usage_event_is_present(
         assert record.billing_input_tokens == 6
         assert record.billing_output_tokens == 3
         assert record.billing_total_cost_usd == Decimal("0.00001200")
+
+
+def test_openai_streaming_request_adds_usage_options_and_snapshots_cost(
+    proxy_client: TestClient,
+    proxy_app: FastAPI,
+    fake_upstream,
+) -> None:
+    _configure_openai_gpt54_mini_route(proxy_app)
+
+    with proxy_client.stream(
+        "POST",
+        "/v1/chat/completions",
+        json={
+            "model": "gpt-5.4-mini",
+            "messages": [{"role": "user", "content": "stream"}],
+            "stream": True,
+        },
+    ) as response:
+        body = b"".join(response.iter_bytes())
+
+    assert response.status_code == 200
+    assert b'"usage"' in body
+    assert fake_upstream.last_request["body"]["stream_options"]["include_usage"] is True
+
+    with proxy_app.state.session_factory() as session:
+        record = session.scalars(select(RequestRecord)).one()
+        assert json.loads(record.request_body).get("stream_options") is None
+        assert record.billing_provider_slug == "openai"
+        assert record.billing_model == "gpt-5.4-mini"
+        assert record.billing_input_tokens == 6
+        assert record.billing_output_tokens == 3
+        assert record.billing_total_cost_usd == Decimal("0.00001200")
+
+
+def test_openai_streaming_request_preserves_explicit_usage_options(
+    proxy_client: TestClient,
+    proxy_app: FastAPI,
+    fake_upstream,
+) -> None:
+    _configure_openai_gpt54_mini_route(proxy_app)
+
+    cases = ((True, True), (False, False))
+    for include_usage, response_has_usage in cases:
+        with proxy_client.stream(
+            "POST",
+            "/v1/chat/completions",
+            json={
+                "model": "gpt-5.4-mini",
+                "messages": [{"role": "user", "content": "stream"}],
+                "stream": True,
+                "stream_options": {
+                    "include_usage": include_usage,
+                    "custom_flag": "keep-me",
+                },
+            },
+        ) as response:
+            body = b"".join(response.iter_bytes())
+
+        assert response.status_code == 200
+        assert (b'"usage"' in body) is response_has_usage
+        assert fake_upstream.last_request["body"]["stream_options"] == {
+            "include_usage": include_usage,
+            "custom_flag": "keep-me",
+        }
+
+    with proxy_app.state.session_factory() as session:
+        records = session.scalars(select(RequestRecord).order_by(RequestRecord.id)).all()
+        assert json.loads(records[0].request_body)["stream_options"]["include_usage"] is True
+        assert records[0].billing_total_cost_usd == Decimal("0.00001200")
+        assert json.loads(records[1].request_body)["stream_options"]["include_usage"] is False
+        assert records[1].billing_total_cost_usd is None
 
 
 def test_streaming_request_snapshots_tiered_cost_when_usage_event_is_present(
@@ -1153,6 +1226,39 @@ def _configure_fake_pricing(
             input_usd_per_million="1",
             cached_input_usd_per_million=cached_input_usd_per_million,
             output_usd_per_million="2",
+        )
+
+
+def _configure_openai_gpt54_mini_route(app: FastAPI) -> None:
+    with session_scope(app.state.session_factory) as session:
+        upsert_model_provider(
+            session,
+            slug="openai",
+            name="OpenAI",
+            upstream_url=ROUTE_UPSTREAM_URL,
+        )
+        upsert_model_price(
+            session,
+            provider_slug="openai",
+            model="gpt-5.4-mini",
+            input_usd_per_million="1",
+            output_usd_per_million="2",
+        )
+        existing_route = session.scalar(
+            select(ModelRouteDB).where(
+                ModelRouteDB.incoming_model == "gpt-5.4-mini",
+                ModelRouteDB.match_type == "exact",
+            )
+        )
+        upsert_model_route_db(
+            session,
+            route_id=existing_route.id if existing_route else None,
+            incoming_model="gpt-5.4-mini",
+            match_type="exact",
+            upstream_url=ROUTE_UPSTREAM_URL,
+            upstream_model="gpt-5.4-mini",
+            provider_slug="openai",
+            priority=5,
         )
 
 

@@ -88,13 +88,19 @@ async def proxy_openai(path: str, request: Request) -> Response:
             if routing_decision.model_route or routing_decision.fallback_used
             else default_fixes
         )
-        forward_body = build_forward_body(request_body, request_payload, routing_decision)
         forward_headers = build_forward_headers(
             request.headers,
             routing_decision,
             HOP_BY_HOP_HEADERS,
         )
         upstream_base = routing_decision.upstream_base_url or get_upstream_url(session, settings)
+        forward_body = _build_proxy_forward_body(
+            request_body,
+            request_payload,
+            routing_decision,
+            endpoint=endpoint,
+            upstream_base=upstream_base,
+        )
         upstream_url = _build_upstream_url(upstream_base, path, query_string)
         images = extract_images(request_payload)
         active_run = get_active_task_run(session)
@@ -430,6 +436,56 @@ def _is_stream_request(payload: Any | None, headers: Any) -> bool:
         return True
     accept = headers.get("accept", "")
     return "text/event-stream" in accept.lower()
+
+
+def _build_proxy_forward_body(
+    request_body: bytes,
+    request_payload: Any | None,
+    routing_decision,
+    *,
+    endpoint: str,
+    upstream_base: str,
+) -> bytes:
+    forward_body = build_forward_body(request_body, request_payload, routing_decision)
+    if not _should_request_openai_stream_usage(
+        request_payload,
+        routing_decision,
+        endpoint=endpoint,
+        upstream_base=upstream_base,
+    ):
+        return forward_body
+
+    forward_payload = decode_json_bytes(forward_body)
+    if not isinstance(forward_payload, dict):
+        return forward_body
+    stream_options = forward_payload.get("stream_options")
+    if not isinstance(stream_options, dict):
+        stream_options = {}
+    else:
+        stream_options = dict(stream_options)
+    if "include_usage" in stream_options:
+        return forward_body
+    forward_payload["stream_options"] = {**stream_options, "include_usage": True}
+    return json.dumps(forward_payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+
+
+def _should_request_openai_stream_usage(
+    request_payload: Any | None,
+    routing_decision,
+    *,
+    endpoint: str,
+    upstream_base: str,
+) -> bool:
+    if endpoint != "/v1/chat/completions":
+        return False
+    if not isinstance(request_payload, dict) or request_payload.get("stream") is not True:
+        return False
+    stream_options = request_payload.get("stream_options")
+    if isinstance(stream_options, dict) and "include_usage" in stream_options:
+        return False
+    if routing_decision.provider_slug == "openai":
+        return True
+    return upstream_base.rstrip("/").lower() == "https://api.openai.com/v1"
 
 
 def _extract_payload_model(payload: Any | None) -> str | None:
