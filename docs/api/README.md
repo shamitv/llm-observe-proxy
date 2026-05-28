@@ -51,6 +51,32 @@ The lookup response includes `sample_request.curl`, `sample_request.python`, and
 sanitized upstream preview. Raw API keys are never returned; previews show env var
 names such as `$OPENAI_API_KEY` or `$OPENROUTER_API_KEY`.
 
+## Proxy Usage Capture
+
+Applications can keep using the normal OpenAI-compatible `/v1` client base URL:
+
+```python
+from openai import OpenAI
+
+client = OpenAI(api_key="local-dev-key", base_url="http://localhost:8080/v1")
+stream = client.chat.completions.create(
+    model="gpt-5.4-mini",
+    messages=[{"role": "user", "content": "Stream a short answer"}],
+    stream=True,
+)
+```
+
+For OpenAI Chat Completions streaming requests, the proxy asks OpenAI for the final
+usage chunk when the client omits `stream_options.include_usage`. This lets request
+rows and run stats capture token and cost data for streams. If an application already
+sends `stream_options.include_usage` as `true` or `false`, that explicit value is
+preserved.
+
+The proxy stores the original client request body in SQLite. Any default
+`stream_options.include_usage=true` insertion is applied only to the upstream-forwarded
+request. Older captured streams that did not include a usage event cannot be accurately
+repriced from the stored SSE body alone.
+
 ## Run Lifecycle
 
 Start a run:
