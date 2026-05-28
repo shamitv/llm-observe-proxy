@@ -255,6 +255,14 @@ used by OpenAI, vLLM, SGLang, and LM Studio. When standard usage is absent, the 
 also read llama.cpp `timings` and Ollama-style `prompt_eval_count` / `eval_count` fields
 if those metrics are present in captured `/v1` responses or stream events.
 
+For OpenAI Chat Completions streaming requests, the proxy asks upstream for the final
+usage chunk when the client omits `stream_options.include_usage`. If the client already
+sets `stream_options.include_usage` to either `true` or `false`, the proxy preserves that
+explicit value. The original client request body remains what is stored in SQLite; only
+the upstream-forwarded body gets the default usage option. Historical streams that were
+captured without a usage chunk cannot be backfilled accurately unless token counts are
+available from another captured provider metric.
+
 The estimator uses separate input, cached-input, and output token rates per 1M tokens:
 
 ```text
