@@ -2938,6 +2938,12 @@ def _count_rows_json(rows: list[dict[str, object]]) -> list[dict[str, object]]:
     ]
 
 
+def _route_display_name(model_route: object, upstream_model: object) -> str:
+    if model_route:
+        return str(model_route)
+    return "model fallback" if upstream_model else "pass-through upstream"
+
+
 def _record_list_item_json(record: dict[str, object]) -> dict[str, object]:
     status_label = str(record["status"]) if record["status"] is not None else "pending"
     signals = _request_signals(record)
@@ -2971,7 +2977,8 @@ def _record_list_item_json(record: dict[str, object]) -> dict[str, object]:
         "billing_provider": record["billing_provider"],
         "provider_name": record.get("provider_name") or record["billing_provider"],
         "billing_model": record["billing_model"],
-        "route_name": record.get("route_name") or record["model_route"] or "global fallback",
+        "route_name": record.get("route_name")
+        or _route_display_name(record["model_route"], record["upstream_model"]),
         "response_was_rewritten": record.get("response_was_rewritten", False),
         "compat_fixes_json": record.get("compat_fixes_json"),
         "compat_fix_errors_json": record.get("compat_fix_errors_json"),
@@ -3374,7 +3381,7 @@ def _record_list_item_from_row(row, *, now: datetime | None = None) -> dict[str,
         "billing_provider": row["billing_provider_name"] or row["billing_provider_slug"],
         "provider_name": row["billing_provider_name"] or row["billing_provider_slug"],
         "billing_model": row["billing_model"],
-        "route_name": row["model_route"] or "global fallback",
+        "route_name": _route_display_name(row["model_route"], row["upstream_model"]),
         "response_was_rewritten": row["response_was_rewritten"],
         "compat_fixes_json": row["compat_fixes_json"],
         "compat_fix_errors_json": row["compat_fix_errors_json"],
@@ -3467,7 +3474,7 @@ def _record_list_item(record: RequestRecord, *, now: datetime | None = None) -> 
         "billing_provider": record.billing_provider_name or record.billing_provider_slug,
         "provider_name": record.billing_provider_name or record.billing_provider_slug,
         "billing_model": record.billing_model,
-        "route_name": record.model_route or "global fallback",
+        "route_name": _route_display_name(record.model_route, record.upstream_model),
         "response_was_rewritten": record.response_was_rewritten,
         "compat_fixes_json": record.compat_fixes_json,
         "compat_fix_errors_json": record.compat_fix_errors_json,

@@ -43,8 +43,8 @@
 
   <form class="panel form-panel" method="post" action="/admin/settings/upstream">
     <header>
-      <h2>Upstream URL</h2>
-      <span>Base /v1 endpoint</span>
+      <h2>Default Pass-through Upstream</h2>
+      <span>Base /v1 endpoint used without a complete route or model fallback</span>
     </header>
     <label>
       URL
@@ -143,7 +143,7 @@
       </table>
     </div>
     {% else %}
-    <p class="muted">No model routes are configured. Requests use the global upstream fallback.</p>
+    <p class="muted">No model routes are configured. Requests use the default pass-through upstream unless an unknown-model fallback is configured.</p>
     {% endif %}
     <form class="model-route-form" method="post" action="/admin/settings/model-routes">
       <label>
@@ -388,7 +388,7 @@
           {{ test_result.status_code | default('error', true) }}
         </span>
         <span>{{ test_result.kind }}</span>
-        <span>{{ test_result.model_route | default('global fallback', true) }}</span>
+        <span>{{ test_result.model_route | default("model fallback" if test_result.upstream_model else "pass-through upstream", true) }}</span>
         {% if test_result.upstream_model %}
         <span>{{ test_result.upstream_model }}</span>
         {% endif %}

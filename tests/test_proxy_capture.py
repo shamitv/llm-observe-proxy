@@ -387,7 +387,7 @@ def test_configured_model_route_with_missing_key_env_drops_client_authorization(
     assert "authorization" not in fake_upstream.last_request["headers"]
 
 
-def test_unknown_missing_and_non_json_models_use_global_fallback(
+def test_unknown_missing_and_non_json_models_use_pass_through_without_model_fallback(
     tmp_path: Path,
     fake_upstream,
 ) -> None:

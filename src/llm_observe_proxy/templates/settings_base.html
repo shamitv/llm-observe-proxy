@@ -50,7 +50,7 @@
     {% block summary_cards %}
     {{ summaries.summary_card("IN", "Proxy listener", summary.listener.host ~ ":" ~ summary.listener.port, "Admin and proxy port") }}
     {{ summaries.summary_card("CL", "Client base URL", summary.client_base_url, "OpenAI-compatible endpoint") }}
-    {{ summaries.summary_card("FB", "Global fallback", (summary.upstream.default_provider_name or "No provider") ~ " / " ~ (summary.upstream.default_model or "No model"), "Used when no route matches", true) }}
+    {{ summaries.summary_card("FB", "Model fallback", (summary.upstream.default_provider_name or "No provider") ~ " / " ~ (summary.upstream.default_model or "No model"), "Used for unmatched JSON models", true) }}
     {{ summaries.summary_card("DB", "Stored rows", summary.stored_rows | compact_number, (summary.rows_older_than_retention | compact_number) ~ " older than " ~ summary.retention_days ~ " days") }}
     {% endblock %}
   </section>

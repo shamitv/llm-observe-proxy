@@ -45,8 +45,8 @@
   </article>
 
   {{ fallback_forms.fallback_defaults_form(
-    "Global Upstream Fallback Defaults",
-    "Used when no exact or prefix route matches a request.",
+    "Pass-through Upstream and Model Fallback",
+    "Configure the final routing stages after explicit model routes.",
     providers,
     default_provider_slug,
     default_model,
@@ -55,7 +55,7 @@
     "/admin/settings/server",
     "Save upstream defaults",
     true,
-    "When no route matches, the proxy can send the request to " ~ (fallback.provider_name | default("the selected provider", true)) ~ " as " ~ (default_model | default("the configured model", true)) ~ "."
+    "Routing order: matching route, then the selected fallback provider and default model. Requests without a model, plus unmatched models when fallback is disabled or incomplete, are forwarded unchanged to the default pass-through upstream."
   ) }}
 
   <form class="card form-card" method="post" action="/admin/settings/compat-fixes" data-fix-picker>
@@ -129,7 +129,7 @@
             <td><code>{{ route.model }}</code></td>
             <td>{{ route.requests | compact_number }}</td>
             <td>{% if route.last_used_at %}<time datetime="{{ route.last_used_at }}" data-local-time="table">{{ route.last_used_at }}</time>{% else %}<span class="muted">Never</span>{% endif %}</td>
-            <td><code>{{ route.matched_route | default("global fallback", true) }}</code>{% if route.match_type %}<small>{{ route.match_type }}</small>{% endif %}</td>
+            <td><code>{{ route.matched_route | default("model fallback" if route.upstream_model else "pass-through upstream", true) }}</code>{% if route.match_type %}<small>{{ route.match_type }}</small>{% endif %}</td>
             <td><code>{{ route.upstream_model }}</code></td>
             <td>{{ route.provider_name | default(route.provider_slug | default("Auto", true), true) }}</td>
             <td>
@@ -173,7 +173,7 @@
       <div class="detail-meta">
         <span class="{{ 'status-200' if test_result.ok else 'status-500' }}">{{ test_result.status_code | default('error', true) }}</span>
         <span>{{ test_result.kind }}</span>
-        <span>{{ test_result.model_route | default('global fallback', true) }}</span>
+        <span>{{ test_result.model_route | default("model fallback" if test_result.upstream_model else "pass-through upstream", true) }}</span>
         <span>{{ test_result.duration_ms | duration_ms }}</span>
       </div>
       <code>{{ test_result.url }}</code>

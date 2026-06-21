@@ -73,7 +73,7 @@
       <div class="detail-meta">
         <span class="{{ 'status-200' if test_result.ok else 'status-500' }}">{{ test_result.status_code | default('error', true) }}</span>
         <span>{{ test_result.kind }}</span>
-        <span>{{ test_result.model_route | default('global fallback', true) }}</span>
+        <span>{{ test_result.model_route | default("model fallback" if test_result.upstream_model else "pass-through upstream", true) }}</span>
         {% if test_result.upstream_model %}<span>{{ test_result.upstream_model }}</span>{% endif %}
         <span>{{ test_result.duration_ms | duration_ms }}</span>
       </div>
@@ -116,7 +116,7 @@
     {% if test_result %}
     <div class="result-panel">
       <strong>{{ "Success" if test_result.ok else "Error" }}</strong>
-      <span>{{ test_result.kind }} through {{ test_result.model_route | default("global fallback", true) }}</span>
+      <span>{{ test_result.kind }} through {{ test_result.model_route | default("model fallback" if test_result.upstream_model else "pass-through upstream", true) }}</span>
       <code>{{ test_result.url }}</code>
     </div>
     {% else %}

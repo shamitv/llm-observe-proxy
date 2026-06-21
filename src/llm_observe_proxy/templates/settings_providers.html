@@ -134,15 +134,17 @@
   </form>
 
   {{ fallback_forms.fallback_defaults_form(
-    "Fallback Defaults",
-    "Route misses can use a default provider and model.",
+    "Fallback Provider and Model",
+    "Choose where unmatched JSON model names are sent and which model name replaces them.",
     providers,
     default_provider_slug,
     default_model,
     fallback_enabled,
     upstream_url,
     "/admin/settings/providers",
-    "Save fallback defaults"
+    "Save fallback defaults",
+    false,
+    "If fallback is disabled or incomplete, unmatched models pass through unchanged to the default pass-through upstream configured on Server."
   ) }}
 
   <article class="card diagnostics-card health-card">

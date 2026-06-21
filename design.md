@@ -66,6 +66,9 @@ but they should not dominate the first screen.
   Diagnostics, Data.
 - Keep provider, route, pricing, fallback, diagnostics, and retention workflows
   operational and compact.
+- Name the default pass-through upstream separately from unknown-model fallback
+  routing. Settings guidance should show the order as explicit route, fallback
+  provider/default model, then unchanged pass-through when fallback is unavailable.
 - Routing should expose generated default-route discovery as an operational registry
   action: preview before apply, summarize inserted/updated/skipped counts, and keep
   generated routes visibly distinct from user-owned routes.

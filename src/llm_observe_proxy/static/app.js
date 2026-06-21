@@ -1020,7 +1020,7 @@ document.querySelectorAll("[data-route-simulator]").forEach((form) => {
         const status = document.createElement("strong");
         status.textContent = data.status || "unknown";
         const route = document.createElement("span");
-        route.textContent = `Route: ${data.matched_route || "global fallback or no match"}`;
+        route.textContent = `Route: ${data.matched_route || (data.upstream_model ? "model fallback" : "pass-through upstream")}`;
         const upstream = document.createElement("code");
         upstream.textContent = `${data.upstream_url || "-"} -> ${data.upstream_model || "-"}`;
         const provider = document.createElement("span");
@@ -1062,7 +1062,7 @@ document.querySelectorAll("[data-model-route-lookup]").forEach((form) => {
     const status = document.createElement("strong");
     status.textContent = data.status || "unknown";
     const route = document.createElement("span");
-    route.textContent = `Route: ${data.route || "global fallback or no match"}`;
+    route.textContent = `Route: ${data.route || (data.upstream_model ? "model fallback" : "pass-through upstream")}`;
     const upstream = document.createElement("code");
     upstream.textContent = `${data.upstream_url || "-"} -> ${data.upstream_model || "-"}`;
     const provider = document.createElement("span");
@@ -1721,7 +1721,11 @@ const renderRequestInspector = (container, item) => {
       createNode("dt", { textContent: "Provider" }),
       createNode("dd", { textContent: item.provider_name || item.billing_provider || "-" }),
       createNode("dt", { textContent: "Route" }),
-      createNode("dd", { textContent: item.route_name || item.model_route || "global fallback" }),
+      createNode("dd", {
+        textContent: item.route_name
+          || item.model_route
+          || (item.upstream_model ? "model fallback" : "pass-through upstream"),
+      }),
       createNode("dt", { textContent: "Upstream" }),
       createNode("dd", { textContent: item.upstream_url || "-" }),
       createNode("dt", { textContent: "Forwarded model" }),
@@ -2538,7 +2542,10 @@ const renderRequestDetail = (root, data) => {
   upstream?.append(createNode("section", { className: "panel" }, [
     createNode("header", {}, [
       createNode("h2", { textContent: "Upstream" }),
-      createNode("span", { textContent: record.model_route || "global fallback" }),
+      createNode("span", {
+        textContent: record.model_route
+          || (record.upstream_model ? "model fallback" : "pass-through upstream"),
+      }),
     ]),
     createNode("code", { textContent: record.upstream_url }),
   ]));

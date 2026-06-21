@@ -335,6 +335,31 @@ def test_fallback_forms_render_provider_options_and_return_target(
     assert "OpenAI" in response.text
 
 
+def test_fallback_settings_copy_distinguishes_model_fallback_from_pass_through(
+    proxy_client: TestClient,
+) -> None:
+    server = proxy_client.get("/admin/settings/server")
+    routing = proxy_client.get("/admin/settings/routing")
+    providers = proxy_client.get("/admin/settings/providers")
+
+    assert server.status_code == 200
+    assert "Pass-through Upstream and Model Fallback" in server.text
+    assert "Default pass-through upstream URL" in server.text
+    assert "Model fallback" in server.text
+    assert "Routing order: matching route" in server.text
+    assert "forwarded unchanged to the default pass-through upstream" in server.text
+    assert "Global upstream URL" not in server.text
+    assert "Global fallback" not in server.text
+
+    assert routing.status_code == 200
+    assert "Unknown-model Fallback" in routing.text
+    assert "If fallback is disabled or incomplete" in routing.text
+
+    assert providers.status_code == 200
+    assert "Fallback Provider and Model" in providers.text
+    assert "If fallback is disabled or incomplete" in providers.text
+
+
 @pytest.mark.parametrize(
     "return_to",
     ["/admin/settings/server", "/admin/settings/routing", "/admin/settings/providers"],
@@ -964,7 +989,7 @@ def test_settings_test_upstream_uses_configured_model_route(
     assert fake_upstream.last_request["headers"]["authorization"] == "Bearer route-secret"
 
 
-def test_settings_test_upstream_falls_back_for_unknown_model(
+def test_settings_test_upstream_uses_pass_through_for_unknown_model_without_fallback(
     tmp_path: Path,
     fake_upstream: Any,
 ) -> None:
@@ -980,7 +1005,7 @@ def test_settings_test_upstream_falls_back_for_unknown_model(
         )
 
     assert response.status_code == 200
-    assert "global fallback" in response.text
+    assert "pass-through upstream" in response.text
     assert fake_upstream.last_request["body"]["model"] == "unknown"
 
 

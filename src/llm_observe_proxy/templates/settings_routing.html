@@ -190,15 +190,17 @@
   </form>
 
   {{ fallback_forms.fallback_defaults_form(
-    "Fallback Routing Behavior",
-    "Resolution runs startup routes, editable routes, then fallback.",
+    "Unknown-model Fallback",
+    "After explicit routes, unmatched JSON model names can use a default provider and model.",
     providers,
     default_provider_slug,
     default_model,
     fallback_enabled,
     upstream_url,
     "/admin/settings/routing",
-    "Save fallback behavior"
+    "Save fallback behavior",
+    false,
+    "If fallback is disabled or incomplete, unmatched models pass through unchanged to the default pass-through upstream configured on Server."
   ) }}
 
   <article class="card diagnostics-card">
