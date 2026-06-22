@@ -12,6 +12,7 @@ from urllib.parse import unquote, urlencode
 
 import httpx
 from fastapi import APIRouter, Form, HTTPException, Query, Request
+from fastapi.encoders import jsonable_encoder
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from jinja2 import Undefined, pass_context
 from sqlalchemy import case, desc, func, or_, select
@@ -1326,6 +1327,36 @@ async def api_trim_records(request: Request):
     return {"deleted": deleted}
 
 
+@router.get("/api/settings/{tab}", response_model=None)
+async def api_settings_page(
+    request: Request,
+    tab: str,
+    days: int = Query(30, ge=1, le=3650),
+    search: str = "",
+    status: str = "all",
+    provider: str = "",
+    currency: str = "",
+    page: int = Query(1, ge=1),
+    per_page: int = Query(25, ge=1, le=100),
+):
+    if tab not in {"server", "routing", "providers", "pricing", "diagnostics", "data"}:
+        return JSONResponse({"detail": "Settings tab not found."}, status_code=404)
+    session_factory: SessionFactory = request.app.state.session_factory
+    with session_scope(session_factory) as session:
+        return _settings_page_payload(
+            request,
+            session,
+            tab=tab,
+            days=days,
+            search=search,
+            status=status,
+            provider=provider,
+            currency=currency,
+            page=page,
+            per_page=per_page,
+        )
+
+
 @router.post("/api/pricing/catalog/preview", response_model=None)
 async def api_pricing_catalog_preview(request: Request):
     payload = await _json_payload(request)
@@ -1399,6 +1430,109 @@ async def api_pricing_catalog_apply(request: Request):
         "repriced_missing": repriced_missing,
         "preview": preview,
     }
+
+
+@router.get("/api/model-prices", response_model=None)
+async def api_list_model_prices(
+    request: Request,
+    search: str = "",
+    status: str = "all",
+    provider: str = "",
+    page: int = Query(1, ge=1),
+    per_page: int = Query(25, ge=1, le=100),
+):
+    session_factory: SessionFactory = request.app.state.session_factory
+    with session_scope(session_factory) as session:
+        rows = [_model_price_api_row(price) for price in list_model_prices(session)]
+    filtered = _filter_model_prices(
+        rows,
+        search=search,
+        status=status,
+        provider=provider,
+    )
+    return _paginated(filtered, page, per_page)
+
+
+@router.post("/api/model-prices", response_model=None)
+async def api_create_model_price(request: Request):
+    payload = await _json_payload(request)
+    session_factory: SessionFactory = request.app.state.session_factory
+    with session_scope(session_factory) as session:
+        provider_slug = str(payload.get("provider_slug") or "").strip()
+        model = str(payload.get("model") or "").strip()
+        existing = session.scalar(
+            select(ModelPrice).where(
+                ModelPrice.provider_slug == provider_slug,
+                ModelPrice.model == model,
+            )
+        )
+        if existing is not None:
+            return JSONResponse(
+                {"detail": "A price for this provider and model already exists."},
+                status_code=409,
+            )
+    return _save_model_price_from_payload(request, payload, status_code=201)
+
+
+@router.put("/api/model-prices/{price_id}", response_model=None)
+async def api_update_model_price(request: Request, price_id: int):
+    session_factory: SessionFactory = request.app.state.session_factory
+    with session_scope(session_factory) as session:
+        if session.get(ModelPrice, price_id) is None:
+            return JSONResponse({"detail": "Model price not found."}, status_code=404)
+    payload = await _json_payload(request)
+    return _save_model_price_from_payload(request, payload, price_id=price_id)
+
+
+@router.delete("/api/model-prices/{price_id}", response_model=None)
+async def api_delete_model_price(request: Request, price_id: int):
+    session_factory: SessionFactory = request.app.state.session_factory
+    with session_scope(session_factory) as session:
+        price = session.get(ModelPrice, price_id)
+        if price is None:
+            return JSONResponse({"detail": "Model price not found."}, status_code=404)
+        session.delete(price)
+    return {"deleted": True}
+
+
+@router.post("/api/model-prices/{price_id}/tiers", response_model=None)
+async def api_create_model_price_tier(request: Request, price_id: int):
+    payload = await _json_payload(request)
+    session_factory: SessionFactory = request.app.state.session_factory
+    with session_scope(session_factory) as session:
+        if session.get(ModelPrice, price_id) is None:
+            return JSONResponse({"detail": "Model price not found."}, status_code=404)
+        try:
+            tier = upsert_model_price_tier(
+                session,
+                model_price_id=price_id,
+                min_input_tokens=payload.get("min_input_tokens", ""),
+                max_input_tokens=payload.get("max_input_tokens", ""),
+                label=str(payload.get("label") or ""),
+                input_usd_per_million=payload.get("input_usd_per_million", ""),
+                cached_input_usd_per_million=payload.get(
+                    "cached_input_usd_per_million",
+                    "",
+                ),
+                output_usd_per_million=payload.get("output_usd_per_million", ""),
+                source_url=str(payload.get("source_url") or ""),
+                checked_at=str(payload.get("checked_at") or ""),
+                release_date=str(payload.get("release_date") or ""),
+                notes=str(payload.get("notes") or ""),
+            )
+            row = _model_price_tier_row(tier)
+        except ValueError as exc:
+            return JSONResponse({"detail": str(exc)}, status_code=400)
+    return JSONResponse(jsonable_encoder(row), status_code=201)
+
+
+@router.delete("/api/model-price-tiers/{tier_id}", response_model=None)
+async def api_delete_model_price_tier(request: Request, tier_id: int):
+    session_factory: SessionFactory = request.app.state.session_factory
+    with session_scope(session_factory) as session:
+        if not delete_model_price_tier(session, tier_id):
+            return JSONResponse({"detail": "Model price tier not found."}, status_code=404)
+    return {"deleted": True}
 
 
 @router.get("/api/providers", response_model=None)
@@ -1635,6 +1769,48 @@ async def api_test_route(request: Request, route_id: int):
         chat_url = f"{upstream_base}/chat/completions"
     return await _send_upstream_test(
         chat_url,
+        forward_body,
+        forward_headers,
+        test_kind,
+        decision.model_route,
+        decision.upstream_model,
+    )
+
+
+@router.post("/api/diagnostics/upstream-test", response_model=None)
+async def api_diagnostics_upstream_test(request: Request):
+    payload = await _json_payload(request)
+    test_kind = str(payload.get("test_kind") or "")
+    model = str(payload.get("model") or "gpt-test")
+    prompt = str(payload.get("prompt") or TEST_PROMPT_DEFAULT)
+    try:
+        test_payload = build_upstream_test_payload(test_kind, model, prompt)
+    except ValueError as exc:
+        return JSONResponse({"detail": str(exc)}, status_code=400)
+
+    request_body = json.dumps(
+        test_payload,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    session_factory: SessionFactory = request.app.state.session_factory
+    settings = request.app.state.settings
+    with session_scope(session_factory) as session:
+        decision = select_model_route(
+            test_payload,
+            settings,
+            get_effective_model_routes(session, settings),
+            session=session,
+        )
+        forward_body = build_forward_body(request_body, test_payload, decision)
+        forward_headers = build_forward_headers(
+            {"content-type": "application/json"},
+            decision,
+            set(),
+        )
+        upstream_url = decision.upstream_base_url or get_upstream_url(session, settings)
+    return await _send_upstream_test(
+        f"{upstream_url.rstrip('/')}/chat/completions",
         forward_body,
         forward_headers,
         test_kind,
@@ -2168,16 +2344,53 @@ def _filter_routes(
     return filtered
 
 
+def _filter_model_prices(
+    rows: list[dict[str, object]],
+    *,
+    search: str,
+    status: str,
+    provider: str,
+) -> list[dict[str, object]]:
+    needle = search.strip().lower()
+    filtered = rows
+    if needle:
+        filtered = [
+            row
+            for row in filtered
+            if needle
+            in " ".join(
+                str(row.get(key) or "").lower()
+                for key in (
+                    "provider_name",
+                    "provider_slug",
+                    "model",
+                    "display_name",
+                    "aliases",
+                )
+            )
+        ]
+    if status in {"active", "inactive"}:
+        expected = status == "active"
+        filtered = [row for row in filtered if bool(row["active"]) is expected]
+    if provider:
+        filtered = [row for row in filtered if row["provider_slug"] == provider]
+    return filtered
+
+
 def _paginated(rows: list[dict[str, object]], page: int, per_page: int) -> dict[str, object]:
     total = len(rows)
     start = (page - 1) * per_page
     end = start + per_page
+    total_pages = max(1, math.ceil(total / per_page)) if total else 1
     return {
         "items": rows[start:end],
         "page": page,
         "per_page": per_page,
         "total": total,
-        "pages": max(1, math.ceil(total / per_page)) if total else 1,
+        "pages": total_pages,
+        "total_pages": total_pages,
+        "has_previous": page > 1,
+        "has_next": page < total_pages,
     }
 
 
@@ -2222,6 +2435,43 @@ def _save_route_from_payload(request: Request, payload: dict[str, Any]):
                 active=_truthy(payload.get("active", True)),
             )
             return _route_api_row(session, route)
+    except ValueError as exc:
+        return JSONResponse({"detail": str(exc)}, status_code=400)
+
+
+def _save_model_price_from_payload(
+    request: Request,
+    payload: dict[str, Any],
+    *,
+    price_id: int | None = None,
+    status_code: int = 200,
+):
+    try:
+        session_factory: SessionFactory = request.app.state.session_factory
+        with session_scope(session_factory) as session:
+            price = upsert_model_price(
+                session,
+                price_id=price_id,
+                provider_slug=str(payload.get("provider_slug") or ""),
+                model=str(payload.get("model") or ""),
+                display_name=str(payload.get("display_name") or ""),
+                aliases=payload.get("aliases") or "",
+                input_usd_per_million=payload.get("input_usd_per_million", ""),
+                cached_input_usd_per_million=payload.get(
+                    "cached_input_usd_per_million",
+                    "",
+                ),
+                output_usd_per_million=payload.get("output_usd_per_million", ""),
+                active=_truthy(payload.get("active", True)),
+                source_url=str(payload.get("source_url") or ""),
+                checked_at=str(payload.get("checked_at") or ""),
+                release_date=str(payload.get("release_date") or ""),
+                notes=str(payload.get("notes") or ""),
+            )
+            row = _model_price_api_row(price)
+        if status_code == 200:
+            return row
+        return JSONResponse(jsonable_encoder(row), status_code=status_code)
     except ValueError as exc:
         return JSONResponse({"detail": str(exc)}, status_code=400)
 
@@ -2433,6 +2683,155 @@ def _storage_stats(request: Request, session) -> dict[str, object]:
     }
 
 
+def _settings_page_payload(
+    request: Request,
+    session,
+    *,
+    tab: str,
+    days: int,
+    search: str,
+    status: str,
+    provider: str,
+    currency: str,
+    page: int,
+    per_page: int,
+) -> dict[str, object]:
+    settings = request.app.state.settings
+    providers = list_model_providers(session)
+    provider_rows = [_provider_api_row(session, item) for item in providers]
+    fallback = get_fallback_summary(session)
+    summary = _api_settings_summary(request, session, days=days)
+    health_results = getattr(request.app.state, "provider_health_results", {})
+    common_options = {
+        "providers": provider_rows,
+        "statuses": ["active", "inactive"],
+    }
+    pagination = None
+
+    if tab == "server":
+        data = {
+            "listener": {
+                "host": get_incoming_host(session, settings),
+                "port": get_incoming_port(session, settings),
+                "expose_all_ips": get_expose_all_ips(session, settings),
+            },
+            "client_base_url": summary["client_base_url"],
+            "upstream_url": get_upstream_url(session, settings),
+            "fallback": fallback,
+            "compatibility_fixes": list(get_default_compat_fixes(session, settings)),
+            "recent_routes": _settings_recent_model_route_rows(session, settings, days=days),
+            "retention": {
+                "days": days,
+                "rows": summary["rows_older_than_retention"],
+            },
+        }
+        options = {
+            **common_options,
+            "compatibility_fixes": compatibility_fix_rows(),
+        }
+    elif tab == "routing":
+        routes = _settings_model_route_rows(session, settings, providers)
+        for route in routes:
+            route["status"] = "active" if route["active"] else "inactive"
+            route["compatibility_fixes"] = list(route.get("fixes") or ())
+        filtered = _filter_routes(
+            routes,
+            search=search,
+            status=status,
+            provider=provider,
+        )
+        page_data = _paginated(filtered, page, per_page)
+        data = {
+            "routes": page_data["items"],
+            "usage": get_route_usage_summary(session),
+            "fallback": fallback,
+        }
+        pagination = _pagination_metadata(page_data)
+        options = common_options
+    elif tab == "providers":
+        filtered = _filter_providers(
+            provider_rows,
+            search=search,
+            status=status,
+            currency=currency,
+        )
+        page_data = _paginated(filtered, page, per_page)
+        data = {
+            "providers": page_data["items"],
+            "usage": get_provider_usage_summary(session),
+            "fallback": fallback,
+            "health_results": health_results,
+        }
+        pagination = _pagination_metadata(page_data)
+        options = {
+            **common_options,
+            "currencies": sorted(
+                {str(item["currency"]) for item in provider_rows if item.get("currency")}
+            ),
+        }
+    elif tab == "pricing":
+        prices = [_model_price_api_row(item) for item in list_model_prices(session)]
+        filtered = _filter_model_prices(
+            prices,
+            search=search,
+            status=status,
+            provider=provider,
+        )
+        page_data = _paginated(filtered, page, per_page)
+        data = {
+            "prices": page_data["items"],
+            "fallback": fallback,
+        }
+        pagination = _pagination_metadata(page_data)
+        options = common_options
+    elif tab == "diagnostics":
+        data = {
+            "providers": provider_rows,
+            "health_results": health_results,
+            "fallback": fallback,
+            "route_usage": get_route_usage_summary(session),
+            "test_defaults": {
+                "model": "gpt-test",
+                "prompt": TEST_PROMPT_DEFAULT,
+            },
+        }
+        options = common_options
+    elif tab == "data":
+        data = {
+            "storage": _storage_stats(request, session),
+            "retention": {
+                "days": days,
+                "rows": summary["rows_older_than_retention"],
+            },
+            "fallback": fallback,
+        }
+        options = common_options
+    else:  # pragma: no cover - guarded by the API route
+        raise ValueError(f"Unsupported settings tab: {tab}")
+
+    return {
+        "tab": tab,
+        "summary": summary,
+        "data": data,
+        "options": options,
+        "pagination": pagination,
+    }
+
+
+def _pagination_metadata(page_data: dict[str, object]) -> dict[str, object]:
+    return {
+        key: page_data[key]
+        for key in (
+            "page",
+            "per_page",
+            "total",
+            "total_pages",
+            "has_previous",
+            "has_next",
+        )
+    }
+
+
 def _model_price_row(price) -> dict[str, object]:
     aliases: list[str] = []
     if price.aliases_json:
@@ -2459,6 +2858,13 @@ def _model_price_row(price) -> dict[str, object]:
         "notes": price.notes,
         "tiers": [_model_price_tier_row(tier) for tier in price.tiers],
     }
+
+
+def _model_price_api_row(price) -> dict[str, object]:
+    row = _model_price_row(price)
+    row["aliases"] = _model_price_aliases(price)
+    row["status"] = "active" if price.active else "inactive"
+    return row
 
 
 def _model_price_tier_row(tier) -> dict[str, object]:
