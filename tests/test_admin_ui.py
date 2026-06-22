@@ -341,6 +341,8 @@ def test_settings_tabs_render_new_shell(
     assert f'data-api-url="/admin/api/settings/{tab}"' in response.text
     assert "data-settings-status" in response.text
     assert "data-settings-refresh" in response.text
+    assert "v0.7 control plane" in response.text
+    assert "v0.7.0" in response.text
     assert heading in response.text
 
 

@@ -7,6 +7,36 @@ and this project uses semantic versioning.
 
 ## Unreleased
 
+## [0.7.0] - 2026-06-22
+
+### Added
+
+- Intrinsic dimensions beneath request-image thumbnails and an accessible preview dialog
+  with fit-to-window and scrollable actual-size modes.
+- Admin-only Settings payload endpoints for all six tabs, model-price and price-tier
+  mutations, and upstream diagnostic tests.
+
+### Changed
+
+- Settings registries, filters, pagination, saves, deletes, diagnostics, catalog actions,
+  and retention updates now use REST-backed in-page rendering instead of document reloads.
+- Editable Settings views preserve dirty forms, focus, scroll position, selected rows,
+  open tier drawers, and modal state across event-driven refreshes.
+- Request image galleries retain thumbnail and preview state across one-second detail
+  polling.
+
+### Fixed
+
+- Kept long compatibility-fix labels and Settings result content contained on mobile
+  layouts.
+- Clarified the distinction between the default pass-through upstream and unknown-model
+  fallback settings.
+
+### Documentation
+
+- Updated design guidance, test coverage, release summaries, and seeded admin screenshots
+  for the image preview and REST-backed Settings workflows.
+
 ## [0.6.0] - 2026-05-28
 
 ### Added

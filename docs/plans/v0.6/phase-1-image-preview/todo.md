@@ -106,11 +106,11 @@
 
 ## Final Verification
 
-- [ ] `.venv/bin/ruff check src tests scripts`
-- [ ] `.venv/bin/python -m compileall -q src tests scripts`
-- [ ] `.venv/bin/pytest -q`
-- [ ] `git diff --check`
-- [ ] Confirm no database migration or dependency change.
-- [ ] Confirm no public or admin request-detail API shape change.
-- [ ] Confirm record-only forwarding behavior is unchanged.
-- [ ] Review the final branch diff for unrelated changes.
+- [x] `.venv/bin/ruff check src tests scripts`
+- [x] `.venv/bin/python -m compileall -q src tests scripts`
+- [x] `.venv/bin/pytest -q`
+- [x] `git diff --check`
+- [x] Confirm no database migration or dependency change.
+- [x] Confirm no public or admin request-detail API shape change.
+- [x] Confirm record-only forwarding behavior is unchanged.
+- [x] Review the final branch diff for unrelated changes.

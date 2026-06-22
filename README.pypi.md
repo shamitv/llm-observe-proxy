@@ -10,10 +10,9 @@ or external database.
 
 Project repository: https://github.com/shamitv/llm-observe-proxy
 
-Current release includes the public `/api/*` integration surface, model lookup and
-sample-request discovery, default route seeding for known provider/catalog rows, compact
-recent-model routing lookup in Settings, catalog-backed pricing, and OpenAI streaming
-usage/cost capture for GPT-5.4-style models.
+Release 0.7.0 adds intrinsic image dimensions and accessible fit/actual-size previews,
+plus REST-backed Settings data and actions that update in place while preserving dirty
+forms and other local UI state.
 
 ## Features
 

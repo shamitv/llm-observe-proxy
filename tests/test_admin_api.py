@@ -398,7 +398,9 @@ def test_default_route_preview_apply_and_sample_request(proxy_client: TestClient
 def test_public_model_api_and_openapi_schema(proxy_client: TestClient) -> None:
     openapi = proxy_client.get("/api/openapi.json")
     assert openapi.status_code == 200
-    paths = openapi.json()["paths"]
+    schema = openapi.json()
+    assert schema["info"]["version"] == "0.7.0"
+    paths = schema["paths"]
     assert "/api/models" in paths
     assert "/api/models/lookup" in paths
     assert "/admin/api/routes" not in paths

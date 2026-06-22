@@ -214,13 +214,13 @@
 
 ## Final Verification
 
-- [ ] `.venv/bin/ruff check src tests scripts`
-- [ ] `.venv/bin/python -m compileall -q src tests scripts`
-- [ ] `.venv/bin/pytest -q`
-- [ ] `git diff --check`
-- [ ] Confirm no public API contract changes.
-- [ ] Confirm no database migration or dependency change.
-- [ ] Confirm Settings has no continuous poller.
-- [ ] Confirm HTML POST compatibility handlers remain.
-- [ ] Confirm record-only forwarding behavior is unchanged.
-- [ ] Review the final branch diff for unrelated changes.
+- [x] `.venv/bin/ruff check src tests scripts`
+- [x] `.venv/bin/python -m compileall -q src tests scripts`
+- [x] `.venv/bin/pytest -q`
+- [x] `git diff --check`
+- [x] Confirm no public API contract changes.
+- [x] Confirm no database migration or dependency change.
+- [x] Confirm Settings has no continuous poller.
+- [x] Confirm HTML POST compatibility handlers remain.
+- [x] Confirm record-only forwarding behavior is unchanged.
+- [x] Review the final branch diff for unrelated changes.
