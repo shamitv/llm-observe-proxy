@@ -111,6 +111,34 @@ def test_live_request_run_shells_and_polling_script(proxy_client: TestClient) ->
     assert 'data-run-tab-panel="cost"' in run_page.text
 
 
+def test_request_image_gallery_has_dimensions_and_accessible_preview() -> None:
+    app_js = Path("src/llm_observe_proxy/static/app.js").read_text(encoding="utf-8")
+    styles = Path("src/llm_observe_proxy/static/styles.css").read_text(encoding="utf-8")
+
+    assert "requestImageIdentity" in app_js
+    assert "container.dataset.imageIdentity === identity" in app_js
+    assert "thumbnail.naturalWidth" in app_js
+    assert "thumbnail.naturalHeight" in app_js
+    assert "Dimensions unavailable" in app_js
+    assert '"data-image-preview": true' in app_js
+    assert '"aria-modal": "true"' in app_js
+    assert '"aria-labelledby": "request-image-preview-title"' in app_js
+    assert '"aria-describedby": "request-image-preview-meta"' in app_js
+    assert 'event.key === "Escape"' in app_js
+    assert "event.shiftKey && document.activeElement === first" in app_js
+    assert 'dialog.classList.toggle("is-actual-size", isActualSize)' in app_js
+    assert 'document.body.classList.add("modal-open")' in app_js
+    assert "restoreTarget.focus()" in app_js
+    assert "initRequestImagePreview(root);" in app_js
+
+    assert ".image-thumbnail-button" in styles
+    assert ".request-image-card.is-unavailable" in styles
+    assert ".image-preview-modal" in styles
+    assert ".image-preview-viewport" in styles
+    assert ".image-preview-modal.is-actual-size" in styles
+    assert "body.modal-open" in styles
+
+
 def test_request_browser_paginates_records(
     proxy_client: TestClient,
     proxy_app: FastAPI,
