@@ -2039,6 +2039,20 @@ body.modal-open {
   gap: 14px;
 }
 
+.form-card > *,
+.card-header > *,
+.fix-option,
+.fix-option span {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.fix-option strong,
+.fix-option small {
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
 .form-grid {
   display: grid;
   gap: 12px;

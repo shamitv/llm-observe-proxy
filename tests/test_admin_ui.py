@@ -453,6 +453,7 @@ def test_fallback_defaults_invalid_return_target_uses_server_tab(
 
 def test_settings_shell_and_action_icons_render_as_svg(proxy_client: TestClient) -> None:
     response = proxy_client.get("/admin/settings/providers")
+    styles = Path("src/llm_observe_proxy/static/styles.css").read_text(encoding="utf-8")
 
     assert response.status_code == 200
     assert response.text.count("<svg") >= 12
@@ -462,6 +463,9 @@ def test_settings_shell_and_action_icons_render_as_svg(proxy_client: TestClient)
     assert 'data-api-url="/admin/api/settings/providers"' in response.text
     assert 'href="#provider-editor"' in response.text
     assert "data-settings-providers" in response.text
+    assert ".form-card > *" in styles
+    assert ".fix-option strong" in styles
+    assert "overflow-wrap: anywhere;" in styles
 
 
 def test_enhanced_fallback_select_keeps_native_select_as_form_source(
