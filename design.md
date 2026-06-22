@@ -36,6 +36,9 @@ but they should not dominate the first screen.
   selected context during polling.
 - Request Browser defaults to debug-first columns: Request, Model/Provider, Run,
   Status, Performance, Tokens, Cost, Signals, Summary.
+- Request image galleries show intrinsic pixel dimensions. Thumbnails open a
+  keyboard-accessible preview dialog fitted to the viewport by default, with an
+  actual-size mode that scrolls inside the dialog and remains stable during live polling.
 - Summary text should be semantic whenever possible. Avoid raw SSE fragments in
   list views; keep raw payloads in detail views.
 - Cost and provider must render on separate visual lines.
@@ -64,6 +67,12 @@ but they should not dominate the first screen.
 
 - Settings use the tabbed admin shell: Server, Routing, Providers, Pricing,
   Diagnostics, Data.
+- Settings data and in-page actions are REST-backed. Filters, pagination, saves,
+  deletes, diagnostics, catalog actions, and retention updates must not reload the
+  current document.
+- Settings refresh on initial load, successful actions, explicit refresh, history
+  navigation, and safe visibility return. Do not continuously poll editable registries,
+  and never overwrite dirty forms during a re-render.
 - Keep provider, route, pricing, fallback, diagnostics, and retention workflows
   operational and compact.
 - Name the default pass-through upstream separately from unknown-model fallback

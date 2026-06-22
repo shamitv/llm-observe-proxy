@@ -32,7 +32,8 @@ usage/cost capture for GPT-5.4-style models.
   combinations.
 - Detail pages with response render modes for JSON, plain text, Markdown, tool calls,
   and raw SSE streams.
-- Request image gallery for data URL and remote image references.
+- Request image gallery for data URL and remote image references, with intrinsic
+  dimensions and fit-to-window or actual-size previews.
 - Settings UI with Server, Routing, Providers, Pricing, Diagnostics, and Data tabs for
   pass-through upstream and model fallback defaults, editable exact/prefix routes,
   provider health checks, price tiers, response compatibility fixes, incoming host/port
@@ -347,6 +348,11 @@ duration, matching the total request duration shown on the page.
 Request and run list/detail pages load their data from local REST endpoints and poll once
 per second while visible, so new requests, pending request completion, active-run counts,
 and run metrics update without manually refreshing the browser.
+
+Settings tabs also load their registries and summaries from local REST endpoints. Saves,
+deletes, tests, filtering, pagination, catalog updates, and retention actions re-render
+the affected UI in place without reloading the current page. Editable Settings forms use
+event-driven refresh so unsaved values are not replaced by background polling.
 
 ## Screenshots
 

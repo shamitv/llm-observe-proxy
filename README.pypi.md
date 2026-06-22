@@ -32,7 +32,8 @@ usage/cost capture for GPT-5.4-style models.
   combinations.
 - Detail pages with response render modes for JSON, plain text, Markdown, tool calls,
   and raw SSE streams.
-- Request image gallery for data URL and remote image references.
+- Request image gallery for data URL and remote image references, with intrinsic
+  dimensions and fit-to-window or actual-size previews.
 - Settings UI with Server, Routing, Providers, Pricing, Diagnostics, and Data tabs for
   pass-through upstream and model fallback defaults, editable exact/prefix routes,
   provider health checks, price tiers, response compatibility fixes, incoming host/port
@@ -339,6 +340,10 @@ duration, matching the total request duration shown on the page.
 Request and run list/detail pages load their data from local REST endpoints and poll once
 per second while visible, so new requests, pending request completion, active-run counts,
 and run metrics update without manually refreshing the browser.
+
+Settings tabs load data through local REST endpoints and update saves, deletes, tests,
+filters, pagination, catalog actions, and retention results in place. Editable registries
+use event-driven refresh so unsaved form values are not overwritten.
 
 Screenshots and the full developer README are available in the project repository:
 https://github.com/shamitv/llm-observe-proxy

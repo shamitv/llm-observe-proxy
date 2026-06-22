@@ -34,6 +34,12 @@ def main() -> None:
     parser.add_argument("--database", required=True, type=Path)
     parser.add_argument("--output", default=Path("docs/screenshots"), type=Path)
     parser.add_argument("--port", default=8091, type=int)
+    parser.add_argument(
+        "--only",
+        action="append",
+        choices=[filename for filename, _path in SCREENSHOTS],
+        help="Capture only the named screenshot. Repeat for multiple files.",
+    )
     args = parser.parse_args()
 
     _assert_port_available(args.port)
@@ -51,20 +57,29 @@ def main() -> None:
     thread.start()
     _wait_for_server(args.port)
     try:
-        _capture(args.port, args.output)
+        _capture(args.port, args.output, selected=set(args.only or []))
     finally:
         server.should_exit = True
         thread.join(timeout=5)
 
 
-def _capture(port: int, output: Path) -> None:
+def _capture(port: int, output: Path, *, selected: set[str]) -> None:
     browser_path = _browser_executable()
     base_url = f"http://127.0.0.1:{port}"
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(executable_path=browser_path, headless=True)
         page = browser.new_page(viewport={"width": 1440, "height": 900}, device_scale_factor=1)
         for filename, path in SCREENSHOTS:
+            if selected and filename not in selected:
+                continue
             page.goto(base_url + path, wait_until="networkidle")
+            if path.startswith("/admin/settings/"):
+                page.wait_for_function(
+                    """() => document.querySelector("[data-settings-status]")
+                      ?.textContent.includes("current")"""
+                )
+            if filename == "images.png":
+                page.get_by_text("640 × 420 px").first.wait_for()
             page.screenshot(path=str(output / filename), full_page=True)
         browser.close()
 
