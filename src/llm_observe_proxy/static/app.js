@@ -2362,6 +2362,265 @@ const metaSpan = (label, content) => {
   return span;
 };
 
+const requestImageIdentity = (images) => JSON.stringify((images || []).map((image) => [
+  image.source || "",
+  image.mime_type || "",
+  image.kind || "",
+]));
+
+const createRequestImageFigure = (image, index) => {
+  const imageNumber = index + 1;
+  const label = `Request image ${imageNumber}`;
+  const figure = createNode("figure", { className: "request-image-card" });
+  const button = createNode("button", {
+    className: "image-thumbnail-button",
+    type: "button",
+    "data-image-preview": true,
+    "data-image-source": image.source || "",
+    "data-image-label": label,
+    "data-image-type": image.mime_type || image.kind || "image",
+    "aria-label": `Preview ${label.toLowerCase()}`,
+  });
+  const thumbnail = createNode("img", { alt: label });
+  const dimensions = createNode("span", {
+    className: "image-caption-dimensions",
+    textContent: "Loading dimensions…",
+  });
+  const caption = createNode("figcaption", {}, [
+    createNode("span", {
+      className: "image-caption-type",
+      textContent: image.mime_type || image.kind || "image",
+    }),
+    dimensions,
+  ]);
+
+  const setDimensions = () => {
+    const width = thumbnail.naturalWidth;
+    const height = thumbnail.naturalHeight;
+    if (!width || !height) {
+      return;
+    }
+    button.dataset.imageWidth = String(width);
+    button.dataset.imageHeight = String(height);
+    dimensions.textContent = `${width} × ${height} px`;
+    figure.classList.remove("is-unavailable");
+  };
+
+  thumbnail.addEventListener("load", setDimensions);
+  thumbnail.addEventListener("error", () => {
+    dimensions.textContent = "Dimensions unavailable";
+    figure.classList.add("is-unavailable");
+    button.disabled = true;
+    button.setAttribute("aria-label", `${label} unavailable`);
+  });
+  button.append(thumbnail);
+  figure.append(button, caption);
+  thumbnail.src = image.source || "";
+  if (thumbnail.complete) {
+    setDimensions();
+  }
+  return figure;
+};
+
+const renderRequestImages = (root, imageData) => {
+  const container = root.querySelector("[data-live-images-section]");
+  if (!container) {
+    return;
+  }
+  const images = Array.isArray(imageData) ? imageData : [];
+  const identity = requestImageIdentity(images);
+  if (container.dataset.imageIdentity === identity) {
+    return;
+  }
+  container.dataset.imageIdentity = identity;
+  container.replaceChildren();
+  if (!images.length) {
+    return;
+  }
+
+  const grid = createNode("div", { className: "image-grid" });
+  images.forEach((image, index) => {
+    grid.append(createRequestImageFigure(image, index));
+  });
+  container.append(createNode("section", { className: "panel" }, [
+    createNode("header", {}, [
+      createNode("h2", { textContent: "Images Sent" }),
+      createNode("span", { textContent: `${images.length} image${images.length === 1 ? "" : "s"}` }),
+    ]),
+    grid,
+  ]));
+};
+
+const initRequestImagePreview = (root) => {
+  const overlay = createNode("div", {
+    className: "modal-overlay image-preview-overlay",
+    hidden: true,
+  });
+  const dialog = createNode("div", {
+    className: "image-preview-modal",
+    role: "dialog",
+    "aria-modal": "true",
+    "aria-labelledby": "request-image-preview-title",
+    "aria-describedby": "request-image-preview-meta",
+  });
+  const title = createNode("h2", {
+    id: "request-image-preview-title",
+    textContent: "Request image",
+  });
+  const metadata = createNode("p", {
+    id: "request-image-preview-meta",
+    className: "muted",
+    textContent: "Loading dimensions…",
+  });
+  const actualSize = createNode("button", {
+    className: "button ghost image-preview-size",
+    type: "button",
+    "aria-pressed": "false",
+    textContent: "Actual size",
+  });
+  const closeButton = createNode("button", {
+    className: "button ghost image-preview-close",
+    type: "button",
+    "aria-label": "Close image preview",
+    textContent: "Close",
+  });
+  const viewport = createNode("div", {
+    className: "image-preview-viewport",
+    tabindex: "0",
+  });
+  const preview = createNode("img", { alt: "" });
+  const header = createNode("header", { className: "image-preview-header" }, [
+    createNode("div", { className: "image-preview-heading" }, [title, metadata]),
+    createNode("div", { className: "image-preview-actions" }, [actualSize, closeButton]),
+  ]);
+  viewport.append(preview);
+  dialog.append(header, viewport);
+  overlay.append(dialog);
+  document.body.append(overlay);
+
+  let opener = null;
+  let isActualSize = false;
+  let previousModalOpen = false;
+
+  const setActualSize = (enabled) => {
+    isActualSize = Boolean(enabled) && !actualSize.disabled;
+    dialog.classList.toggle("is-actual-size", isActualSize);
+    actualSize.setAttribute("aria-pressed", String(isActualSize));
+    actualSize.textContent = isActualSize ? "Fit to window" : "Actual size";
+  };
+
+  const setDimensions = (width, height, type) => {
+    if (width > 0 && height > 0) {
+      metadata.textContent = `${type} · ${width} × ${height} px`;
+      actualSize.disabled = false;
+      preview.dataset.imageWidth = String(width);
+      preview.dataset.imageHeight = String(height);
+      return;
+    }
+    metadata.textContent = `${type} · Dimensions unavailable`;
+    actualSize.disabled = true;
+    setActualSize(false);
+  };
+
+  const close = () => {
+    if (overlay.hidden) {
+      return;
+    }
+    overlay.hidden = true;
+    setActualSize(false);
+    preview.removeAttribute("src");
+    if (!previousModalOpen) {
+      document.body.classList.remove("modal-open");
+    }
+    const restoreTarget = opener;
+    opener = null;
+    if (restoreTarget?.isConnected && !restoreTarget.disabled) {
+      restoreTarget.focus();
+    }
+  };
+
+  const open = (button) => {
+    const source = button.dataset.imageSource || "";
+    const label = button.dataset.imageLabel || "Request image";
+    const type = button.dataset.imageType || "image";
+    const knownWidth = Number(button.dataset.imageWidth || "0");
+    const knownHeight = Number(button.dataset.imageHeight || "0");
+    opener = button;
+    title.textContent = label;
+    preview.alt = `${label} preview`;
+    preview.classList.remove("is-unavailable");
+    actualSize.disabled = !(knownWidth && knownHeight);
+    setActualSize(false);
+    setDimensions(knownWidth, knownHeight, type);
+    previousModalOpen = document.body.classList.contains("modal-open");
+    document.body.classList.add("modal-open");
+    overlay.hidden = false;
+    preview.src = source;
+    closeButton.focus();
+  };
+
+  preview.addEventListener("load", () => {
+    const width = preview.naturalWidth;
+    const height = preview.naturalHeight;
+    const type = opener?.dataset.imageType || "image";
+    setDimensions(width, height, type);
+    if (opener && width && height) {
+      opener.dataset.imageWidth = String(width);
+      opener.dataset.imageHeight = String(height);
+      const caption = opener.closest("figure")?.querySelector(".image-caption-dimensions");
+      if (caption) {
+        caption.textContent = `${width} × ${height} px`;
+      }
+    }
+  });
+  preview.addEventListener("error", () => {
+    preview.classList.add("is-unavailable");
+    setDimensions(0, 0, opener?.dataset.imageType || "image");
+  });
+  actualSize.addEventListener("click", () => setActualSize(!isActualSize));
+  closeButton.addEventListener("click", close);
+  overlay.addEventListener("click", (event) => {
+    if (event.target === overlay) {
+      close();
+    }
+  });
+  overlay.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      close();
+      return;
+    }
+    if (event.key !== "Tab") {
+      return;
+    }
+    const focusable = [...dialog.querySelectorAll(
+      "button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), "
+      + "textarea:not([disabled]), [tabindex]:not([tabindex='-1'])",
+    )];
+    if (!focusable.length) {
+      event.preventDefault();
+      return;
+    }
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  });
+  root.querySelector("[data-live-images-section]")?.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-image-preview]");
+    if (button && !button.disabled) {
+      open(button);
+    }
+  });
+
+  return { close };
+};
+
 const renderRequestDetail = (root, data) => {
   const record = data.record;
   document.title = `Request #${record.id} - LLM Observe Proxy`;
@@ -2461,24 +2720,7 @@ const renderRequestDetail = (root, data) => {
     ]));
   }
 
-  const images = root.querySelector("[data-live-images-section]");
-  images?.replaceChildren();
-  if (images && data.images?.length) {
-    const grid = createNode("div", { className: "image-grid" });
-    data.images.forEach((image, index) => {
-      grid.append(createNode("figure", {}, [
-        createNode("img", { src: image.source, alt: `Request image ${index + 1}` }),
-        createNode("figcaption", { textContent: image.mime_type || image.kind }),
-      ]));
-    });
-    images.append(createNode("section", { className: "panel" }, [
-      createNode("header", {}, [
-        createNode("h2", { textContent: "Images Sent" }),
-        createNode("span", { textContent: `${data.images.length} image${data.images.length === 1 ? "" : "s"}` }),
-      ]),
-      grid,
-    ]));
-  }
+  renderRequestImages(root, data.images);
 
   const cost = root.querySelector("[data-live-cost-section]");
   cost?.replaceChildren();
@@ -2553,6 +2795,7 @@ const renderRequestDetail = (root, data) => {
 };
 
 const initRequestDetailLivePage = (root) => {
+  initRequestImagePreview(root);
   const modeFromUrl = () => new URLSearchParams(window.location.search).get("mode")
     || root.dataset.renderMode
     || "auto";
