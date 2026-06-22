@@ -1,260 +1,86 @@
 {% extends "settings_base.html" %}
-{% import "_connection_summary.html" as summaries %}
-{% import "_status_badge.html" as badges %}
-{% import "_fallback_defaults_form.html" as fallback_forms %}
 {% import "_icons.html" as icons %}
-{% block summary_cards %}
-{{ summaries.summary_card("RT", "Active routes", summary.active_routes | compact_number, "Across startup and settings") }}
-{{ summaries.summary_card("FB", "Default provider", fallback.provider_name | default("No provider", true), "Used for fallback", true) }}
-{{ summaries.summary_card("MD", "Default model", fallback.model | default("No model", true), "Fallback send-as model") }}
-{{ summaries.summary_card("DB", "Stored rows", summary.stored_rows | compact_number, (summary.rows_older_than_retention | compact_number) ~ " older than " ~ summary.retention_days ~ " days") }}
-{% endblock %}
 {% block settings_content %}
 <section class="settings-grid v05-grid">
   <article class="card registry-card">
     <div class="card-header">
-      <div>
-        <h2>Route Registry</h2>
-        <p>Exact routes win first; prefix routes must end with <code>*</code>.</p>
-      </div>
-      <a class="button primary button-primary" href="#route-editor">{{ icons.icon("plus", class_name="button-icon") }}<span>Add route</span></a>
+      <div><h2>Route Registry</h2><p>Exact routes win first; prefix routes must end with <code>*</code>.</p></div>
+      <a class="button primary" href="#route-editor">Add route</a>
     </div>
-    <div class="filter-row">
-      <label class="search-bar">
-        <span>Search routes</span>
-        <span class="field-with-icon">{{ icons.icon("search", class_name="field-icon") }}<input data-table-filter="routes-table" placeholder="Search routes..." aria-label="Search routes"></span>
-      </label>
-      <label>
-        <span>Status</span>
-        <select data-table-status-filter="routes-table">
-          <option value="">All status</option>
-          <option value="active">Active</option>
-          <option value="inactive">Inactive</option>
-        </select>
-      </label>
-      <label>
-        <span>Provider</span>
-        <select data-table-provider-filter="routes-table">
-          <option value="">All providers</option>
-          {% for provider in providers %}
-          <option value="{{ provider.slug }}">{{ provider.name }}</option>
-          {% endfor %}
-        </select>
-      </label>
-    </div>
+    <form class="filter-row" data-settings-filters>
+      <label class="search-bar"><span>Search routes</span><input name="search" placeholder="Search routes…"></label>
+      <label><span>Status</span><select name="status"><option value="all">All status</option><option value="active">Active</option><option value="inactive">Inactive</option></select></label>
+      <label><span>Provider</span><select name="provider" data-provider-filter-options><option value="">All providers</option></select></label>
+      <button class="button ghost" type="submit">Apply filters</button>
+    </form>
     <div class="table-shell">
-      <table class="data-table model-routes-table" id="routes-table">
+      <table class="data-table model-routes-table">
         <thead>
-          <tr>
-            <th scope="col">Incoming model</th>
-            <th scope="col">Match type</th>
-            <th scope="col">Route upstream URL</th>
-            <th scope="col">Send as model</th>
-            <th scope="col">Provider</th>
-            <th scope="col">Fallback</th>
-            <th scope="col">Priority</th>
-            <th scope="col">Status</th>
-            <th scope="col">Actions</th>
-          </tr>
+          <tr><th scope="col">Incoming model</th><th scope="col">Match</th><th scope="col">Upstream</th><th scope="col">Send as</th><th scope="col">Provider</th><th scope="col">Priority</th><th scope="col">Status</th><th scope="col">Actions</th></tr>
         </thead>
-        <tbody>
-          {% for route in model_routes %}
-          <tr data-search-text="{{ route.model }} {{ route.upstream_url }} {{ route.upstream_model }} {{ route.provider_name | default(route.provider_slug, true) }}" data-status="{{ 'active' if route.active else 'inactive' }}" data-provider="{{ route.provider_slug | default('', true) }}" data-route-row data-route-id="{{ route.id | default('', true) }}" data-route-model="{{ route.model }}" data-route-match-type="{{ route.match_type }}" data-route-upstream-url="{{ route.upstream_url }}" data-route-upstream-model="{{ route.upstream_model }}" data-route-provider="{{ route.provider_slug | default('', true) }}" data-route-api-key-env="{{ route.api_key_env | default('', true) }}" data-route-fixes="{{ route.fixes_text | default('', true) }}" data-route-priority="{{ route.priority | default(50, true) }}" data-route-active="{{ 'yes' if route.active else 'no' }}" data-route-override-fallback="{{ 'yes' if route.override_fallback else 'no' }}">
-            <td><code>{{ route.model }}</code><small>{{ route.source | default("settings", true) | title }}</small></td>
-            <td>{{ route.match_type }}</td>
-            <td><code>{{ route.upstream_url }}</code></td>
-            <td><code>{{ route.upstream_model }}</code></td>
-            <td>{{ route.provider_name | default(route.provider_slug | default("Auto", true), true) }}</td>
-            <td>{{ "Override" if route.override_fallback else "Default" }}</td>
-            <td>{{ route.priority }}</td>
-            <td>{{ badges.status_badge("Active" if route.active else "Inactive") }}</td>
-            <td>
-              {% if route.editable %}
-              <form method="post" action="/admin/settings/model-routes/delete" data-confirm-message="Delete route {{ route.model }}?">
-                <input type="hidden" name="route_id" value="{{ route.id }}">
-                <input type="hidden" name="model" value="{{ route.model }}">
-                <button class="button danger compact-button button-danger" type="submit">{{ icons.icon("trash", class_name="button-icon") }}<span>Delete</span></button>
-              </form>
-              {% else %}
-              <span class="muted">Locked</span>
-              {% endif %}
-            </td>
-          </tr>
-          {% else %}
-          <tr><td colspan="9" class="empty">No model routes are configured.</td></tr>
-          {% endfor %}
-        </tbody>
+        <tbody data-settings-routes><tr><td colspan="8" class="empty">Loading routes…</td></tr></tbody>
       </table>
     </div>
+    <div data-settings-pagination></div>
   </article>
 
   <article class="card diagnostics-card">
-    <div class="card-header">
-      <div>
-        <h2>Default Route Discovery</h2>
-        <p>Create routes from active provider pricing rows and aliases.</p>
-      </div>
-      {{ badges.status_badge("Seeded") }}
-    </div>
+    <div class="card-header"><div><h2>Default Route Discovery</h2><p>Create routes from active provider pricing rows and aliases.</p></div></div>
     <form class="inline-tool-form" data-default-routes>
-      <label class="form-field">
-        <span>Provider</span>
-        <select name="provider_slug">
-          <option value="">All providers</option>
-          {% for provider in providers %}
-          <option value="{{ provider.slug }}">{{ provider.name }}</option>
-          {% endfor %}
-        </select>
-      </label>
-      <label class="form-field">
-        <span>Mode</span>
-        <select name="mode">
-          <option value="missing_only">Missing routes only</option>
-          <option value="refresh_seeded">Refresh seeded routes</option>
-        </select>
-      </label>
-      <button class="button ghost button-ghost" type="submit" data-default-route-action="preview">{{ icons.icon("search", class_name="button-icon") }}<span>Preview</span></button>
-      <button class="button primary button-primary" type="submit" data-default-route-action="apply">{{ icons.icon("settings", class_name="button-icon") }}<span>Apply</span></button>
+      <label class="form-field"><span>Provider</span><select name="provider_slug" data-provider-options><option value="">All providers</option>{% for provider in providers %}<option value="{{ provider.slug }}">{{ provider.name }}</option>{% endfor %}</select></label>
+      <label class="form-field"><span>Mode</span><select name="mode"><option value="missing_only">Missing routes only</option><option value="refresh_seeded">Refresh seeded routes</option></select></label>
+      <button class="button ghost" type="submit" data-default-route-action="preview">Preview</button>
+      <button class="button primary" type="submit" data-default-route-action="apply">Apply</button>
     </form>
-    <div class="result-panel" data-default-routes-result>
-      <p class="muted">Preview or apply generated routes for known models.</p>
-    </div>
+    <div class="result-panel" data-default-routes-result><p class="muted">Preview or apply generated routes.</p></div>
   </article>
 
-  <form class="card form-card editor-card" id="route-editor" method="post" action="/admin/settings/model-routes" data-route-editor>
-    <div class="card-header">
-      <div>
-        <h2>Selected Route</h2>
-        <p>Click an editable row to load it here, or save a new route.</p>
-      </div>
-      {{ badges.status_badge("Editable") }}
-    </div>
+  <form class="card form-card editor-card" id="route-editor" method="post" action="/admin/settings/model-routes" data-settings-action="route-save" data-route-editor>
+    <div class="card-header"><div><h2>Selected Route</h2><p>Select an editable row or save a new route.</p></div></div>
     <input type="hidden" name="route_id" data-route-editor-field="route_id">
     <div class="form-grid two-col">
-      <label class="form-field">
-        <span>Incoming model</span>
-        <input name="model" placeholder="local-qwen" required data-route-editor-field="model">
-      </label>
-      <label class="form-field">
-        <span>Match type</span>
-        <select name="match_type" data-route-editor-field="match_type">
-          <option value="exact">Exact match</option>
-          <option value="prefix">Prefix match</option>
-        </select>
-      </label>
-      <label class="form-field wide">
-        <span>Route upstream URL</span>
-        <input name="upstream_url" placeholder="http://localhost:8000/v1" required data-route-editor-field="upstream_url">
-      </label>
-      <label class="form-field">
-        <span>Send as model</span>
-        <input name="upstream_model" placeholder="qwen3-coder-30b" data-route-editor-field="upstream_model">
-      </label>
-      <label class="form-field">
-        <span>Provider</span>
-        <select name="provider_slug" data-route-editor-field="provider_slug">
-          <option value="">Auto by upstream URL</option>
-          {% for provider in providers %}
-          <option value="{{ provider.slug }}">{{ provider.name }}</option>
-          {% endfor %}
-        </select>
-      </label>
-      <label class="form-field">
-        <span>API key env var</span>
-        <input name="api_key_env" placeholder="OPENAI_API_KEY" data-route-editor-field="api_key_env">
-      </label>
-      <label class="form-field">
-        <span>Priority</span>
-        <input name="priority" type="number" min="1" max="100" value="50" data-route-editor-field="priority">
-      </label>
-      <label class="form-field wide">
-        <span>Compatibility fixes</span>
-        <textarea name="fixes" rows="3" placeholder="qwen-tagged-tool-call-rewrite" data-route-editor-field="fixes"></textarea>
-      </label>
-      <label class="check switch-line">
-        <input type="hidden" name="override_fallback" value="no">
-        <input type="checkbox" name="override_fallback" value="yes" data-route-editor-field="override_fallback">
-        <span>Override fallback fixes</span>
-      </label>
-      <label class="check switch-line">
-        <input type="hidden" name="active" value="no">
-        <input type="checkbox" name="active" value="yes" checked data-route-editor-field="active">
-        <span>Enabled</span>
-      </label>
+      <label class="form-field"><span>Incoming model</span><input name="model" required data-route-editor-field="model"></label>
+      <label class="form-field"><span>Match type</span><select name="match_type" data-route-editor-field="match_type"><option value="exact">Exact match</option><option value="prefix">Prefix match</option></select></label>
+      <label class="form-field wide"><span>Route upstream URL</span><input name="upstream_url" required data-route-editor-field="upstream_url"></label>
+      <label class="form-field"><span>Send as model</span><input name="upstream_model" data-route-editor-field="upstream_model"></label>
+      <label class="form-field"><span>Provider</span><select name="provider_slug" data-provider-options data-route-editor-field="provider_slug"><option value="">Auto by URL</option>{% for provider in providers %}<option value="{{ provider.slug }}">{{ provider.name }}</option>{% endfor %}</select></label>
+      <label class="form-field"><span>API key env var</span><input name="api_key_env" data-route-editor-field="api_key_env"></label>
+      <label class="form-field"><span>Priority</span><input name="priority" type="number" min="1" max="100" value="50" data-route-editor-field="priority"></label>
+      <label class="form-field wide"><span>Compatibility fixes</span><textarea name="fixes" rows="3" data-route-editor-field="fixes"></textarea></label>
+      <label class="check switch-line"><input type="hidden" name="override_fallback" value="no"><input type="checkbox" name="override_fallback" value="yes" data-route-editor-field="override_fallback"><span>Override fallback fixes</span></label>
+      <label class="check switch-line"><input type="hidden" name="active" value="no"><input type="checkbox" name="active" value="yes" checked data-route-editor-field="active"><span>Enabled</span></label>
     </div>
-    <p class="muted">Requests matching this pattern will be sent to the selected upstream; prefix patterns should be entered like <code>local-*</code>.</p>
-    <div class="button-row">
-      <button class="button primary button-primary" type="submit">{{ icons.icon("settings", class_name="button-icon") }}<span>Save route</span></button>
-      <button class="button ghost button-ghost" type="button" data-clear-route-editor>{{ icons.icon("runs", class_name="button-icon") }}<span>Clear</span></button>
-    </div>
+    <div class="button-row"><button class="button primary" type="submit">Save route</button><button class="button ghost" type="button" data-clear-route-editor>Clear</button></div>
+    <p class="form-message" data-form-message aria-live="polite"></p>
   </form>
 
-  {{ fallback_forms.fallback_defaults_form(
-    "Unknown-model Fallback",
-    "After explicit routes, unmatched JSON model names can use a default provider and model.",
-    providers,
-    default_provider_slug,
-    default_model,
-    fallback_enabled,
-    upstream_url,
-    "/admin/settings/routing",
-    "Save fallback behavior",
-    false,
-    "If fallback is disabled or incomplete, unmatched models pass through unchanged to the default pass-through upstream configured on Server."
-  ) }}
+  <form class="card form-card" method="post" action="/admin/settings/upstream-defaults" data-settings-action="upstream-defaults">
+    <div class="card-header"><div><h2>Unknown-model Fallback</h2><p>Configure fallback after explicit routes.</p></div></div>
+    <div class="form-grid two-col">
+      <label class="form-field wide"><span>Pass-through upstream URL</span><input name="upstream_url" value="{{ upstream_url }}" required></label>
+      <label class="form-field"><span>Fallback provider</span><select name="default_provider_slug" data-provider-options data-enhanced-select data-enhanced-select-label="Fallback provider"><option value="">No provider</option>{% for provider in providers %}<option value="{{ provider.slug }}" {% if provider.slug == default_provider_slug %}selected{% endif %}>{{ provider.name }}</option>{% endfor %}</select></label>
+      <label class="form-field"><span>Fallback model</span><input name="default_model" value="{{ default_model }}"></label>
+      <label class="check switch-line"><input type="hidden" name="fallback_enabled" value="no"><input type="checkbox" name="fallback_enabled" value="yes" {% if fallback_enabled %}checked{% endif %}><span>Enable fallback</span></label>
+    </div>
+    <input type="hidden" name="return_to" value="/admin/settings/routing">
+    <p class="muted">If fallback is disabled or incomplete, unmatched models use the pass-through upstream unchanged.</p>
+    <div class="button-row"><button class="button primary" type="submit">Save fallback behavior</button></div>
+    <p class="form-message" data-form-message aria-live="polite"></p>
+  </form>
 
   <article class="card diagnostics-card">
-    <div class="card-header">
-      <div>
-        <h2>Route Simulator / Diagnostics</h2>
-        <p>Preview how an incoming model name resolves before sending traffic.</p>
-      </div>
-    </div>
+    <div class="card-header"><div><h2>Route Simulator</h2><p>Resolve a model without making an upstream call.</p></div></div>
     <form class="inline-tool-form" data-route-simulator>
-      <label class="form-field">
-        <span>Incoming model to test</span>
-        <input name="model" value="gpt-test" required>
-      </label>
-      <button class="button primary button-primary" type="submit">{{ icons.icon("play", class_name="button-icon") }}<span>Run simulation</span></button>
+      <label class="form-field"><span>Incoming model</span><input name="model" value="gpt-test" required></label>
+      <button class="button primary" type="submit">Run simulation</button>
     </form>
-    <div class="result-panel" data-route-simulator-result>
-      <p class="muted">Simulation results will appear here.</p>
-    </div>
-    <div class="result-panel" data-route-sample-result>
-      <p class="muted">A sample request appears after simulation.</p>
-    </div>
+    <div class="result-panel" data-route-simulator-result><p class="muted">Simulation results appear here.</p></div>
+    <div class="result-panel" data-route-sample-result><p class="muted">A sample request appears here.</p></div>
   </article>
 
   <article class="card usage-card">
-    <div class="card-header">
-      <div>
-        <h2>Recent Route Usage</h2>
-        <p>Requests matched since local midnight.</p>
-      </div>
-      <a class="button ghost button-ghost" href="/admin">{{ icons.icon("requests", class_name="button-icon") }}<span>View requests</span></a>
-    </div>
-    <div class="table-shell">
-      <table class="data-table">
-        <thead>
-          <tr>
-            <th scope="col">Route</th>
-            <th scope="col">Requests today</th>
-            <th scope="col">Last matched</th>
-          </tr>
-        </thead>
-        <tbody>
-          {% for row in route_usage %}
-          <tr>
-            <td><code>{{ row.route }}</code></td>
-            <td>{{ row.requests_today | compact_number }}</td>
-            <td>{{ row.last_matched_at | default("-", true) }}</td>
-          </tr>
-          {% else %}
-          <tr><td colspan="3" class="empty">No route matches recorded today.</td></tr>
-          {% endfor %}
-        </tbody>
-      </table>
-    </div>
+    <div class="card-header"><div><h2>Recent Route Usage</h2><p>Requests matched since local midnight.</p></div></div>
+    <div class="table-shell"><table class="data-table"><thead><tr><th scope="col">Route</th><th scope="col">Requests today</th><th scope="col">Last matched</th></tr></thead><tbody data-settings-route-usage><tr><td colspan="3" class="empty">Loading usage…</td></tr></tbody></table></div>
   </article>
 </section>
 {% endblock %}

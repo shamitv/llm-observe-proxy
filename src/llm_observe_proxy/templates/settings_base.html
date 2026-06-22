@@ -30,7 +30,12 @@
   </div>
 </aside>
 
-<main class="settings-content">
+<main
+  class="settings-content"
+  data-live-page="settings"
+  data-settings-tab="{{ settings_tab }}"
+  data-api-url="/admin/api/settings/{{ settings_tab }}"
+>
   <section class="settings-hero">
     <div>
       <p class="eyebrow">Admin</p>
@@ -38,7 +43,7 @@
     </div>
     <div class="settings-hero-meta">
       <span>{{ settings_tab | title }}</span>
-      <span>{{ summary.stored_rows | compact_number }} stored rows</span>
+      <span data-settings-stored-rows>Loading stored rows…</span>
     </div>
   </section>
 
@@ -46,13 +51,17 @@
   <div class="alert">{{ error }}</div>
   {% endif %}
 
-  <section class="connection-summary" aria-label="Connection summary">
-    {% block summary_cards %}
-    {{ summaries.summary_card("IN", "Proxy listener", summary.listener.host ~ ":" ~ summary.listener.port, "Admin and proxy port") }}
-    {{ summaries.summary_card("CL", "Client base URL", summary.client_base_url, "OpenAI-compatible endpoint") }}
-    {{ summaries.summary_card("FB", "Model fallback", (summary.upstream.default_provider_name or "No provider") ~ " / " ~ (summary.upstream.default_model or "No model"), "Used for unmatched JSON models", true) }}
-    {{ summaries.summary_card("DB", "Stored rows", summary.stored_rows | compact_number, (summary.rows_older_than_retention | compact_number) ~ " older than " ~ summary.retention_days ~ " days") }}
-    {% endblock %}
+  <div class="settings-live-bar">
+    <div class="live-status" data-settings-status aria-live="polite">Loading settings…</div>
+    <button class="button ghost compact-button" type="button" data-settings-refresh>Refresh</button>
+  </div>
+
+  <section
+    class="connection-summary"
+    aria-label="Connection summary"
+    data-settings-summary
+  >
+    <article class="summary-card"><span class="summary-icon">…</span><strong>Settings data</strong></article>
   </section>
 
   <nav class="tab-bar" aria-label="Settings tabs">

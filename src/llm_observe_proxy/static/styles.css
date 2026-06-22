@@ -1135,6 +1135,37 @@ body.modal-open {
   text-transform: uppercase;
 }
 
+.settings-live-bar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  margin: -6px 0 12px;
+}
+
+.settings-live-bar .live-status {
+  margin: 0;
+}
+
+.form-message {
+  min-height: 18px;
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+[data-settings-route-row],
+[data-settings-provider-row],
+[data-settings-price-row] {
+  cursor: pointer;
+}
+
+[data-settings-route-row].is-selected,
+[data-settings-provider-row].is-selected {
+  background: rgba(20, 125, 117, 0.08);
+}
+
 .error-text {
   color: var(--danger);
   font-weight: 700;
@@ -2397,11 +2428,22 @@ fieldset legend,
 
 .result-panel {
   display: grid;
+  min-width: 0;
   gap: 8px;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: #fbfcfe;
   padding: 12px;
+}
+
+.result-panel > * {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.result-panel pre {
+  max-width: 100%;
+  overflow: auto;
 }
 
 .danger-zone {

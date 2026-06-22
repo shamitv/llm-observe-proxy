@@ -699,6 +699,7 @@ document.querySelectorAll("[data-pricing-catalog]").forEach((panel) => {
       setCatalogMessage(
         `${data.applied || 0} applied: ${data.created || 0} created, ${data.updated || 0} updated, ${data.unchanged || 0} unchanged. ${data.repriced_missing || 0} missing-cost requests repriced.`,
       );
+      window.dispatchEvent(new Event("settings:refresh"));
     } catch (error) {
       setCatalogMessage(error.message || "Catalog apply failed.", true);
       updateCatalogApplyState();
@@ -798,6 +799,50 @@ const moveEnhancedSelect = (wrapper, direction) => {
   setEnhancedActiveOption(wrapper, (current === -1 ? fallback : current) + direction);
 };
 
+const rebuildEnhancedSelectMenu = (wrapper) => {
+  const select = wrapper.querySelector("select");
+  const menu = wrapper.querySelector(".enhanced-select-menu");
+  if (!select || !menu) {
+    return;
+  }
+  menu.replaceChildren();
+  Array.from(select.options).forEach((nativeOption) => {
+    const option = document.createElement("button");
+    option.type = "button";
+    option.className = "enhanced-select-option";
+    option.setAttribute("role", "option");
+    option.dataset.value = nativeOption.value;
+    option.textContent = nativeOption.textContent.trim();
+    option.addEventListener("click", () => selectEnhancedOption(wrapper, option));
+    option.addEventListener("keydown", (event) => {
+      if (event.key === "ArrowDown") {
+        event.preventDefault();
+        moveEnhancedSelect(wrapper, 1);
+      } else if (event.key === "ArrowUp") {
+        event.preventDefault();
+        moveEnhancedSelect(wrapper, -1);
+      } else if (event.key === "Home") {
+        event.preventDefault();
+        setEnhancedActiveOption(wrapper, 0);
+      } else if (event.key === "End") {
+        event.preventDefault();
+        setEnhancedActiveOption(
+          wrapper,
+          menu.querySelectorAll(".enhanced-select-option").length - 1,
+        );
+      } else if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        selectEnhancedOption(wrapper, activeEnhancedOption(wrapper) || option);
+      } else if (event.key === "Escape") {
+        event.preventDefault();
+        closeEnhancedSelect(wrapper, true);
+      }
+    });
+    menu.append(option);
+  });
+  updateEnhancedSelectLabel(wrapper);
+};
+
 document.querySelectorAll("select[data-enhanced-select]").forEach((select, index) => {
   const wrapper = document.createElement("div");
   wrapper.className = "enhanced-select";
@@ -837,38 +882,6 @@ document.querySelectorAll("select[data-enhanced-select]").forEach((select, index
   menu.setAttribute("aria-label", select.dataset.enhancedSelectLabel || select.name || "Options");
   menu.hidden = true;
 
-  Array.from(select.options).forEach((nativeOption) => {
-    const option = document.createElement("button");
-    option.type = "button";
-    option.className = "enhanced-select-option";
-    option.setAttribute("role", "option");
-    option.dataset.value = nativeOption.value;
-    option.textContent = nativeOption.textContent.trim();
-    option.addEventListener("click", () => selectEnhancedOption(wrapper, option));
-    option.addEventListener("keydown", (event) => {
-      if (event.key === "ArrowDown") {
-        event.preventDefault();
-        moveEnhancedSelect(wrapper, 1);
-      } else if (event.key === "ArrowUp") {
-        event.preventDefault();
-        moveEnhancedSelect(wrapper, -1);
-      } else if (event.key === "Home") {
-        event.preventDefault();
-        setEnhancedActiveOption(wrapper, 0);
-      } else if (event.key === "End") {
-        event.preventDefault();
-        setEnhancedActiveOption(wrapper, menu.querySelectorAll(".enhanced-select-option").length - 1);
-      } else if (event.key === "Enter" || event.key === " ") {
-        event.preventDefault();
-        selectEnhancedOption(wrapper, activeEnhancedOption(wrapper) || option);
-      } else if (event.key === "Escape") {
-        event.preventDefault();
-        closeEnhancedSelect(wrapper, true);
-      }
-    });
-    menu.append(option);
-  });
-
   button.addEventListener("click", () => {
     if (menu.hidden) {
       openEnhancedSelect(wrapper);
@@ -897,7 +910,7 @@ document.querySelectorAll("select[data-enhanced-select]").forEach((select, index
   });
   select.addEventListener("change", () => updateEnhancedSelectLabel(wrapper));
   wrapper.append(button, menu);
-  updateEnhancedSelectLabel(wrapper);
+  rebuildEnhancedSelectMenu(wrapper);
 });
 
 document.addEventListener("click", (event) => {
@@ -1172,6 +1185,9 @@ document.querySelectorAll("[data-default-routes]").forEach((form) => {
         note.textContent = data.truncated ? "Showing first 200 route decisions." : "Route decisions are complete.";
         result.append(status, counts, note);
       }
+      if (action === "apply") {
+        window.dispatchEvent(new Event("settings:refresh"));
+      }
     } catch (error) {
       if (result) {
         result.textContent = error.message || "Default route action failed.";
@@ -1207,6 +1223,7 @@ document.querySelectorAll("[data-provider-health]").forEach((button) => {
           tbody.append(row);
         });
       });
+      window.dispatchEvent(new Event("settings:refresh"));
     } catch (_error) {
       window.alert("Provider health checks are unavailable.");
     } finally {
@@ -2027,6 +2044,944 @@ const startLivePoller = (root, load) => {
   });
   window.addEventListener("live:refresh", () => refresh({ replace: true }));
   refresh();
+};
+
+const settingsNumber = (value) => new Intl.NumberFormat().format(Number(value || 0));
+
+const settingsMoney = (value) => {
+  if (value === null || value === undefined || value === "") {
+    return "-";
+  }
+  return `$${Number(value).toFixed(6).replace(/0+$/, "").replace(/\.$/, "")}`;
+};
+
+const settingsFormPayload = (form, submitter = null) => {
+  const payload = {};
+  new FormData(form).forEach((value, key) => {
+    payload[key] = value;
+  });
+  if (submitter?.name) {
+    payload[submitter.name] = submitter.value;
+  }
+  return payload;
+};
+
+const setSettingsFormMessage = (form, text, isError = false) => {
+  const message = form?.querySelector("[data-form-message]");
+  if (!message) {
+    return;
+  }
+  message.textContent = text || "";
+  message.classList.toggle("error-text", isError);
+};
+
+const fillSettingsForm = (form, values) => {
+  if (!form || form.dataset.dirty === "yes") {
+    return;
+  }
+  Object.entries(values || {}).forEach(([name, value]) => {
+    const fields = [...form.querySelectorAll(`[name="${name}"]`)];
+    const checkbox = fields.find((field) => field.type === "checkbox");
+    if (checkbox) {
+      checkbox.checked = Boolean(value);
+      return;
+    }
+    const field = fields.find((item) => item.type !== "hidden") || fields[0];
+    if (field) {
+      field.value = value ?? "";
+      const wrapper = field.closest?.(".enhanced-select");
+      if (wrapper) {
+        updateEnhancedSelectLabel(wrapper);
+      }
+    }
+  });
+  form.dataset.dirty = "no";
+};
+
+const replaceSettingsOptions = (select, rows, emptyLabel = null) => {
+  if (!select) {
+    return;
+  }
+  const selected = select.value;
+  select.replaceChildren();
+  if (emptyLabel !== null) {
+    select.append(createNode("option", { value: "", textContent: emptyLabel }));
+  }
+  (rows || []).forEach((row) => {
+    select.append(createNode("option", {
+      value: row.slug || row.value || "",
+      textContent: row.name || row.label || row.slug || row.value || "",
+    }));
+  });
+  if ([...select.options].some((option) => option.value === selected)) {
+    select.value = selected;
+  }
+  const wrapper = select.closest(".enhanced-select");
+  if (wrapper) {
+    rebuildEnhancedSelectMenu(wrapper);
+  }
+};
+
+const appendSettingsCells = (row, values) => {
+  values.forEach((value) => row.append(createNode("td", {
+    textContent: value === null || value === undefined || value === "" ? "-" : String(value),
+  })));
+};
+
+const renderSettingsPagination = (root, pagination) => {
+  const container = root.querySelector("[data-settings-pagination]");
+  if (!container) {
+    return;
+  }
+  container.replaceChildren();
+  if (!pagination || pagination.total_pages <= 1) {
+    return;
+  }
+  const previous = createNode("button", {
+    className: "button ghost compact-button",
+    type: "button",
+    "data-settings-page": pagination.page - 1,
+    textContent: "Previous",
+  });
+  previous.disabled = !pagination.has_previous;
+  const next = createNode("button", {
+    className: "button ghost compact-button",
+    type: "button",
+    "data-settings-page": pagination.page + 1,
+    textContent: "Next",
+  });
+  next.disabled = !pagination.has_next;
+  container.append(createNode("div", { className: "pagination-bar" }, [
+    createNode("span", {
+      textContent: `Page ${pagination.page} of ${pagination.total_pages} · ${settingsNumber(pagination.total)} rows`,
+    }),
+    createNode("div", { className: "button-row" }, [previous, next]),
+  ]));
+};
+
+const renderSettingsSummary = (root, payload) => {
+  const container = root.querySelector("[data-settings-summary]");
+  if (!container) {
+    return;
+  }
+  const summary = payload.summary || {};
+  const upstream = summary.upstream || {};
+  const cards = [
+    ["IN", "Proxy listener", `${summary.listener?.host || "-"}:${summary.listener?.port || "-"}`, "Admin and proxy port"],
+    ["FB", "Model fallback", `${upstream.default_provider_name || "No provider"} / ${upstream.default_model || "No model"}`, "Used for unmatched models"],
+    ["RT", "Active routes", settingsNumber(summary.active_routes), `${settingsNumber(summary.active_providers)} active providers`],
+    ["DB", "Stored rows", settingsNumber(summary.stored_rows), `${settingsNumber(summary.rows_older_than_retention)} older than ${summary.retention_days} days`],
+  ];
+  container.replaceChildren(...cards.map(([badge, label, value, detail]) => (
+    createNode("article", { className: "summary-card" }, [
+      createNode("span", { className: "summary-icon", textContent: badge }),
+      createNode("div", { className: "summary-body" }, [
+        createNode("span", { className: "summary-label", textContent: label }),
+        createNode("strong", { className: "summary-value", textContent: value }),
+        createNode("span", { className: "summary-helper", textContent: detail }),
+      ]),
+    ])
+  )));
+  const stored = root.querySelector("[data-settings-stored-rows]");
+  if (stored) {
+    stored.textContent = `${settingsNumber(summary.stored_rows)} stored rows`;
+  }
+};
+
+const renderSettingsHealth = (root, providers, healthResults) => {
+  root.querySelectorAll("[data-settings-provider-health]").forEach((tbody) => {
+    tbody.replaceChildren();
+    (providers || []).forEach((provider) => {
+      const health = healthResults?.[provider.slug] || {};
+      const row = createNode("tr");
+      appendSettingsCells(row, [
+        provider.name,
+        health.checked_at || "Not checked",
+        health.latency_ms === null || health.latency_ms === undefined
+          ? "-"
+          : `${health.latency_ms} ms`,
+        health.auth_state || provider.api_key_env || "not configured",
+        health.status || "warning",
+      ]);
+      tbody.append(row);
+    });
+    if (!providers?.length) {
+      tbody.append(createNode("tr", {}, [
+        createNode("td", {
+          className: "empty",
+          colspan: "5",
+          textContent: "No providers are configured.",
+        }),
+      ]));
+    }
+  });
+};
+
+const renderSettingsDiagnosticResult = (root, result) => {
+  const container = root.querySelector("[data-settings-diagnostic-result]");
+  if (!container || !result) {
+    return;
+  }
+  container.replaceChildren(
+    createNode("strong", {
+      textContent: result.ok ? "Diagnostic succeeded" : "Diagnostic failed",
+    }),
+    createNode("span", {
+      textContent: `${result.kind || "test"} · ${result.status_code || "error"} · ${result.duration_ms || 0} ms`,
+    }),
+    createNode("code", { textContent: result.url || "-" }),
+    result.error
+      ? createNode("p", { className: "error-text", textContent: result.error })
+      : createNode("pre", { className: "code compact-code", textContent: result.body || "" }),
+  );
+};
+
+const initSettingsLivePage = (root) => {
+  const status = root.querySelector("[data-settings-status]");
+  const tab = root.dataset.settingsTab;
+  let latest = null;
+  let controller = null;
+  let reading = false;
+  let mutating = false;
+  let selectedRouteId = null;
+  let selectedProviderSlug = null;
+  const openPriceIds = new Set();
+
+  const setStatus = (text, isError = false) => {
+    if (!status) {
+      return;
+    }
+    status.textContent = text || "";
+    status.classList.toggle("error-text", isError);
+  };
+
+  const hasDirtyForm = () => Boolean(root.querySelector("[data-settings-action][data-dirty='yes']"));
+
+  const currentApiUrl = () => {
+    const url = new URL(root.dataset.apiUrl, window.location.origin);
+    new URLSearchParams(window.location.search).forEach((value, key) => {
+      url.searchParams.set(key, value);
+    });
+    return url;
+  };
+
+  const renderProviderOptions = (payload) => {
+    const providers = payload.options?.providers || [];
+    root.querySelectorAll("[data-provider-options]").forEach((select) => {
+      const allLabel = select.closest("[data-default-routes]") ? "All providers" : (
+        select.name === "provider_slug" && select.closest("#price-editor")
+          ? "Choose provider"
+          : select.name === "provider_slug" && select.closest("#route-editor")
+            ? "Auto by URL"
+            : "No provider"
+      );
+      replaceSettingsOptions(select, providers, allLabel);
+    });
+    root.querySelectorAll("[data-provider-filter-options]").forEach((select) => {
+      replaceSettingsOptions(select, providers, "All providers");
+    });
+    root.querySelectorAll("[data-currency-options]").forEach((select) => {
+      replaceSettingsOptions(
+        select,
+        (payload.options?.currencies || []).map((currency) => ({
+          value: currency,
+          label: currency,
+        })),
+        "All currencies",
+      );
+    });
+  };
+
+  const renderFallbackForms = (payload) => {
+    const fallback = payload.data?.fallback || {};
+    root.querySelectorAll("[data-settings-action='upstream-defaults']").forEach((form) => {
+      fillSettingsForm(form, {
+        upstream_url: payload.data?.upstream_url || payload.summary?.upstream?.url || "",
+        default_provider_slug: fallback.provider_slug || "",
+        default_model: fallback.model || "",
+        fallback_enabled: Boolean(fallback.enabled),
+      });
+    });
+  };
+
+  const renderServer = (payload) => {
+    fillSettingsForm(root.querySelector("[data-settings-action='listener']"), {
+      incoming_port: payload.data.listener?.port,
+      expose_all_ips: payload.data.listener?.expose_all_ips,
+    });
+    const warning = root.querySelector("[data-settings-network-warning]");
+    if (warning) {
+      warning.hidden = !payload.data.listener?.expose_all_ips;
+    }
+    renderFallbackForms(payload);
+    const fixesForm = root.querySelector("[data-settings-action='compat-fixes']");
+    if (fixesForm && fixesForm.dataset.dirty !== "yes") {
+      const selected = new Set(payload.data.compatibility_fixes || []);
+      const list = fixesForm.querySelector("[data-settings-compat-fixes]");
+      list?.replaceChildren(...(payload.options?.compatibility_fixes || []).map((fix) => (
+        createNode("label", { className: "check fix-option" }, [
+          createNode("input", {
+            type: "checkbox",
+            value: fix.id,
+            "data-fix-id": true,
+            checked: selected.has(fix.id),
+          }),
+          createNode("span", {}, [
+            createNode("strong", { textContent: fix.id }),
+            createNode("small", { textContent: fix.description }),
+          ]),
+        ])
+      )));
+      const text = [...selected].join("\n");
+      const target = fixesForm.querySelector("[data-fix-target]");
+      const manual = fixesForm.querySelector("[data-fix-manual]");
+      if (target) target.value = text;
+      if (manual) manual.value = text;
+    }
+    const routesBody = root.querySelector("[data-settings-recent-routes]");
+    routesBody?.replaceChildren();
+    (payload.data.recent_routes || []).forEach((route) => {
+      const row = createNode("tr");
+      appendSettingsCells(row, [
+        route.model,
+        settingsNumber(route.requests),
+        route.matched_route || (route.upstream_model ? "model fallback" : "pass-through"),
+        route.provider_name || route.provider_slug || "Auto",
+        route.status,
+      ]);
+      routesBody?.append(row);
+    });
+    if (routesBody && !payload.data.recent_routes?.length) {
+      routesBody.append(createNode("tr", {}, [
+        createNode("td", { className: "empty", colspan: "5", textContent: "No recent model traffic." }),
+      ]));
+    }
+    renderRetention(payload);
+  };
+
+  const renderRetention = (payload) => {
+    const retention = payload.data?.retention;
+    if (!retention) {
+      return;
+    }
+    root.querySelectorAll("[data-settings-action='trim']").forEach((form) => {
+      fillSettingsForm(form, { days: retention.days });
+    });
+    root.querySelectorAll("[data-settings-retention-preview]").forEach((copy) => {
+      copy.textContent = `Older than ${retention.days} days: ${settingsNumber(retention.rows)} rows will be deleted.`;
+    });
+  };
+
+  const renderRoutes = (payload) => {
+    renderFallbackForms(payload);
+    const body = root.querySelector("[data-settings-routes]");
+    body?.replaceChildren();
+    (payload.data.routes || []).forEach((route) => {
+      const row = createNode("tr", {
+        className: String(route.id) === String(selectedRouteId) ? "is-selected" : "",
+        "data-settings-route-row": route.id || "",
+      });
+      appendSettingsCells(row, [
+        route.model,
+        route.match_type,
+        route.upstream_url,
+        route.upstream_model,
+        route.provider_name || route.provider_slug || "Auto",
+        route.priority,
+        route.status,
+      ]);
+      const action = createNode("td");
+      if (route.editable) {
+        action.append(createNode("button", {
+          className: "button danger compact-button",
+          type: "button",
+          "data-settings-delete": "route",
+          "data-delete-id": route.id,
+          "data-delete-label": route.model,
+          textContent: "Delete",
+        }));
+      } else {
+        action.textContent = "Locked";
+      }
+      row.append(action);
+      body?.append(row);
+    });
+    if (body && !payload.data.routes?.length) {
+      body.append(createNode("tr", {}, [
+        createNode("td", { className: "empty", colspan: "8", textContent: "No routes matched." }),
+      ]));
+    }
+    const usageBody = root.querySelector("[data-settings-route-usage]");
+    usageBody?.replaceChildren();
+    (payload.data.usage || []).forEach((item) => {
+      const row = createNode("tr");
+      appendSettingsCells(row, [item.route, settingsNumber(item.requests_today), item.last_matched_at]);
+      usageBody?.append(row);
+    });
+    if (usageBody && !payload.data.usage?.length) {
+      usageBody.append(createNode("tr", {}, [
+        createNode("td", { className: "empty", colspan: "3", textContent: "No route matches today." }),
+      ]));
+    }
+  };
+
+  const renderProviders = (payload) => {
+    renderFallbackForms(payload);
+    const usageBySlug = Object.fromEntries(
+      (payload.data.usage || []).map((item) => [item.provider_slug, item]),
+    );
+    const body = root.querySelector("[data-settings-providers]");
+    body?.replaceChildren();
+    (payload.data.providers || []).forEach((provider) => {
+      const usage = usageBySlug[provider.slug] || {};
+      const row = createNode("tr", {
+        className: provider.slug === selectedProviderSlug ? "is-selected" : "",
+        "data-settings-provider-row": provider.slug,
+      });
+      appendSettingsCells(row, [
+        provider.name,
+        provider.slug,
+        provider.upstream_url,
+        provider.currency,
+        provider.status,
+        `${settingsNumber(provider.model_count)} models / ${settingsNumber(usage.active_routes || provider.route_count)} routes`,
+      ]);
+      row.append(createNode("td", {}, [
+        createNode("button", {
+          className: "button danger compact-button",
+          type: "button",
+          "data-settings-delete": "provider",
+          "data-delete-id": provider.slug,
+          "data-delete-label": provider.name,
+          textContent: "Delete",
+        }),
+      ]));
+      body?.append(row);
+    });
+    if (body && !payload.data.providers?.length) {
+      body.append(createNode("tr", {}, [
+        createNode("td", { className: "empty", colspan: "7", textContent: "No providers matched." }),
+      ]));
+    }
+    renderSettingsHealth(root, payload.options?.providers, payload.data.health_results);
+  };
+
+  const tierForm = (price) => createNode("form", {
+    className: "tier-form",
+    method: "post",
+    action: "/admin/settings/model-price-tiers",
+    "data-settings-action": "tier-save",
+  }, [
+    createNode("input", { type: "hidden", name: "price_id", value: price.id }),
+    createNode("label", {}, [createNode("span", { textContent: "Label" }), createNode("input", { name: "label" })]),
+    createNode("label", {}, [createNode("span", { textContent: "Min tokens" }), createNode("input", { name: "min_input_tokens", type: "number", min: "0" })]),
+    createNode("label", {}, [createNode("span", { textContent: "Max tokens" }), createNode("input", { name: "max_input_tokens", type: "number", min: "1" })]),
+    createNode("label", {}, [createNode("span", { textContent: "Input / 1M" }), createNode("input", { name: "input_usd_per_million", type: "number", min: "0", step: "0.000001", required: true })]),
+    createNode("label", {}, [createNode("span", { textContent: "Cached / 1M" }), createNode("input", { name: "cached_input_usd_per_million", type: "number", min: "0", step: "0.000001" })]),
+    createNode("label", {}, [createNode("span", { textContent: "Output / 1M" }), createNode("input", { name: "output_usd_per_million", type: "number", min: "0", step: "0.000001", required: true })]),
+    createNode("button", { className: "button ghost compact-button", type: "submit", textContent: "Add tier" }),
+    createNode("p", { className: "form-message", "data-form-message": true, "aria-live": "polite" }),
+  ]);
+
+  const renderPrices = (payload) => {
+    const body = root.querySelector("[data-settings-prices]");
+    body?.replaceChildren();
+    (payload.data.prices || []).forEach((price) => {
+      const row = createNode("tr", { "data-settings-price-row": price.id });
+      appendSettingsCells(row, [
+        price.provider_name,
+        price.model,
+        price.display_name,
+        settingsMoney(price.input_usd_per_million),
+        settingsMoney(price.cached_input_usd_per_million),
+        settingsMoney(price.output_usd_per_million),
+        (price.aliases || []).join(", "),
+      ]);
+      const tierCell = createNode("td");
+      const details = createNode("details", {
+        className: "tier-drawer",
+        "data-price-details": price.id,
+      });
+      details.open = openPriceIds.has(String(price.id));
+      details.append(createNode("summary", {
+        textContent: `${price.tiers?.length || 0} tier${price.tiers?.length === 1 ? "" : "s"}`,
+      }));
+      (price.tiers || []).forEach((tier) => {
+        details.append(createNode("div", { className: "tier-row" }, [
+          createNode("span", {
+            textContent: `${tier.label || tier.range}: ${settingsMoney(tier.input_usd_per_million)} / ${settingsMoney(tier.output_usd_per_million)}`,
+          }),
+          createNode("button", {
+            className: "button danger compact-button",
+            type: "button",
+            "data-settings-delete": "tier",
+            "data-delete-id": tier.id,
+            "data-delete-label": tier.label || tier.range,
+            textContent: "Delete",
+          }),
+        ]));
+      });
+      details.append(tierForm(price));
+      tierCell.append(details);
+      row.append(tierCell);
+      appendSettingsCells(row, [price.status]);
+      row.append(createNode("td", {}, [
+        createNode("button", {
+          className: "button danger compact-button",
+          type: "button",
+          "data-settings-delete": "price",
+          "data-delete-id": price.id,
+          "data-delete-label": `${price.provider_name}/${price.model}`,
+          textContent: "Delete",
+        }),
+      ]));
+      body?.append(row);
+    });
+    if (body && !payload.data.prices?.length) {
+      body.append(createNode("tr", {}, [
+        createNode("td", { className: "empty", colspan: "10", textContent: "No pricing rows matched." }),
+      ]));
+    }
+  };
+
+  const renderData = (payload) => {
+    const storage = payload.data.storage || {};
+    const container = root.querySelector("[data-settings-storage]");
+    container?.replaceChildren(...[
+      ["Total stored rows", payload.summary.stored_rows],
+      ["Database file size", storage.database_file_size === null ? "-" : `${settingsNumber(storage.database_file_size)} bytes`],
+      ["Oldest record date", storage.oldest_record_at || "-"],
+      ["Newest record date", storage.newest_record_at || "-"],
+    ].map(([label, value]) => createNode("div", {}, [
+      createNode("span", { textContent: label }),
+      createNode("strong", { textContent: String(value) }),
+    ])));
+    const path = root.querySelector("[data-settings-database-path]");
+    if (path) {
+      path.textContent = storage.database_path || "";
+    }
+    renderRetention(payload);
+  };
+
+  const render = (payload) => {
+    latest = payload;
+    renderSettingsSummary(root, payload);
+    renderProviderOptions(payload);
+    if (tab === "server") renderServer(payload);
+    if (tab === "routing") renderRoutes(payload);
+    if (tab === "providers") renderProviders(payload);
+    if (tab === "pricing") renderPrices(payload);
+    if (tab === "diagnostics") {
+      renderSettingsHealth(root, payload.data.providers, payload.data.health_results);
+      fillSettingsForm(root.querySelector("[data-settings-action='diagnostics']"), payload.data.test_defaults);
+    }
+    if (tab === "data") renderData(payload);
+    renderSettingsPagination(root, payload.pagination);
+  };
+
+  const load = async ({ preserveStatus = false } = {}) => {
+    if (reading) {
+      controller?.abort();
+    }
+    controller = new AbortController();
+    reading = true;
+    if (!preserveStatus) {
+      setStatus(latest ? "Refreshing settings…" : "Loading settings…");
+    }
+    try {
+      const response = await fetch(currentApiUrl(), {
+        headers: { Accept: "application/json" },
+        signal: controller.signal,
+      });
+      const payload = await response.json();
+      if (!response.ok) {
+        throw new Error(payload.detail || `Settings API returned ${response.status}`);
+      }
+      render(payload);
+      setStatus("Settings are current");
+    } catch (error) {
+      if (error.name !== "AbortError") {
+        setStatus(
+          latest
+            ? `Refresh failed; showing last data. ${error.message || ""}`
+            : `Settings failed to load. ${error.message || ""}`,
+          true,
+        );
+      }
+    } finally {
+      reading = false;
+    }
+  };
+
+  const requestJson = async (url, options) => {
+    const response = await fetch(url, {
+      ...options,
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+        ...(options?.headers || {}),
+      },
+    });
+    const payload = await response.json();
+    if (!response.ok) {
+      throw new Error(payload.detail || `Request returned ${response.status}`);
+    }
+    return payload;
+  };
+
+  const mutationForForm = (form, submitter) => {
+    const action = form.dataset.settingsAction;
+    const payload = settingsFormPayload(form, submitter);
+    if (action === "listener") {
+      return ["/admin/api/settings/listener", "POST", {
+        port: payload.incoming_port,
+        expose_all_ips: payload.expose_all_ips === "yes",
+      }];
+    }
+    if (action === "upstream-defaults") {
+      return ["/admin/api/settings/upstream-defaults", "POST", {
+        upstream_url: payload.upstream_url,
+        default_provider_slug: payload.default_provider_slug,
+        default_model: payload.default_model,
+        fallback_enabled: payload.fallback_enabled === "yes",
+      }];
+    }
+    if (action === "compat-fixes") {
+      return ["/admin/api/settings/compat-fixes", "POST", { fixes: payload.fixes || "" }];
+    }
+    if (action === "diagnostics") {
+      return ["/admin/api/diagnostics/upstream-test", "POST", payload];
+    }
+    if (action === "trim") {
+      return ["/admin/api/settings/trim", "POST", {
+        days: payload.days,
+        confirm: payload.confirm === "yes",
+      }];
+    }
+    if (action === "route-save") {
+      const routeId = payload.route_id;
+      return [
+        routeId ? `/admin/api/routes/${routeId}` : "/admin/api/routes",
+        routeId ? "PUT" : "POST",
+        {
+          incoming_model: payload.model,
+          match_type: payload.match_type,
+          upstream_url: payload.upstream_url,
+          upstream_model: payload.upstream_model,
+          provider_slug: payload.provider_slug,
+          api_key_env: payload.api_key_env,
+          compatibility_fixes: payload.fixes,
+          override_fallback: payload.override_fallback === "yes",
+          priority: payload.priority,
+          active: payload.active === "yes",
+        },
+      ];
+    }
+    if (action === "provider-save") {
+      const original = payload.original_slug;
+      return [
+        original ? `/admin/api/providers/${encodeURIComponent(original)}` : "/admin/api/providers",
+        original ? "PUT" : "POST",
+        {
+          slug: payload.slug,
+          name: payload.name,
+          upstream_url: payload.upstream_url,
+          currency: payload.currency,
+          api_key_env: payload.api_key_env,
+          active: payload.active === "yes",
+          is_default_fallback: payload.is_default_fallback === "yes",
+          capabilities: {
+            text: payload.capability_text === "yes",
+            vision: payload.capability_vision === "yes",
+            tool_calling: payload.capability_tool_calling === "yes",
+          },
+        },
+      ];
+    }
+    if (action === "price-save") {
+      const priceId = payload.price_id;
+      return [
+        priceId ? `/admin/api/model-prices/${priceId}` : "/admin/api/model-prices",
+        priceId ? "PUT" : "POST",
+        {
+          ...payload,
+          active: payload.active === "yes",
+        },
+      ];
+    }
+    if (action === "tier-save") {
+      return [
+        `/admin/api/model-prices/${payload.price_id}/tiers`,
+        "POST",
+        payload,
+      ];
+    }
+    return null;
+  };
+
+  root.addEventListener("input", (event) => {
+    const form = event.target.closest("[data-settings-action]");
+    if (form) {
+      form.dataset.dirty = "yes";
+    }
+    const fixForm = event.target.closest("[data-fix-picker]");
+    if (fixForm && event.target.matches("[data-fix-id]")) {
+      const value = [...fixForm.querySelectorAll("[data-fix-id]:checked")]
+        .map((item) => item.value)
+        .join("\n");
+      const target = fixForm.querySelector("[data-fix-target]");
+      const manual = fixForm.querySelector("[data-fix-manual]");
+      if (target) target.value = value;
+      if (manual) manual.value = value;
+    }
+  });
+  root.addEventListener("change", (event) => {
+    const form = event.target.closest("[data-settings-action]");
+    if (form) {
+      form.dataset.dirty = "yes";
+    }
+  });
+  root.addEventListener("toggle", (event) => {
+    const details = event.target.closest("[data-price-details]");
+    if (!details) {
+      return;
+    }
+    const key = details.dataset.priceDetails;
+    if (details.open) openPriceIds.add(key);
+    else openPriceIds.delete(key);
+  }, true);
+  root.addEventListener("reset", (event) => {
+    const form = event.target.closest("[data-settings-action]");
+    window.setTimeout(() => {
+      if (form) form.dataset.dirty = "no";
+    }, 0);
+  });
+  root.addEventListener("submit", async (event) => {
+    const filters = event.target.closest("[data-settings-filters]");
+    if (filters) {
+      event.preventDefault();
+      const params = new URLSearchParams(window.location.search);
+      const values = settingsFormPayload(filters);
+      ["search", "status", "provider", "currency"].forEach((key) => {
+        const value = String(values[key] || "");
+        if (value && value !== "all") params.set(key, value);
+        else params.delete(key);
+      });
+      params.delete("page");
+      history.pushState({}, "", `${window.location.pathname}?${params}`);
+      load();
+      return;
+    }
+    const form = event.target.closest("[data-settings-action]");
+    if (!form) {
+      return;
+    }
+    event.preventDefault();
+    if (mutating) {
+      setSettingsFormMessage(form, "Another settings update is still running.", true);
+      return;
+    }
+    const mutation = mutationForForm(form, event.submitter);
+    if (!mutation) {
+      return;
+    }
+    if (form.dataset.settingsAction === "trim") {
+      const confirmed = await confirmWithModal(
+        `Delete captured rows older than ${form.elements.days.value} days?`,
+      );
+      if (!confirmed) {
+        return;
+      }
+    }
+    const [url, method, payload] = mutation;
+    mutating = true;
+    if (event.submitter) event.submitter.disabled = true;
+    setSettingsFormMessage(form, "Saving…");
+    try {
+      const result = await requestJson(url, {
+        method,
+        body: JSON.stringify(payload),
+      });
+      form.dataset.dirty = "no";
+      setSettingsFormMessage(form, "Saved.");
+      if (form.dataset.settingsAction === "diagnostics") {
+        renderSettingsDiagnosticResult(root, result);
+      }
+      if (form.dataset.settingsAction === "trim") {
+        const confirmation = form.querySelector("input[name='confirm']");
+        if (confirmation) confirmation.checked = false;
+      }
+      await load({ preserveStatus: true });
+      setStatus("Settings updated");
+    } catch (error) {
+      setSettingsFormMessage(form, error.message || "Update failed.", true);
+      setStatus("Settings update failed", true);
+    } finally {
+      mutating = false;
+      if (event.submitter) event.submitter.disabled = false;
+    }
+  });
+  root.addEventListener("click", async (event) => {
+    const refresh = event.target.closest("[data-settings-refresh]");
+    if (refresh) {
+      event.preventDefault();
+      load();
+      return;
+    }
+    const pageButton = event.target.closest("[data-settings-page]");
+    if (pageButton) {
+      const params = new URLSearchParams(window.location.search);
+      params.set("page", pageButton.dataset.settingsPage);
+      history.pushState({}, "", `${window.location.pathname}?${params}`);
+      load();
+      return;
+    }
+    const routeRow = event.target.closest("[data-settings-route-row]");
+    if (routeRow && !event.target.closest("button, a, input, select, textarea")) {
+      const route = latest?.data.routes.find(
+        (item) => String(item.id) === String(routeRow.dataset.settingsRouteRow),
+      );
+      const form = root.querySelector("[data-route-editor]");
+      if (route && form) {
+        selectedRouteId = route.id;
+        form.dataset.dirty = "no";
+        fillSettingsForm(form, {
+          route_id: route.id,
+          model: route.model,
+          match_type: route.match_type,
+          upstream_url: route.upstream_url,
+          upstream_model: route.upstream_model,
+          provider_slug: route.provider_slug,
+          api_key_env: route.api_key_env,
+          fixes: (route.compatibility_fixes || []).join("\n"),
+          priority: route.priority,
+          active: route.active,
+          override_fallback: route.override_fallback,
+        });
+        renderRoutes(latest);
+      }
+      return;
+    }
+    const providerRow = event.target.closest("[data-settings-provider-row]");
+    if (providerRow && !event.target.closest("button, a, input, select, textarea")) {
+      const provider = latest?.data.providers.find(
+        (item) => item.slug === providerRow.dataset.settingsProviderRow,
+      );
+      const form = root.querySelector("[data-provider-editor]");
+      if (provider && form) {
+        selectedProviderSlug = provider.slug;
+        form.dataset.dirty = "no";
+        fillSettingsForm(form, {
+          original_slug: provider.slug,
+          slug: provider.slug,
+          name: provider.name,
+          upstream_url: provider.upstream_url,
+          currency: provider.currency,
+          api_key_env: provider.api_key_env,
+          active: provider.active,
+          is_default_fallback: provider.is_default_fallback,
+          capability_text: provider.capabilities?.text,
+          capability_vision: provider.capabilities?.vision,
+          capability_tool_calling: provider.capabilities?.tool_calling,
+        });
+        renderProviders(latest);
+      }
+      return;
+    }
+    const priceRow = event.target.closest("[data-settings-price-row]");
+    if (priceRow && !event.target.closest("button, a, input, select, textarea, details")) {
+      const price = latest?.data.prices.find(
+        (item) => String(item.id) === String(priceRow.dataset.settingsPriceRow),
+      );
+      const form = root.querySelector("[data-settings-action='price-save']");
+      if (price && form) {
+        form.dataset.dirty = "no";
+        fillSettingsForm(form, {
+          price_id: price.id,
+          provider_slug: price.provider_slug,
+          model: price.model,
+          display_name: price.display_name,
+          input_usd_per_million: price.input_usd_per_million,
+          cached_input_usd_per_million: price.cached_input_usd_per_million,
+          output_usd_per_million: price.output_usd_per_million,
+          aliases: (price.aliases || []).join(", "),
+          notes: price.notes,
+          active: price.active,
+        });
+      }
+      return;
+    }
+    const deletion = event.target.closest("[data-settings-delete]");
+    if (deletion) {
+      const kind = deletion.dataset.settingsDelete;
+      const id = deletion.dataset.deleteId;
+      if (!await confirmWithModal(`Delete ${deletion.dataset.deleteLabel || kind}?`)) {
+        return;
+      }
+      const urls = {
+        route: `/admin/api/routes/${id}`,
+        provider: `/admin/api/providers/${encodeURIComponent(id)}`,
+        price: `/admin/api/model-prices/${id}`,
+        tier: `/admin/api/model-price-tiers/${id}`,
+      };
+      mutating = true;
+      deletion.disabled = true;
+      try {
+        await requestJson(urls[kind], { method: "DELETE" });
+        await load({ preserveStatus: true });
+        setStatus("Settings updated");
+      } catch (error) {
+        setStatus(error.message || "Delete failed.", true);
+      } finally {
+        mutating = false;
+        deletion.disabled = false;
+      }
+      return;
+    }
+    const providerTest = event.target.closest("[data-run-provider-test]");
+    if (providerTest) {
+      const form = providerTest.closest("[data-provider-editor]");
+      const slug = form?.elements.original_slug?.value || form?.elements.slug?.value;
+      const result = root.querySelector("[data-provider-test-result]");
+      if (!slug || !result) {
+        setSettingsFormMessage(form, "Choose or save a provider first.", true);
+        return;
+      }
+      providerTest.disabled = true;
+      result.hidden = false;
+      result.textContent = "Testing provider…";
+      try {
+        const data = await requestJson(
+          `/admin/api/providers/${encodeURIComponent(slug)}/test`,
+          { method: "POST" },
+        );
+        result.textContent = `${data.status}: ${data.message || ""}`;
+      } catch (error) {
+        result.textContent = error.message || "Provider test failed.";
+      } finally {
+        providerTest.disabled = false;
+      }
+    }
+  });
+
+  window.addEventListener("popstate", load);
+  window.addEventListener("settings:refresh", () => load({ preserveStatus: true }));
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden && !hasDirtyForm() && !mutating) {
+      load({ preserveStatus: true });
+    }
+  });
+
+  const filterForm = root.querySelector("[data-settings-filters]");
+  if (filterForm) {
+    const params = new URLSearchParams(window.location.search);
+    ["search", "status", "provider", "currency"].forEach((name) => {
+      if (filterForm.elements[name] && params.has(name)) {
+        filterForm.elements[name].value = params.get(name);
+      }
+    });
+  }
+  load();
 };
 
 const initRequestsLivePage = (root) => {
@@ -3132,4 +4087,6 @@ if (liveRoot?.dataset.livePage === "requests") {
   initRequestDetailLivePage(liveRoot);
 } else if (liveRoot?.dataset.livePage === "run-detail") {
   initRunDetailLivePage(liveRoot);
+} else if (liveRoot?.dataset.livePage === "settings") {
+  initSettingsLivePage(liveRoot);
 }
