@@ -1,25 +1,27 @@
-# v0.6 Image Preview — Master Implementation Plan
+# v0.6 Admin UI Improvements — Master Implementation Plan
 
 ## Overview
 
-This plan tracks the v0.6 request-image gallery improvements. The first phase adds
-intrinsic image dimensions to request thumbnails and an accessible preview modal with
-fit-to-window and actual-size viewing modes.
+This plan tracks two related v0.6 admin UI improvements. Phase 1 improves request-image
+inspection. Phase 2 converts the remaining Settings data and actions to REST-backed,
+in-place updates so routine admin work does not reload the whole document.
 
-The structure is intentionally expandable so later v0.6 work can be added as separate
-phases without broadening Phase 1.
+Normal navigation between Requests, Runs, request/run details, and Settings tabs remains
+page-based. Once a page is open, its filters, pagination, saves, deletes, diagnostics,
+and refreshes update through JSON APIs.
 
 ## Phase Summary
 
 | Phase | Name | Focus | Key Deliverables |
 |:---:|---|---|---|
 | 1 | [Image Dimensions & Preview](phase-1-image-preview/plan.md) | Request detail image UX | Thumbnail dimensions, preview modal, actual-size mode, polling-safe state, tests, docs, screenshot |
+| 2 | [REST-Backed Admin UI](phase-2-rest-admin-ui/plan.md) | Settings live UI | REST page payloads, pricing and diagnostics APIs, in-place rendering and mutations, state preservation, tests, docs |
 
 ## Dependency Graph
 
 ```mermaid
 graph LR
-    P1["Phase 1: Image Dimensions & Preview"]
+    P1["Phase 1: Image Dimensions & Preview"] --> P2["Phase 2: REST-Backed Admin UI"]
 ```
 
 ## Phase Details
@@ -50,16 +52,44 @@ and refreshed screenshot.
 
 **TODO**: [phase-1-image-preview/todo.md](phase-1-image-preview/todo.md)
 
+---
+
+### Phase 2 — REST-Backed Admin UI
+
+**Goal**: Eliminate full-document reloads for Settings data updates and actions while
+preserving normal page navigation and the existing dependency-free frontend.
+
+- Convert all six Settings tabs to lightweight shells populated from tab-specific JSON
+  page payloads.
+- Add missing REST operations for model pricing, pricing tiers, and upstream diagnostics.
+- Submit saves, deletes, tests, catalog actions, and retention trimming through REST.
+- Re-render only affected regions while preserving dirty forms, focus, scroll, selected
+  rows, open drawers, and modals.
+- Refresh on page load, successful mutations, manual refresh, history navigation, and
+  safe visibility return; do not continuously poll editable Settings registries.
+- Keep existing HTML POST handlers as compatibility fallbacks.
+- Audit Requests and Runs so all in-page updates remain REST-backed, including Phase 1
+  image modal stability during request-detail polling.
+
+**Inputs**: Existing admin REST APIs, Settings templates, request/run live controllers,
+and Phase 1 polling-safe image gallery.
+
+**Outputs**: REST-backed Settings pages, complete admin mutation APIs, accessible
+loading/error feedback, focused API/UI tests, and updated documentation.
+
+**Plan**: [phase-2-rest-admin-ui/plan.md](phase-2-rest-admin-ui/plan.md)
+
+**TODO**: [phase-2-rest-admin-ui/todo.md](phase-2-rest-admin-ui/todo.md)
+
 ## Quality Gates
 
-Phase 1 is complete only when all of the following pass:
+Each phase is complete only when its focused tests and all of the following pass:
 
 1. `.venv/bin/ruff check src tests scripts`
 2. `.venv/bin/python -m compileall -q src tests scripts`
 3. `.venv/bin/pytest -q`
 4. `git diff --check`
-5. Seeded browser verification of the image gallery and modal at desktop and mobile
-   widths
+5. Seeded desktop and mobile browser verification for the phase's UI behavior
 
 ## Git Strategy
 
@@ -67,9 +97,12 @@ Phase 1 is complete only when all of the following pass:
 feature/admin-fallback-clarity
  └── feature/image-dimensions-preview
       ├── docs: add v0.6 image preview plan
+      ├── docs: add v0.6 REST admin UI phase
       ├── feat: add request image dimensions and preview modal
       ├── test: cover request image preview behavior
-      └── docs: document request image previews
+      ├── feat: add REST-backed settings pages
+      ├── test: cover REST-backed admin UI
+      └── docs: document v0.6 admin UI improvements
 ```
 
 Keep commits focused and do not mix unrelated settings, routing, pricing, capture, or
@@ -79,6 +112,9 @@ token-accounting changes into this feature branch.
 
 - Preserve record-only proxy behavior.
 - Do not add a database migration or persist image dimensions.
-- Do not change the public API or the admin request-detail JSON shape.
+- Do not change public `/api/*` contracts or the admin request-detail JSON shape.
+- New JSON routes must remain under `/admin/api/*`.
 - Do not add a runtime or frontend dependency.
 - Keep data URL and remote URL image support.
+- Keep one-second polling for Requests and Runs; Settings uses event-driven refresh.
+- Keep HTML POST handlers available as compatibility fallbacks.
