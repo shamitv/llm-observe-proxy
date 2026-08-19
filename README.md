@@ -10,10 +10,9 @@ or external database.
 
 Published package: https://pypi.org/project/llm-observe-proxy/
 
-Current release includes the public `/api/*` integration surface, model lookup and
-sample-request discovery, default route seeding for known provider/catalog rows, compact
-recent-model routing lookup in Settings, catalog-backed pricing, and OpenAI streaming
-usage/cost capture for GPT-5.4-style models.
+Release 0.7.0 adds intrinsic image dimensions and accessible fit/actual-size previews,
+plus REST-backed Settings data and actions that update in place while preserving dirty
+forms and other local UI state.
 
 ## Features
 
@@ -32,11 +31,12 @@ usage/cost capture for GPT-5.4-style models.
   combinations.
 - Detail pages with response render modes for JSON, plain text, Markdown, tool calls,
   and raw SSE streams.
-- Request image gallery for data URL and remote image references.
+- Request image gallery for data URL and remote image references, with intrinsic
+  dimensions and fit-to-window or actual-size previews.
 - Settings UI with Server, Routing, Providers, Pricing, Diagnostics, and Data tabs for
-  upstream fallback defaults, editable exact/prefix routes, provider health checks, price
-  tiers, response compatibility fixes, incoming host/port preferences, all-IPs exposure,
-  route simulation, and retention trimming.
+  pass-through upstream and model fallback defaults, editable exact/prefix routes,
+  provider health checks, price tiers, response compatibility fixes, incoming host/port
+  preferences, all-IPs exposure, route simulation, and retention trimming.
 - Config-driven model routes for sending selected proxy-facing model names to different
   upstream `/v1` endpoints with optional upstream model rewrites, provider selection,
   and API key injection.
@@ -137,9 +137,10 @@ Load model-specific upstream routes from a JSON file:
 llm-observe-proxy --models-file .\models.json
 ```
 
-You can also change the upstream URL, fallback provider/model, model upstream routes,
-response compatibility fixes, model provider pricing, and next-start incoming host/port
-settings from `/admin/settings/server` and the other Settings tabs.
+You can also change the default pass-through upstream URL, unknown-model fallback
+provider/model, model upstream routes, response compatibility fixes, model provider
+pricing, and next-start incoming host/port settings from `/admin/settings/server` and
+the other Settings tabs.
 
 The Providers tab includes a seeded `Local LLM` provider pointing at
 `http://localhost:8000/v1` with no API key requirement. Select it as the fallback
@@ -151,9 +152,12 @@ OpenAI-compatible server.
 Model routes let one proxy endpoint send different client-facing models to different
 OpenAI-compatible upstreams. Routes match the request payload's top-level `model` by
 exact value or by a suffix-`*` prefix pattern. Startup routes have first priority, then
-SQLite-managed routes are resolved by priority and specificity. Unknown models, requests
-without a JSON model, and generic calls such as `GET /v1/models` use the global upstream
-fallback when a default provider/model is enabled.
+SQLite-managed routes are resolved by priority and specificity. For a JSON request with
+an unknown model, a complete and enabled fallback sends the request to the selected
+provider and rewrites `model` to the configured default model. Requests without a JSON
+model and generic calls such as `GET /v1/models` use the default pass-through upstream.
+Unknown models also pass through unchanged to that URL when fallback routing is disabled
+or lacks a provider or default model.
 
 Example route file:
 
@@ -344,6 +348,11 @@ Request and run list/detail pages load their data from local REST endpoints and 
 per second while visible, so new requests, pending request completion, active-run counts,
 and run metrics update without manually refreshing the browser.
 
+Settings tabs also load their registries and summaries from local REST endpoints. Saves,
+deletes, tests, filtering, pagination, catalog updates, and retention actions re-render
+the affected UI in place without reloading the current page. Editable Settings forms use
+event-driven refresh so unsaved values are not replaced by background polling.
+
 ## Screenshots
 
 Screenshots are generated from a seeded demo database and stored in `docs/screenshots`.
@@ -399,7 +408,7 @@ Regenerate screenshots:
 - `POST /admin/api/runs/{id}/resume`: resume an open paused run through JSON.
 - `POST /admin/api/runs/end`: end the active run through JSON.
 - `GET /admin/settings`: redirects to the Server settings tab.
-- `GET /admin/settings/server`: listener, upstream fallback, default fixes, route summary, test, and retention controls.
+- `GET /admin/settings/server`: listener, pass-through upstream, model fallback, default fixes, route summary, test, and retention controls.
 - `GET /admin/settings/routing`: editable exact/prefix routes, fallback behavior, simulator, and usage summary.
 - `GET /admin/settings/providers`: provider registry, capabilities, fallback provider, health checks, and usage summary.
 - `GET /admin/settings/pricing`: model pricing registry, tiers, aliases, and active-state controls.
@@ -418,8 +427,8 @@ Regenerate screenshots:
 - `POST /admin/api/pricing/catalog/preview`: preview current HF Router or OpenRouter pricing rows.
 - `POST /admin/api/pricing/catalog/apply`: apply selected catalog pricing rows and optionally fill missing cost estimates.
 - `POST /admin/settings/incoming`: update incoming host/port settings for next startup.
-- `POST /admin/settings/upstream`: update upstream URL.
-- `POST /admin/settings/upstream-defaults`: update upstream fallback provider/model behavior.
+- `POST /admin/settings/upstream`: update the default pass-through upstream URL.
+- `POST /admin/settings/upstream-defaults`: update the pass-through upstream URL and unknown-model fallback provider/model behavior.
 - `POST /admin/settings/compat-fixes`: update default-upstream compatibility fixes.
 - `POST /admin/settings/model-routes`: create or update a UI-managed model route.
 - `POST /admin/settings/model-routes/delete`: delete a UI-managed model route.

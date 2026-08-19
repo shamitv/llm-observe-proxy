@@ -1946,6 +1946,7 @@ def delete_model_route_db(session: Session, route_id: int) -> bool:
 def upsert_model_price(
     session: Session,
     *,
+    price_id: int | None = None,
     provider_slug: str,
     model: str,
     input_usd_per_million: object,
@@ -1976,16 +1977,23 @@ def upsert_model_price(
         "Cached input price",
     )
     output_rate = _decimal_rate(output_usd_per_million, "Output price")
-    price = session.scalar(
+    matching_price = session.scalar(
         select(ModelPrice).where(
             ModelPrice.provider_slug == resolved_provider_slug,
             ModelPrice.model == resolved_model,
         )
     )
+    price = session.get(ModelPrice, price_id) if price_id is not None else matching_price
+    if price_id is not None and price is None:
+        raise ValueError("Model price was not found.")
+    if matching_price is not None and matching_price is not price:
+        raise ValueError("A price for this provider and model already exists.")
     if price is None:
         price = ModelPrice(provider_slug=resolved_provider_slug, model=resolved_model)
         session.add(price)
 
+    price.provider_slug = resolved_provider_slug
+    price.model = resolved_model
     price.display_name = display_name.strip() or None
     price.aliases_json = _aliases_json(aliases)
     price.input_usd_per_million = input_rate

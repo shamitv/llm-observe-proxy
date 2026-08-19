@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
+import pytest
 from fastapi.testclient import TestClient
 
 from llm_observe_proxy.database import RequestRecord, TaskRun
@@ -15,6 +16,52 @@ def test_get_settings_summary(proxy_client: TestClient) -> None:
     assert data["listener"]["port"] == 8080
     assert data["client_base_url"] == "http://localhost:8080/v1"
     assert "stored_rows" in data
+
+
+@pytest.mark.parametrize(
+    ("tab", "data_key", "has_pagination"),
+    [
+        ("server", "listener", False),
+        ("routing", "routes", True),
+        ("providers", "providers", True),
+        ("pricing", "prices", True),
+        ("diagnostics", "test_defaults", False),
+        ("data", "storage", False),
+    ],
+)
+def test_settings_page_payloads(
+    proxy_client: TestClient,
+    tab: str,
+    data_key: str,
+    has_pagination: bool,
+) -> None:
+    response = proxy_client.get(
+        f"/admin/api/settings/{tab}?days=14&search=gpt&page=1&per_page=10"
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert set(payload) == {"tab", "summary", "data", "options", "pagination"}
+    assert payload["tab"] == tab
+    assert data_key in payload["data"]
+    assert payload["summary"]["retention_days"] == 14
+    assert (payload["pagination"] is not None) is has_pagination
+    if has_pagination:
+        assert set(payload["pagination"]) == {
+            "page",
+            "per_page",
+            "total",
+            "total_pages",
+            "has_previous",
+            "has_next",
+        }
+
+
+def test_settings_page_payload_rejects_unknown_tab_and_bad_pagination(
+    proxy_client: TestClient,
+) -> None:
+    assert proxy_client.get("/admin/api/settings/unknown").status_code == 404
+    assert proxy_client.get("/admin/api/settings/providers?per_page=101").status_code == 422
 
 
 def test_seeded_local_llm_provider_is_available_for_fallback(proxy_client: TestClient) -> None:
@@ -154,6 +201,165 @@ def test_route_crud_and_simulation(proxy_client: TestClient) -> None:
     assert deleted.status_code == 200
 
 
+def test_model_price_and_tier_rest_crud(proxy_client: TestClient) -> None:
+    provider = proxy_client.post(
+        "/admin/api/providers",
+        json={
+            "slug": "price-api",
+            "name": "Price API",
+            "upstream_url": "http://price-api.test/v1",
+        },
+    )
+    assert provider.status_code == 200
+
+    created = proxy_client.post(
+        "/admin/api/model-prices",
+        json={
+            "provider_slug": "price-api",
+            "model": "price-model",
+            "display_name": "Price Model",
+            "aliases": ["price-alias"],
+            "input_usd_per_million": "1.25",
+            "cached_input_usd_per_million": "0.25",
+            "output_usd_per_million": "4.50",
+            "active": True,
+        },
+    )
+    assert created.status_code == 201
+    price = created.json()
+    price_id = price["id"]
+    assert price["aliases"] == ["price-alias"]
+    assert price["status"] == "active"
+
+    duplicate = proxy_client.post(
+        "/admin/api/model-prices",
+        json={
+            "provider_slug": "price-api",
+            "model": "price-model",
+            "input_usd_per_million": "1",
+            "output_usd_per_million": "2",
+        },
+    )
+    assert duplicate.status_code == 409
+
+    listed = proxy_client.get("/admin/api/model-prices?search=price-alias&provider=price-api")
+    assert listed.status_code == 200
+    assert listed.json()["total"] == 1
+
+    updated = proxy_client.put(
+        f"/admin/api/model-prices/{price_id}",
+        json={
+            "provider_slug": "price-api",
+            "model": "price-model-renamed",
+            "display_name": "Updated Price Model",
+            "aliases": "price-alias, price-alias-2",
+            "input_usd_per_million": "1.50",
+            "cached_input_usd_per_million": "",
+            "output_usd_per_million": "5.00",
+            "active": False,
+        },
+    )
+    assert updated.status_code == 200
+    assert updated.json()["model"] == "price-model-renamed"
+    assert updated.json()["status"] == "inactive"
+
+    tier = proxy_client.post(
+        f"/admin/api/model-prices/{price_id}/tiers",
+        json={
+            "label": "Small",
+            "min_input_tokens": 0,
+            "max_input_tokens": 1000,
+            "input_usd_per_million": "1.00",
+            "cached_input_usd_per_million": "0.10",
+            "output_usd_per_million": "3.00",
+        },
+    )
+    assert tier.status_code == 201
+    tier_id = tier.json()["id"]
+    assert tier.json()["range"] == "0-999 input tokens"
+
+    overlap = proxy_client.post(
+        f"/admin/api/model-prices/{price_id}/tiers",
+        json={
+            "min_input_tokens": 500,
+            "max_input_tokens": 1500,
+            "input_usd_per_million": "1",
+            "output_usd_per_million": "3",
+        },
+    )
+    assert overlap.status_code == 400
+
+    assert proxy_client.delete(f"/admin/api/model-price-tiers/{tier_id}").status_code == 200
+    assert proxy_client.delete(f"/admin/api/model-price-tiers/{tier_id}").status_code == 404
+    assert proxy_client.delete(f"/admin/api/model-prices/{price_id}").status_code == 200
+    assert proxy_client.get("/admin/api/model-prices?search=price-model").json()["total"] == 0
+    assert proxy_client.put(f"/admin/api/model-prices/{price_id}", json={}).status_code == 404
+    assert (
+        proxy_client.post(
+            f"/admin/api/model-prices/{price_id}/tiers",
+            json={"input_usd_per_million": "1", "output_usd_per_million": "2"},
+        ).status_code
+        == 404
+    )
+
+
+@pytest.mark.parametrize("test_kind", ["simple", "image", "tools"])
+def test_upstream_diagnostics_rest_api(
+    proxy_client: TestClient,
+    fake_upstream,
+    test_kind: str,
+) -> None:
+    response = proxy_client.post(
+        "/admin/api/diagnostics/upstream-test",
+        json={
+            "test_kind": test_kind,
+            "model": "gpt-test",
+            "prompt": "diagnostic check",
+        },
+    )
+
+    assert response.status_code == 200
+    result = response.json()
+    assert result["ok"] is True
+    assert result["kind"] == test_kind
+    assert result["status_code"] == 200
+    body = fake_upstream.last_request["body"]
+    if test_kind == "image":
+        assert body["messages"][0]["content"][1]["type"] == "image_url"
+    if test_kind == "tools":
+        assert body["tools"][0]["function"]["name"] == "get_weather"
+
+
+def test_upstream_diagnostics_validation_and_connection_failure(
+    proxy_client: TestClient,
+) -> None:
+    invalid = proxy_client.post(
+        "/admin/api/diagnostics/upstream-test",
+        json={"test_kind": "invalid"},
+    )
+    assert invalid.status_code == 400
+
+    route = proxy_client.post(
+        "/admin/api/routes",
+        json={
+            "incoming_model": "offline-model",
+            "upstream_url": "http://127.0.0.1:1/v1",
+        },
+    )
+    assert route.status_code == 200
+    failed = proxy_client.post(
+        "/admin/api/diagnostics/upstream-test",
+        json={
+            "test_kind": "simple",
+            "model": "offline-model",
+            "prompt": "fail quickly",
+        },
+    )
+    assert failed.status_code == 200
+    assert failed.json()["ok"] is False
+    assert "error" in failed.json()
+
+
 def test_default_route_preview_apply_and_sample_request(proxy_client: TestClient) -> None:
     preview = proxy_client.post(
         "/admin/api/routes/defaults/preview",
@@ -192,10 +398,15 @@ def test_default_route_preview_apply_and_sample_request(proxy_client: TestClient
 def test_public_model_api_and_openapi_schema(proxy_client: TestClient) -> None:
     openapi = proxy_client.get("/api/openapi.json")
     assert openapi.status_code == 200
-    paths = openapi.json()["paths"]
+    schema = openapi.json()
+    assert schema["info"]["version"] == "0.7.0"
+    paths = schema["paths"]
     assert "/api/models" in paths
     assert "/api/models/lookup" in paths
     assert "/admin/api/routes" not in paths
+    assert "/admin/api/settings/{tab}" not in paths
+    assert "/admin/api/model-prices" not in paths
+    assert "/admin/api/diagnostics/upstream-test" not in paths
     assert "/v1/{path}" not in paths
 
     listed = proxy_client.get("/api/models?search=gpt-5.4-mini")

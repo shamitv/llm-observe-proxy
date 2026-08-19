@@ -111,6 +111,34 @@ def test_live_request_run_shells_and_polling_script(proxy_client: TestClient) ->
     assert 'data-run-tab-panel="cost"' in run_page.text
 
 
+def test_request_image_gallery_has_dimensions_and_accessible_preview() -> None:
+    app_js = Path("src/llm_observe_proxy/static/app.js").read_text(encoding="utf-8")
+    styles = Path("src/llm_observe_proxy/static/styles.css").read_text(encoding="utf-8")
+
+    assert "requestImageIdentity" in app_js
+    assert "container.dataset.imageIdentity === identity" in app_js
+    assert "thumbnail.naturalWidth" in app_js
+    assert "thumbnail.naturalHeight" in app_js
+    assert "Dimensions unavailable" in app_js
+    assert '"data-image-preview": true' in app_js
+    assert '"aria-modal": "true"' in app_js
+    assert '"aria-labelledby": "request-image-preview-title"' in app_js
+    assert '"aria-describedby": "request-image-preview-meta"' in app_js
+    assert 'event.key === "Escape"' in app_js
+    assert "event.shiftKey && document.activeElement === first" in app_js
+    assert 'dialog.classList.toggle("is-actual-size", isActualSize)' in app_js
+    assert 'document.body.classList.add("modal-open")' in app_js
+    assert "restoreTarget.focus()" in app_js
+    assert "initRequestImagePreview(root);" in app_js
+
+    assert ".image-thumbnail-button" in styles
+    assert ".request-image-card.is-unavailable" in styles
+    assert ".image-preview-modal" in styles
+    assert ".image-preview-viewport" in styles
+    assert ".image-preview-modal.is-actual-size" in styles
+    assert "body.modal-open" in styles
+
+
 def test_request_browser_paginates_records(
     proxy_client: TestClient,
     proxy_app: FastAPI,
@@ -309,7 +337,29 @@ def test_settings_tabs_render_new_shell(
     assert "settings-sidebar" in response.text
     assert "connection-summary" in response.text
     assert f'/admin/settings/{tab}"' in response.text
+    assert 'data-live-page="settings"' in response.text
+    assert f'data-api-url="/admin/api/settings/{tab}"' in response.text
+    assert "data-settings-status" in response.text
+    assert "data-settings-refresh" in response.text
+    assert "v0.7 control plane" in response.text
+    assert "v0.7.0" in response.text
     assert heading in response.text
+
+
+def test_settings_controller_preserves_state_and_uses_event_driven_refresh() -> None:
+    app_js = Path("src/llm_observe_proxy/static/app.js").read_text(encoding="utf-8")
+
+    assert "initSettingsLivePage" in app_js
+    assert "controller?.abort()" in app_js
+    assert "if (mutating)" in app_js
+    assert "data-settings-action" in app_js
+    assert "form.dataset.dirty" in app_js
+    assert "history.pushState" in app_js
+    assert 'window.addEventListener("popstate", load)' in app_js
+    assert 'document.addEventListener("visibilitychange"' in app_js
+    assert "!hasDirtyForm() && !mutating" in app_js
+    assert 'window.addEventListener("settings:refresh"' in app_js
+    assert 'window.setInterval' not in app_js[app_js.index("const initSettingsLivePage"):]
 
 
 @pytest.mark.parametrize(
@@ -330,9 +380,35 @@ def test_fallback_forms_render_provider_options_and_return_target(
     assert response.status_code == 200
     assert 'action="/admin/settings/upstream-defaults"' in response.text
     assert f'name="return_to" value="{return_to}"' in response.text
-    assert 'select name="default_provider_slug" data-enhanced-select' in response.text
+    assert 'name="default_provider_slug"' in response.text
+    assert "data-enhanced-select" in response.text
     assert '<option value="openai"' in response.text
     assert "OpenAI" in response.text
+
+
+def test_fallback_settings_copy_distinguishes_model_fallback_from_pass_through(
+    proxy_client: TestClient,
+) -> None:
+    server = proxy_client.get("/admin/settings/server")
+    routing = proxy_client.get("/admin/settings/routing")
+    providers = proxy_client.get("/admin/settings/providers")
+
+    assert server.status_code == 200
+    assert "Pass-through Upstream and Model Fallback" in server.text
+    assert "Default pass-through upstream URL" in server.text
+    assert "Model fallback" in server.text
+    assert "Routing order: matching route" in server.text
+    assert "forwarded unchanged to the default pass-through upstream" in server.text
+    assert "Global upstream URL" not in server.text
+    assert "Global fallback" not in server.text
+
+    assert routing.status_code == 200
+    assert "Unknown-model Fallback" in routing.text
+    assert "If fallback is disabled or incomplete" in routing.text
+
+    assert providers.status_code == 200
+    assert "Fallback Provider and Model" in providers.text
+    assert "If fallback is disabled or incomplete" in providers.text
 
 
 @pytest.mark.parametrize(
@@ -379,15 +455,19 @@ def test_fallback_defaults_invalid_return_target_uses_server_tab(
 
 def test_settings_shell_and_action_icons_render_as_svg(proxy_client: TestClient) -> None:
     response = proxy_client.get("/admin/settings/providers")
+    styles = Path("src/llm_observe_proxy/static/styles.css").read_text(encoding="utf-8")
 
     assert response.status_code == 200
     assert response.text.count("<svg") >= 12
     assert 'class="nav-icon"' in response.text
     assert 'class="summary-icon"' in response.text
-    assert "provider-icon-badge provider-icon-openai" in response.text
-    assert 'class="button primary button-primary" href="#provider-editor"' in response.text
-    assert 'class="button-icon"' in response.text
-    assert 'class="field-icon"' in response.text
+    assert 'data-live-page="settings"' in response.text
+    assert 'data-api-url="/admin/api/settings/providers"' in response.text
+    assert 'href="#provider-editor"' in response.text
+    assert "data-settings-providers" in response.text
+    assert ".form-card > *" in styles
+    assert ".fix-option strong" in styles
+    assert "overflow-wrap: anywhere;" in styles
 
 
 def test_enhanced_fallback_select_keeps_native_select_as_form_source(
@@ -398,7 +478,8 @@ def test_enhanced_fallback_select_keeps_native_select_as_form_source(
     styles = Path("src/llm_observe_proxy/static/styles.css").read_text(encoding="utf-8")
 
     assert response.status_code == 200
-    assert 'select name="default_provider_slug" data-enhanced-select' in response.text
+    assert 'name="default_provider_slug"' in response.text
+    assert "data-enhanced-select" in response.text
     assert 'name="default_provider_slug"' in response.text
     assert 'select.value = option.dataset.value || "";' in app_js
     assert 'select.dispatchEvent(new Event("change", { bubbles: true }));' in app_js
@@ -428,13 +509,13 @@ def test_settings_renders_model_routes_without_secret_values(
     )
 
     with TestClient(app) as client:
-        response = client.get("/admin/settings/routing")
+        response = client.get("/admin/api/settings/routing?per_page=100")
 
     assert response.status_code == 200
-    assert "Route Registry" in response.text
-    assert "local-qwen" in response.text
-    assert "qwen3-coder-30b" in response.text
-    assert "openai-mini" in response.text
+    routes = response.json()["data"]["routes"]
+    assert any(route["model"] == "local-qwen" for route in routes)
+    assert any(route["upstream_model"] == "qwen3-coder-30b" for route in routes)
+    assert any(route["model"] == "openai-mini" for route in routes)
     assert "direct-secret" not in response.text
 
 
@@ -465,15 +546,17 @@ def test_server_settings_shows_recent_model_summary_and_lookup(
         session.commit()
 
     response = proxy_client.get("/admin/settings/server")
+    api = proxy_client.get("/admin/api/settings/server")
 
     assert response.status_code == 200
     assert "Lookup model routing" in response.text
     assert "data-model-route-lookup" in response.text
     assert "server-model-route-suggestions" in response.text
-    assert "recent-model-11" in response.text
-    assert "recent-model-02" in response.text
-    assert "recent-model-01" not in response.text
-    assert "recent-model-00" not in response.text
+    recent = [row["model"] for row in api.json()["data"]["recent_routes"]]
+    assert "recent-model-11" in recent
+    assert "recent-model-02" in recent
+    assert "recent-model-01" not in recent
+    assert "recent-model-00" not in recent
 
 
 def test_settings_manages_ui_model_routes(
@@ -495,14 +578,14 @@ def test_settings_manages_ui_model_routes(
     )
 
     assert response.status_code == 303
-    settings = proxy_client.get("/admin/settings/routing")
-    assert "local-ui" in settings.text
-    assert "ui-upstream" in settings.text
-    assert "OpenAI" in settings.text
-    assert "UI_ROUTE_KEY" in settings.text
-    assert QWEN_TAGGED_TOOL_CALL_REWRITE in settings.text
+    settings = proxy_client.get("/admin/api/settings/routing?search=local-ui")
+    route = settings.json()["data"]["routes"][0]
+    assert route["model"] == "local-ui"
+    assert route["upstream_model"] == "ui-upstream"
+    assert route["provider_name"] == "OpenAI"
+    assert route["api_key_env"] == "UI_ROUTE_KEY"
+    assert QWEN_TAGGED_TOOL_CALL_REWRITE in route["compatibility_fixes"]
     assert "direct-secret" not in settings.text
-    assert "Settings" in settings.text
 
     response = proxy_client.post(
         "/admin/settings/model-routes",
@@ -518,9 +601,8 @@ def test_settings_manages_ui_model_routes(
     )
 
     assert response.status_code == 303
-    updated = proxy_client.get("/admin/settings/routing")
-    assert "ui-updated" in updated.text
-    assert "ui-upstream" not in updated.text
+    updated = proxy_client.get("/admin/api/settings/routing?search=local-ui")
+    assert updated.json()["data"]["routes"][0]["upstream_model"] == "ui-updated"
 
     response = proxy_client.post(
         "/admin/settings/model-routes/delete",
@@ -529,8 +611,8 @@ def test_settings_manages_ui_model_routes(
     )
 
     assert response.status_code == 303
-    deleted = proxy_client.get("/admin/settings/routing")
-    assert "local-ui" not in deleted.text
+    deleted = proxy_client.get("/admin/api/settings/routing?search=local-ui")
+    assert deleted.json()["data"]["routes"] == []
 
     proxy_client.post(
         "/v1/chat/completions",
@@ -608,12 +690,13 @@ def test_ui_model_routes_persist_across_app_restart(tmp_path: Path) -> None:
     assert response.status_code == 303
 
     with TestClient(create_app(settings)) as client:
-        page = client.get("/admin/settings/routing")
+        page = client.get("/admin/api/settings/routing?search=persisted-ui")
 
     assert page.status_code == 200
-    assert "persisted-ui" in page.text
-    assert "persisted-upstream" in page.text
-    assert QWEN_TAGGED_TOOL_CALL_REWRITE in page.text
+    route = page.json()["data"]["routes"][0]
+    assert route["model"] == "persisted-ui"
+    assert route["upstream_model"] == "persisted-upstream"
+    assert QWEN_TAGGED_TOOL_CALL_REWRITE in route["compatibility_fixes"]
 
 
 def test_default_compat_fixes_display_validate_and_persist(tmp_path: Path) -> None:
@@ -659,13 +742,18 @@ def test_settings_manages_model_providers_and_prices(
     assert "Model Pricing" in settings.text
     providers_tab = proxy_client.get("/admin/settings/providers")
     pricing_tab = proxy_client.get("/admin/settings/pricing")
+    providers_api = proxy_client.get("/admin/api/settings/providers")
+    pricing_api = proxy_client.get("/admin/api/settings/pricing?search=gpt-5.4-mini")
     assert providers_tab.status_code == 200
     assert pricing_tab.status_code == 200
-    assert "Local LLM" in providers_tab.text
-    assert "http://localhost:8000/v1" in providers_tab.text
+    assert any(row["name"] == "Local LLM" for row in providers_api.json()["data"]["providers"])
+    assert any(
+        row["upstream_url"] == "http://localhost:8000/v1"
+        for row in providers_api.json()["data"]["providers"]
+    )
     assert '<option value="local-llm"' in providers_tab.text
     assert "OpenAI" in providers_tab.text
-    assert "gpt-5.4-mini" in pricing_tab.text
+    assert any(row["model"] == "gpt-5.4-mini" for row in pricing_api.json()["data"]["prices"])
     assert 'data-pricing-catalog' in pricing_tab.text
     assert "/admin/api/pricing/catalog/preview" in pricing_tab.text
 
@@ -705,15 +793,19 @@ def test_settings_manages_model_providers_and_prices(
     )
     assert response.status_code == 303
 
-    updated_providers = proxy_client.get("/admin/settings/providers")
-    updated_pricing = proxy_client.get("/admin/settings/pricing")
-    assert "Custom Gateway" in updated_providers.text
-    assert "http://localhost:9000/v1" in updated_providers.text
-    assert "custom-large" in updated_pricing.text
-    assert "custom-alias" in updated_pricing.text
-    assert "$1.25" in updated_pricing.text
-    assert "$0.2500" in updated_pricing.text
-    assert "$5.00" in updated_pricing.text
+    updated_providers = proxy_client.get("/admin/api/settings/providers?search=custom")
+    updated_pricing = proxy_client.get("/admin/api/settings/pricing?search=custom-large")
+    assert updated_providers.json()["data"]["providers"][0]["name"] == "Custom Gateway"
+    assert (
+        updated_providers.json()["data"]["providers"][0]["upstream_url"]
+        == "http://localhost:9000/v1"
+    )
+    price_row = updated_pricing.json()["data"]["prices"][0]
+    assert price_row["model"] == "custom-large"
+    assert price_row["aliases"] == ["custom-alias"]
+    assert Decimal(str(price_row["input_usd_per_million"])) == Decimal("1.25")
+    assert Decimal(str(price_row["cached_input_usd_per_million"])) == Decimal("0.25")
+    assert Decimal(str(price_row["output_usd_per_million"])) == Decimal("5")
 
     with proxy_app.state.session_factory() as session:
         provider = session.get(ModelProvider, "custom")
@@ -747,11 +839,11 @@ def test_settings_manages_model_providers_and_prices(
     )
     assert response.status_code == 303
 
-    updated = proxy_client.get("/admin/settings/pricing")
-    assert "Short context" in updated.text
-    assert "0-999 input tokens" in updated.text
-    assert "$0.0750" in updated.text
-    assert "https://example.com/custom-pricing" not in updated.text
+    updated = proxy_client.get("/admin/api/settings/pricing?search=custom-large")
+    tier_row = updated.json()["data"]["prices"][0]["tiers"][0]
+    assert tier_row["label"] == "Short context"
+    assert tier_row["range"] == "0-999 input tokens"
+    assert Decimal(str(tier_row["cached_input_usd_per_million"])) == Decimal("0.075")
 
     with proxy_app.state.session_factory() as session:
         price = session.get(ModelPrice, price_id)
@@ -779,9 +871,8 @@ def test_settings_manages_model_providers_and_prices(
     )
     assert response.status_code == 303
 
-    updated = proxy_client.get("/admin/settings/pricing")
-    assert "Short context" not in updated.text
-    assert "Scalar only" in updated.text
+    updated = proxy_client.get("/admin/api/settings/pricing?search=custom-large")
+    assert updated.json()["data"]["prices"][0]["tiers"] == []
 
     response = proxy_client.post(
         "/admin/settings/model-prices/delete",
@@ -796,10 +887,10 @@ def test_settings_manages_model_providers_and_prices(
     )
     assert response.status_code == 303
 
-    deleted_providers = proxy_client.get("/admin/settings/providers")
-    deleted_pricing = proxy_client.get("/admin/settings/pricing")
-    assert "custom-large" not in deleted_pricing.text
-    assert "Custom Gateway" not in deleted_providers.text
+    deleted_providers = proxy_client.get("/admin/api/settings/providers?search=custom")
+    deleted_pricing = proxy_client.get("/admin/api/settings/pricing?search=custom-large")
+    assert deleted_pricing.json()["data"]["prices"] == []
+    assert deleted_providers.json()["data"]["providers"] == []
 
 
 def test_pricing_catalog_preview_apply_and_reprice_missing_costs(
@@ -964,7 +1055,7 @@ def test_settings_test_upstream_uses_configured_model_route(
     assert fake_upstream.last_request["headers"]["authorization"] == "Bearer route-secret"
 
 
-def test_settings_test_upstream_falls_back_for_unknown_model(
+def test_settings_test_upstream_uses_pass_through_for_unknown_model_without_fallback(
     tmp_path: Path,
     fake_upstream: Any,
 ) -> None:
@@ -980,7 +1071,7 @@ def test_settings_test_upstream_falls_back_for_unknown_model(
         )
 
     assert response.status_code == 200
-    assert "global fallback" in response.text
+    assert "pass-through upstream" in response.text
     assert fake_upstream.last_request["body"]["model"] == "unknown"
 
 
@@ -1719,7 +1810,8 @@ def test_trim_deletes_records_older_than_requested_days(
 
     settings = proxy_client.get("/admin/settings?days=30")
     assert "Older than 30 days" in settings.text
-    assert ">1<" in settings.text
+    preview = proxy_client.get("/admin/api/settings/retention-preview?days=30")
+    assert preview.json()["rows"] == 1
 
     response = proxy_client.post(
         "/admin/trim",

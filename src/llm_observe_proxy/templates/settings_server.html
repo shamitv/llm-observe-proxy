@@ -1,16 +1,10 @@
 {% extends "settings_base.html" %}
-{% import "_status_badge.html" as badges %}
-{% import "_fallback_defaults_form.html" as fallback_forms %}
 {% import "_icons.html" as icons %}
 {% block settings_content %}
 <section class="settings-grid v05-grid">
-  <form class="card form-card" method="post" action="/admin/settings/incoming">
+  <form class="card form-card" method="post" action="/admin/settings/incoming" data-settings-action="listener">
     <div class="card-header">
-      <div>
-        <h2>Incoming Server</h2>
-        <p>Persisted for the next process startup.</p>
-      </div>
-      {{ badges.status_badge("Active") }}
+      <div><h2>Incoming Server</h2><p>Persisted for the next process startup.</p></div>
     </div>
     <div class="form-grid two-col">
       <label class="form-field">
@@ -22,59 +16,68 @@
         <span>Expose on LAN / all interfaces</span>
       </label>
     </div>
-    {% if expose_all_ips %}
-    <p class="warning-copy">Network exposed. Use only on trusted networks.</p>
-    {% endif %}
+    <p class="warning-copy" data-settings-network-warning {% if not expose_all_ips %}hidden{% endif %}>Network exposed. Use only on trusted networks.</p>
     <div class="button-row">
       <button class="button primary button-primary" type="submit">{{ icons.icon("settings", class_name="button-icon") }}<span>Save listener settings</span></button>
     </div>
+    <p class="form-message" data-form-message aria-live="polite"></p>
   </form>
 
   <article class="card">
-    <div class="card-header">
-      <div>
-        <h2>Settings Areas</h2>
-        <p>Primary registries now live on focused tabs.</p>
-      </div>
-    </div>
+    <div class="card-header"><div><h2>Settings Areas</h2><p>Primary registries live on focused tabs.</p></div></div>
     <div class="button-row">
-      <a class="button ghost button-ghost" href="/admin/settings/providers">{{ icons.icon("providers", class_name="button-icon") }}<span>Model Providers</span></a>
-      <a class="button ghost button-ghost" href="/admin/settings/pricing">{{ icons.icon("pricing", class_name="button-icon") }}<span>Model Pricing</span></a>
-      <a class="button ghost button-ghost" href="/admin/settings/routing">{{ icons.icon("routing", class_name="button-icon") }}<span>Model Routes</span></a>
+      <a class="button ghost" href="/admin/settings/providers">Model Providers</a>
+      <a class="button ghost" href="/admin/settings/pricing">Model Pricing</a>
+      <a class="button ghost" href="/admin/settings/routing">Model Routes</a>
     </div>
   </article>
 
-  {{ fallback_forms.fallback_defaults_form(
-    "Global Upstream Fallback Defaults",
-    "Used when no exact or prefix route matches a request.",
-    providers,
-    default_provider_slug,
-    default_model,
-    fallback_enabled,
-    upstream_url,
-    "/admin/settings/server",
-    "Save upstream defaults",
-    true,
-    "When no route matches, the proxy can send the request to " ~ (fallback.provider_name | default("the selected provider", true)) ~ " as " ~ (default_model | default("the configured model", true)) ~ "."
-  ) }}
-
-  <form class="card form-card" method="post" action="/admin/settings/compat-fixes" data-fix-picker>
+  <form class="card form-card" method="post" action="/admin/settings/upstream-defaults" data-settings-action="upstream-defaults">
     <div class="card-header">
-      <div>
-        <h2>Default Compatibility Fixes</h2>
-        <p>Applied to fallback requests and routes that opt into the default behavior.</p>
-      </div>
-      {{ badges.status_badge("Configured" if default_compat_fixes else "Inactive") }}
+      <div><h2>Pass-through Upstream and Model Fallback</h2><p>Configure the final routing stages after explicit model routes.</p></div>
+    </div>
+    <div class="form-grid two-col">
+      <label class="form-field wide">
+        <span>Default pass-through upstream URL</span>
+        <input name="upstream_url" value="{{ upstream_url }}" placeholder="http://localhost:8000/v1" required>
+      </label>
+      <label class="form-field">
+        <span>Fallback provider</span>
+        <select name="default_provider_slug" data-provider-options data-enhanced-select data-enhanced-select-label="Fallback provider">
+          <option value="">No provider</option>
+          {% for provider in providers %}
+          <option value="{{ provider.slug }}" {% if provider.slug == default_provider_slug %}selected{% endif %}>{{ provider.name }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label class="form-field">
+        <span>Fallback model</span>
+        <input name="default_model" value="{{ default_model }}" placeholder="gpt-5.4-mini">
+      </label>
+      <label class="check switch-line">
+        <input type="hidden" name="fallback_enabled" value="no">
+        <input type="checkbox" name="fallback_enabled" value="yes" {% if fallback_enabled %}checked{% endif %}>
+        <span>Enable unknown-model fallback</span>
+      </label>
+    </div>
+    <input type="hidden" name="return_to" value="/admin/settings/server">
+    <p class="muted">Routing order: matching route, Model fallback provider/model, then requests are forwarded unchanged to the default pass-through upstream when fallback is disabled or incomplete.</p>
+    <div class="button-row">
+      <button class="button primary button-primary" type="submit">{{ icons.icon("settings", class_name="button-icon") }}<span>Save upstream defaults</span></button>
+    </div>
+    <p class="form-message" data-form-message aria-live="polite"></p>
+  </form>
+
+  <form class="card form-card" method="post" action="/admin/settings/compat-fixes" data-settings-action="compat-fixes" data-fix-picker>
+    <div class="card-header">
+      <div><h2>Default Compatibility Fixes</h2><p>Applied to fallback requests and routes using default behavior.</p></div>
     </div>
     <input type="hidden" name="fixes" value="{{ default_compat_fixes_text }}" data-fix-target>
-    <div class="fix-list">
+    <div class="fix-list" data-settings-compat-fixes>
       {% for fix in available_compat_fixes %}
       <label class="check fix-option">
         <input type="checkbox" value="{{ fix.id }}" data-fix-id {% if fix.id in default_compat_fixes %}checked{% endif %}>
-        <span>
-          <strong>{{ fix.id }}</strong>
-          <small>{{ fix.description }}</small>
-        </span>
+        <span><strong>{{ fix.id }}</strong><small>{{ fix.description }}</small></span>
       </label>
       {% endfor %}
     </div>
@@ -88,127 +91,73 @@
     <div class="button-row">
       <button class="button primary button-primary" type="submit">{{ icons.icon("settings", class_name="button-icon") }}<span>Save fixes</span></button>
     </div>
+    <p class="form-message" data-form-message aria-live="polite"></p>
   </form>
 
   <article class="card route-summary-card">
     <div class="card-header">
-      <div>
-        <h2>Model Routes Summary</h2>
-        <p>Showing up to 10 recently used models from the last {{ days }} days. Use lookup for any configured model.</p>
-      </div>
+      <div><h2>Recent Model Routes</h2><p>Recently used models in the selected retention window.</p></div>
       <a class="button ghost button-ghost" href="/admin/settings/routing">{{ icons.icon("plus", class_name="button-icon") }}<span>Manage routes</span></a>
     </div>
     <form class="inline-tool-form model-lookup-form" data-model-route-lookup>
-      <label class="search-bar model-lookup-field">
-        <span>Lookup model routing</span>
-        <span class="field-with-icon">{{ icons.icon("search", class_name="field-icon") }}<input name="model" list="server-model-route-suggestions" placeholder="gpt-5.4-mini" autocomplete="off" required data-model-lookup-input></span>
-        <datalist id="server-model-route-suggestions" data-model-lookup-options></datalist>
-      </label>
-      <button class="button primary button-primary" type="submit">{{ icons.icon("diagnostics", class_name="button-icon") }}<span>Lookup</span></button>
+      <label class="search-bar model-lookup-field"><span>Lookup model routing</span><input name="model" list="server-model-route-suggestions" placeholder="gpt-5.4-mini" required data-model-lookup-input></label>
+      <datalist id="server-model-route-suggestions" data-model-lookup-options></datalist>
+      <button class="button primary" type="submit">Lookup</button>
     </form>
-    <div class="result-panel model-lookup-result" data-model-lookup-result>
-      <span class="muted">Enter a model to preview the proxy route and sample request.</span>
-    </div>
+    <div class="result-panel" data-model-lookup-result><span class="muted">Enter a model to preview its route.</span></div>
     <div class="table-shell">
       <table class="data-table model-routes-table">
         <thead>
-          <tr>
-            <th scope="col">Requested model</th>
-            <th scope="col">Requests</th>
-            <th scope="col">Last used</th>
-            <th scope="col">Route</th>
-            <th scope="col">Send as model</th>
-            <th scope="col">Provider</th>
-            <th scope="col">API key</th>
-            <th scope="col">Status</th>
-          </tr>
+          <tr><th scope="col">Requested model</th><th scope="col">Requests</th><th scope="col">Route</th><th scope="col">Provider</th><th scope="col">Status</th></tr>
         </thead>
-        <tbody>
-          {% for route in recent_model_routes %}
-          <tr>
-            <td><code>{{ route.model }}</code></td>
-            <td>{{ route.requests | compact_number }}</td>
-            <td>{% if route.last_used_at %}<time datetime="{{ route.last_used_at }}" data-local-time="table">{{ route.last_used_at }}</time>{% else %}<span class="muted">Never</span>{% endif %}</td>
-            <td><code>{{ route.matched_route | default("global fallback", true) }}</code>{% if route.match_type %}<small>{{ route.match_type }}</small>{% endif %}</td>
-            <td><code>{{ route.upstream_model }}</code></td>
-            <td>{{ route.provider_name | default(route.provider_slug | default("Auto", true), true) }}</td>
-            <td>
-              <span class="key-state key-state-{{ route.api_key_state | replace(' ', '-') }}">{{ route.api_key_state }}</span>
-            </td>
-            <td>{{ badges.status_badge(route.status | title) }}</td>
-          </tr>
-          {% else %}
-          <tr><td colspan="8" class="empty">No recent model traffic in this window. Use lookup to inspect any configured route.</td></tr>
-          {% endfor %}
+        <tbody data-settings-recent-routes>
+          <tr><td colspan="5" class="empty">Loading recent routes…</td></tr>
         </tbody>
       </table>
     </div>
   </article>
 
-  <form class="card form-card" method="post" action="/admin/settings/test-upstream">
+  <form class="card form-card" method="post" action="/admin/settings/test-upstream" data-settings-action="diagnostics">
     <div class="card-header">
-      <div>
-        <h2>Test Route / Diagnostics</h2>
-        <p>Send a sample chat request through the configured resolution path.</p>
-      </div>
-      <a class="button ghost button-ghost" href="/admin/settings/diagnostics">{{ icons.icon("diagnostics", class_name="button-icon") }}<span>Diagnostics tab</span></a>
+      <div><h2>Test Route / Diagnostics</h2><p>Send a sample request through the configured resolution path.</p></div>
     </div>
     <div class="form-grid two-col">
-      <label class="form-field">
-        <span>Model</span>
-        <input name="model" value="{{ test_model | default('gpt-test', true) }}" required>
-      </label>
-      <label class="form-field">
-        <span>Message</span>
-        <textarea name="prompt" rows="4" required>{{ test_prompt | default('Reply with a short upstream connectivity check.', true) }}</textarea>
-      </label>
+      <label class="form-field"><span>Model</span><input name="model" value="{{ test_model | default('gpt-test', true) }}" required></label>
+      <label class="form-field"><span>Message</span><textarea name="prompt" rows="4" required>{{ test_prompt | default('Reply with a short upstream connectivity check.', true) }}</textarea></label>
     </div>
     <div class="button-row">
-      <button class="button primary button-primary" type="submit" name="test_kind" value="simple">{{ icons.icon("play", class_name="button-icon") }}<span>Run test</span></button>
-      <button class="button ghost button-ghost" type="submit" name="test_kind" value="image">{{ icons.icon("play", class_name="button-icon") }}<span>Image message</span></button>
-      <button class="button ghost button-ghost" type="submit" name="test_kind" value="tools">{{ icons.icon("play", class_name="button-icon") }}<span>Function call</span></button>
+      <button class="button primary" type="submit" name="test_kind" value="simple">Simple message</button>
+      <button class="button ghost" type="submit" name="test_kind" value="image">Image message</button>
+      <button class="button ghost" type="submit" name="test_kind" value="tools">Function call</button>
     </div>
-    {% if test_result %}
-    <div class="test-result result-panel">
-      <div class="detail-meta">
-        <span class="{{ 'status-200' if test_result.ok else 'status-500' }}">{{ test_result.status_code | default('error', true) }}</span>
-        <span>{{ test_result.kind }}</span>
-        <span>{{ test_result.model_route | default('global fallback', true) }}</span>
-        <span>{{ test_result.duration_ms | duration_ms }}</span>
-      </div>
+    <div class="result-panel" data-settings-diagnostic-result>
+      {% if test_result %}
+      <strong>{{ "Diagnostic succeeded" if test_result.ok else "Diagnostic failed" }}</strong>
+      <span>{{ test_result.kind }} · {{ test_result.status_code | default("error", true) }} · {{ test_result.model_route | default("model fallback" if test_result.upstream_model else "pass-through upstream", true) }}</span>
       <code>{{ test_result.url }}</code>
-      {% if test_result.error %}
-      <p class="error-text">{{ test_result.error }}</p>
-      {% else %}
-      <pre class="code compact-code">{{ test_result.body }}</pre>
-      {% endif %}
+      {% if test_result.error %}<p class="error-text">{{ test_result.error }}</p>{% else %}<pre class="code compact-code">{{ test_result.body }}</pre>{% endif %}
+      {% else %}<p class="muted">Test results appear here.</p>{% endif %}
     </div>
-    {% endif %}
+    <p class="form-message" data-form-message aria-live="polite"></p>
   </form>
 
-  <form class="card danger-zone form-card" method="post" action="/admin/trim" data-confirm-trim>
+  <form class="card danger-zone form-card" method="post" action="/admin/trim" data-settings-action="trim">
     <div class="card-header">
-      <div>
-        <h2>Data Retention</h2>
-        <p>Delete older request records and attached image payloads.</p>
-      </div>
-      {{ badges.status_badge("Warning") }}
+      <div><h2>Data Retention</h2><p>Delete older request records and attached image payloads.</p></div>
     </div>
     <div class="form-grid two-col">
-      <label class="form-field">
-        <span>Retain days</span>
-        <input name="days" value="{{ days }}" min="1" max="3650" type="number" required>
-      </label>
+      <label class="form-field"><span>Retain days</span><input name="days" value="{{ days }}" min="1" max="3650" type="number" required></label>
       <label class="check switch-line">
         <input type="checkbox" name="confirm" value="yes" required data-enable-danger>
         <span>I understand this permanently deletes older records</span>
       </label>
     </div>
-    <p class="muted">Older than {{ days }} days: <strong>{{ trim_count | compact_number }}</strong> row{{ "" if trim_count == 1 else "s" }} will be deleted.</p>
+    <p class="muted" data-settings-retention-preview>Older than {{ days }} days: {{ trim_count }} rows will be deleted.</p>
     <div class="button-row">
       <button class="button danger button-danger" type="submit" data-danger-submit>{{ icons.icon("trash", class_name="button-icon") }}<span>Trim records</span></button>
-      <a class="button ghost button-ghost" href="/admin/settings/server?days={{ days }}">{{ icons.icon("runs", class_name="button-icon") }}<span>Refresh count</span></a>
+      <button class="button ghost" type="button" data-settings-refresh>Refresh count</button>
     </div>
+    <p class="form-message" data-form-message aria-live="polite"></p>
   </form>
 </section>
 {% endblock %}
